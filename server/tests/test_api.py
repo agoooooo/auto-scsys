@@ -148,6 +148,97 @@ def test_publish_script_validates_and_checks_content_hash(client):
     assert downloaded.headers["x-content-sha256"] == hashlib.sha256(content).hexdigest()
 
 
+def test_admin_can_pause_and_resume_tasks_with_access_and_run_controls(client):
+    import server.app as api
+
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    pending = client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).json()
+    approved = client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-002"},
+    ).json()
+    started = client.patch(
+        f"/remote-runs/{approved['id']}",
+        headers=auth(user),
+        json={"decision": "approve", "preauthorize": True},
+    ).json()
+    assert client.get("/run-authorizations", headers=auth(user)).json()
+
+    paused = client.patch("/tasks/t-001", headers=auth(admin), json={"status": "paused"})
+    assert paused.status_code == 200
+    assert paused.json()["status"] == "paused"
+    assert next(task for task in client.get("/tasks", headers=auth(user)).json() if task["id"] == "t-001")["status"] == "paused"
+    assert client.post("/devices/d-001/sync", headers=auth(user)).json()["tasks"] == []
+    assert client.get(
+        "/devices/d-001/tasks/t-001/versions/v1.4.0/content",
+        headers=auth(user),
+    ).status_code == 409
+    assert client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).status_code == 409
+    assert client.post(
+        "/devices/d-001/runs",
+        headers=auth(user),
+        json={"task_id": "t-001", "version": "v1.4.0"},
+    ).status_code == 409
+    assert client.get("/run-authorizations", headers=auth(user)).json() == []
+    with api._connect(client.app.state.db_path) as db:
+        assert db.execute("SELECT status FROM remote_runs WHERE id=?", (pending["id"],)).fetchone()["status"] == "expired"
+        assert db.execute("SELECT status FROM runs WHERE id=?", (started["run_id"],)).fetchone()["status"] == "running"
+    assert client.patch(
+        f"/remote-runs/{pending['id']}",
+        headers=auth(user),
+        json={"decision": "approve"},
+    ).status_code == 410
+
+    resumed = client.patch("/tasks/t-001", headers=auth(admin), json={"status": "published"})
+    assert resumed.status_code == 200
+    assert [task["id"] for task in client.post("/devices/d-001/sync", headers=auth(user)).json()["tasks"]] == ["t-001"]
+    assert client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).json()["status"] == "pending"
+
+
+def test_task_status_changes_require_admin_and_published_task_version(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    assert client.patch("/tasks/t-001", headers=auth(user), json={"status": "paused"}).status_code == 403
+    assert client.patch("/tasks/missing", headers=auth(admin), json={"status": "paused"}).status_code == 404
+    draft = client.post("/tasks", headers=auth(admin), json={"name": "No version"})
+    assert draft.status_code == 201
+    assert client.patch(
+        f"/tasks/{draft.json()['id']}",
+        headers=auth(admin),
+        json={"status": "published"},
+    ).status_code == 409
+    assert client.patch("/tasks/t-001", headers=auth(admin), json={"status": "draft"}).status_code == 422
+
+
+def test_publishing_new_version_does_not_resume_paused_task(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    assert client.patch("/tasks/t-001", headers=auth(admin), json={"status": "paused"}).status_code == 200
+    published = client.post(
+        "/tasks/t-001/versions",
+        headers=auth(admin),
+        data={"version": "v1.5.0"},
+        files={"script": ("orders.py", b"print('new version')", "text/x-python")},
+    )
+    assert published.status_code == 201
+    task = next(task for task in client.get("/tasks", headers=auth(admin)).json() if task["id"] == "t-001")
+    assert task["active_version"] == "v1.5.0"
+    assert task["status"] == "paused"
+
+
 def test_remote_run_confirmation_rejection_and_run_record(client):
     admin = login(client, "admin@example.com", "admin-demo")
     user = login(client)

@@ -7,6 +7,7 @@ import {
   publishTaskVersion,
   resolveRemoteRun,
   revokeRunAuthorization,
+  setTaskPaused,
   startLocalRun,
   toggleDevice,
   toggleUser,
@@ -208,7 +209,7 @@ function renderTasks() {
     <div class="task-grid">${state.tasks.map((task, index) => `<article class="task-card">
       <div class="task-card-top"><div class="task-symbol ${index % 2 ? "mint" : ""}">${index % 2 ? "◌" : "⌕"}</div><div class="task-main"><h3>${escapeHtml(task.name)}</h3><small>${escapeHtml(task.category)}</small></div>${statusPill(task.status)}</div>
       <p>${escapeHtml(task.description)}</p>${task.scriptFile ? `<div class="file-meta">${escapeHtml(task.scriptFile.name)} · ${Math.ceil(task.scriptFile.size / 1024)} KB · SHA-256 ${escapeHtml(task.scriptFile.sha256.slice(0, 12))}…</div>` : ""}<div class="task-card-meta"><span>当前版本<strong>${escapeHtml(task.activeVersion ?? "尚未发布")}</strong></span><span>已分配设备<strong>${task.devices} 台设备</strong></span><span>最近运行<strong>${escapeHtml(task.lastRun)}</strong></span><span>成功率<strong>${task.successRate ? `${task.successRate}%` : "—"}</strong></span></div>
-      <div class="task-card-footer"><button class="text-button" data-action="switch-version" data-id="${escapeHtml(task.id)}">版本管理 ⌄</button><button class="run-button" data-action="remote-run" data-id="${escapeHtml(task.id)}" ${task.status !== "published" ? "disabled" : ""}>▶　请求远程运行</button></div>
+      <div class="task-card-footer"><button class="text-button" data-action="switch-version" data-id="${escapeHtml(task.id)}">版本管理 ⌄</button>${(!session || session.user.role === "admin") && ["published", "paused"].includes(task.status) ? `<button class="text-button" data-action="toggle-task-status" data-id="${escapeHtml(task.id)}">${task.status === "paused" ? "恢复发布" : "暂停任务"}</button>` : ""}<button class="run-button" data-action="remote-run" data-id="${escapeHtml(task.id)}" ${task.status !== "published" ? "disabled" : ""}>▶　请求远程运行</button></div>
     </article>`).join("")}</div>`;
 }
 
@@ -537,6 +538,23 @@ document.addEventListener("click", async (event) => {
   else if (action === "switch-version") showVersionModal(id);
   else if (action === "remote-run") showRemoteRunModal(id);
   else if (action === "local-run") showConsentModal(id);
+  else if (action === "toggle-task-status") {
+    const task = state.tasks.find((item) => item.id === id);
+    const nextStatus = task.status === "paused" ? "published" : "paused";
+    try {
+      if (session) {
+        await apiRequest(session, `/tasks/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          body: { status: nextStatus },
+        });
+        await refreshFromApi();
+      } else {
+        state = setTaskPaused(state, id, nextStatus === "paused");
+        render();
+      }
+      showToast(nextStatus === "paused" ? "任务已暂停；待处理请求和预授权已撤销" : "任务已恢复发布");
+    } catch (error) { showToast(error.message); }
+  }
   else if (action === "close-modal") closeModal();
   else if (action === "logout") signOut();
   else if (action === "demo-mode") {

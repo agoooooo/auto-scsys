@@ -29,13 +29,15 @@ FLOWPILOT_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32)
 - `GET/POST /users`、`PATCH /users/{id}`（管理员）
 - `GET/POST /devices`、`PATCH/DELETE /devices/{id}`、`POST /devices/{id}/sync`
 - `POST /devices/{id}/runs`（设备用户确认后上报本地启动）
-- `GET/POST /tasks`、`GET /tasks/{id}/versions`、`POST /tasks/{id}/versions`、`POST /tasks/{id}/grants/{user_id}`
+- `GET/POST /tasks`、`PATCH /tasks/{id}`（管理员暂停/恢复）、`GET /tasks/{id}/versions`、`POST /tasks/{id}/versions`、`POST /tasks/{id}/grants/{user_id}`
 - `GET /devices/{id}/tasks/{task_id}/versions/{version}/content`
 - `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`PATCH /remote-runs/{id}`
 - `POST /runs/{id}`、`GET /runs`
 - `GET/POST/DELETE /run-authorizations`、`GET /admin/audit`
 
 脚本只向已绑定、已授权的用户设备提供；远程请求默认需设备用户逐次确认，过期请求不执行。预授权限定在任务版本和设备上，有效期 30 天并可撤销。运行 API 只记录客户端回报状态，不在服务端或浏览器里执行 Python。
+
+管理员暂停任务后，设备同步和脚本下载、新运行都会被拒绝；未处理的远程请求会过期，相关预授权会撤销。已开始的运行不会被强行中止，仍可正常上报完成或停止状态。恢复发布不会恢复旧预授权。
 
 ## 测试
 

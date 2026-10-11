@@ -58,6 +58,23 @@ export function toggleDevice(state, deviceId) {
   };
 }
 
+export function setTaskPaused(state, taskId, paused) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task || !["published", "paused"].includes(task.status)) throw new Error("任务当前无法暂停或恢复");
+  const status = paused ? "paused" : "published";
+  return {
+    ...state,
+    tasks: state.tasks.map((item) => item.id === taskId ? { ...item, status } : item),
+    remoteRuns: state.remoteRuns.map((request) =>
+      request.taskId === taskId && request.status === "pending" && paused
+        ? { ...request, status: "expired" }
+        : request),
+    runAuthorizations: paused
+      ? state.runAuthorizations.filter((authorization) => authorization.taskId !== taskId)
+      : state.runAuthorizations,
+  };
+}
+
 export function publishTaskVersion(state, { taskId, version, notes, scriptFile }) {
   if (!/^v\d+\.\d+\.\d+$/.test(version)) throw new Error("版本号格式应为 v1.0.0");
   if (scriptFile && (!/\.py$/i.test(scriptFile.name) || scriptFile.size < 1 || scriptFile.size > 2 * 1024 * 1024 || !/^[a-f\d]{64}$/i.test(scriptFile.sha256))) {
@@ -66,7 +83,7 @@ export function publishTaskVersion(state, { taskId, version, notes, scriptFile }
   return {
     ...state,
     tasks: state.tasks.map((task) => task.id === taskId
-      ? { ...task, status: "published", activeVersion: version, versions: [version, ...task.versions.filter((item) => item !== version)], ...(scriptFile ? { scriptFile: { ...scriptFile } } : {}) }
+      ? { ...task, status: task.status === "paused" ? "paused" : "published", activeVersion: version, versions: [version, ...task.versions.filter((item) => item !== version)], ...(scriptFile ? { scriptFile: { ...scriptFile } } : {}) }
       : task),
     activity: [{
       id: `a-${Date.now()}`,

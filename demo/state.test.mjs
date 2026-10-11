@@ -9,6 +9,7 @@ import {
   publishTaskVersion,
   resolveRemoteRun,
   revokeRunAuthorization,
+  setTaskPaused,
   startLocalRun,
   toggleDevice,
   toggleUser,
@@ -59,6 +60,29 @@ test("publishing a valid task version activates it and records the release", () 
   }), /版本号格式/);
 });
 
+test("pausing a task expires pending requests and revokes authorizations", () => {
+  const pending = createRemoteRun(initialDemoState, { taskId: "t-001", deviceId: "d-001" });
+  const authorized = {
+    ...pending,
+    runAuthorizations: [{
+      id: "grant-1",
+      taskId: "t-001",
+      deviceId: "d-001",
+      version: "v1.4.0",
+      expiresAt: Date.now() + 1000,
+    }],
+  };
+  const paused = setTaskPaused(authorized, "t-001", true);
+  assert.equal(paused.tasks[0].status, "paused");
+  assert.equal(paused.remoteRuns[0].status, "expired");
+  assert.equal(paused.runAuthorizations.length, 0);
+  assert.throws(() => createRemoteRun(paused, { taskId: "t-001", deviceId: "d-001" }), /不可运行/);
+
+  const resumed = setTaskPaused(paused, "t-001", false);
+  assert.equal(resumed.tasks[0].status, "published");
+  assert.equal(resumed.remoteRuns[0].status, "expired");
+});
+
 test("publishing a Python script records its filename, size, and SHA-256 metadata", () => {
   const published = publishTaskVersion(initialDemoState, {
     taskId: "t-001",
@@ -75,6 +99,13 @@ test("publishing a Python script records its filename, size, and SHA-256 metadat
     version: "v1.5.0",
     scriptFile: { name: "script.txt", size: 128, sha256: "a".repeat(64) },
   }), /Python 文件/);
+  assert.equal(
+    publishTaskVersion(setTaskPaused(initialDemoState, "t-001", true), {
+      taskId: "t-001",
+      version: "v1.5.0",
+    }).tasks[0].status,
+    "paused",
+  );
 });
 
 test("remote runs wait for device confirmation and record completion or refusal", () => {

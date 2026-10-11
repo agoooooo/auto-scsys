@@ -258,6 +258,10 @@ class DeviceStatusInput(BaseModel):
     status: Literal["online", "offline", "disabled"]
 
 
+class TaskStatusInput(BaseModel):
+    status: Literal["published", "paused"]
+
+
 class RemoteRunInput(BaseModel):
     task_id: str
     device_id: str
@@ -585,6 +589,34 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         )
         return [dict(row) for row in rows]
 
+    @app.patch("/tasks/{task_id}")
+    def set_task_status(
+        task_id: str,
+        body: TaskStatusInput,
+        user: dict = Depends(require_admin),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        task = db.execute("SELECT id,status FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        if body.status == "published" and not db.execute(
+            "SELECT 1 FROM task_versions WHERE task_id=? LIMIT 1", (task_id,)
+        ).fetchone():
+            raise HTTPException(status_code=409, detail="任务没有可发布的版本")
+        db.execute("UPDATE tasks SET status=? WHERE id=?", (body.status, task_id))
+        if body.status == "paused":
+            now = utc_now()
+            db.execute(
+                "UPDATE remote_runs SET status='expired' WHERE task_id=? AND status='pending'",
+                (task_id,),
+            )
+            db.execute(
+                "UPDATE run_authorizations SET revoked_at=? WHERE task_id=? AND revoked_at IS NULL",
+                (now, task_id),
+            )
+        audit(db, user["id"], f"task.{body.status}", "task", task_id)
+        return {"id": task_id, "status": body.status}
+
     @app.post("/tasks/{task_id}/grants/{user_id}", status_code=201)
     def grant_task(task_id: str, user_id: str, user: dict = Depends(require_admin), db: sqlite3.Connection = Depends(connection)):
         if not db.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
@@ -628,7 +660,8 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             )
         except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="该任务版本号已存在") from exc
-        db.execute("UPDATE tasks SET status='published' WHERE id=?", (task_id,))
+        if task["status"] != "paused":
+            db.execute("UPDATE tasks SET status='published' WHERE id=?", (task_id,))
         db.execute(
             "INSERT OR IGNORE INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?)",
             (task_id, task["owner_id"], utc_now()),
