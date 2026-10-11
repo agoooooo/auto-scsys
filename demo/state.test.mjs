@@ -8,7 +8,6 @@ import {
   finishRun,
   initialDemoState,
   publishTaskVersion,
-  resolveRemoteRun,
   requiresRemoteSystemAuthorization,
   remoteRunFollowUpView,
   remoteRunSystemConsentNotice,
@@ -75,7 +74,12 @@ test("publishing a valid task version activates it and records the release", () 
 });
 
 test("pausing a task expires pending requests and revokes authorizations", () => {
-  const pending = createRemoteRun(initialDemoState, { taskId: "t-001", deviceId: "d-001" });
+  const started = createRemoteRun(initialDemoState, { taskId: "t-001", deviceId: "d-001" });
+  const pending = {
+    ...started,
+    runs: [],
+    remoteRuns: started.remoteRuns.map((request) => ({ ...request, status: "pending", runId: null })),
+  };
   const authorized = {
     ...pending,
     runAuthorizations: [{
@@ -122,22 +126,19 @@ test("publishing a Python script records its filename, size, and SHA-256 metadat
   );
 });
 
-test("remote runs wait for device confirmation and record completion or refusal", () => {
-  const pending = createRemoteRun(initialDemoState, { taskId: "t-001", deviceId: "d-001" });
-  assert.equal(pending.remoteRuns[0].status, "pending");
-  assert.equal(pending.runs.length, 0);
-
-  const started = resolveRemoteRun(pending, pending.remoteRuns[0].id, { approved: true });
+test("remote runs start automatically after request validation and record completion", () => {
+  const started = createRemoteRun(initialDemoState, { taskId: "t-001", deviceId: "d-001" });
   assert.equal(started.remoteRuns[0].status, "running");
   assert.equal(started.runs[0].status, "running");
+  assert.equal(started.remoteRuns[0].runId, started.runs[0].id);
+  assert.equal(started.runs[0].remoteRunId, started.remoteRuns[0].id);
+  assert.throws(
+    () => createRemoteRun(started, { taskId: "t-001", deviceId: "d-001" }),
+    /设备当前有任务运行/,
+  );
   const finished = finishRun(started, started.runs[0].id);
   assert.equal(finished.runs[0].status, "success");
   assert.match(finished.activity[0].detail, /OCR 识别到/);
-
-  const refused = createRemoteRun(initialDemoState, { taskId: "t-001", deviceId: "d-001" });
-  const rejected = resolveRemoteRun(refused, refused.remoteRuns[0].id, { approved: false });
-  assert.equal(rejected.remoteRuns[0].status, "rejected");
-  assert.equal(rejected.runs.length, 0);
 });
 
 test("remote-run follow-up does not show admins a phone preview for another user's device", () => {
@@ -146,7 +147,7 @@ test("remote-run follow-up does not show admins a phone preview for another user
   assert.equal(remoteRunFollowUpView(undefined), "mobile");
 });
 
-test("preauthorization covers the reviewed and newer versions on one device and can be revoked", () => {
+test("remote runs do not require per-task preauthorization", () => {
   const authorized = startLocalRun(initialDemoState, {
     taskId: "t-001",
     deviceId: "d-001",
@@ -154,13 +155,14 @@ test("preauthorization covers the reviewed and newer versions on one device and 
   });
   assert.equal(authorized.runAuthorizations[0].version, "v1.4.0");
   assert.equal(authorized.runAuthorizations[0].allVersions, true);
+  const idleAuthorized = { ...authorized, runs: [] };
 
-  const sameDevice = createRemoteRun(authorized, { taskId: "t-001", deviceId: "d-001" });
+  const sameDevice = createRemoteRun(idleAuthorized, { taskId: "t-001", deviceId: "d-001" });
   assert.equal(sameDevice.remoteRuns[0].status, "running");
-  const otherDevice = createRemoteRun(authorized, { taskId: "t-001", deviceId: "d-002" });
-  assert.equal(otherDevice.remoteRuns[0].status, "pending");
+  const otherDevice = createRemoteRun(idleAuthorized, { taskId: "t-001", deviceId: "d-002" });
+  assert.equal(otherDevice.remoteRuns[0].status, "running");
 
-  const newerVersion = publishTaskVersion(authorized, {
+  const newerVersion = publishTaskVersion(idleAuthorized, {
     taskId: "t-001",
     version: "v1.5.0",
   });
@@ -169,11 +171,11 @@ test("preauthorization covers the reviewed and newer versions on one device and 
   assert.equal(newRequest.remoteRuns[0].status, "running");
 
   const olderVersion = {
-    ...authorized,
+    ...idleAuthorized,
     tasks: authorized.tasks.map((task) => task.id === "t-001" ? { ...task, activeVersion: "v1.3.0" } : task),
   };
   const olderRequest = createRemoteRun(olderVersion, { taskId: "t-001", deviceId: "d-001" });
-  assert.equal(olderRequest.remoteRuns[0].status, "pending");
+  assert.equal(olderRequest.remoteRuns[0].status, "running");
   assert.equal(authorizationCoversVersion(authorized.runAuthorizations[0], "v1.10.0"), true);
   assert.equal(authorizationCoversVersion(authorized.runAuthorizations[0], "v1.3.0"), false);
   assert.equal(requiresRemoteSystemAuthorization(["OCR 文字识别"]), true);
@@ -181,9 +183,9 @@ test("preauthorization covers the reviewed and newer versions on one device and 
   assert.match(remoteRunSystemConsentNotice(["OCR 文字识别"]), /Android 系统弹窗中授权/);
   assert.equal(remoteRunSystemConsentNotice(["无障碍操作"]), null);
 
-  const revoked = revokeRunAuthorization(authorized, authorized.runAuthorizations[0].id);
+  const revoked = revokeRunAuthorization(idleAuthorized, authorized.runAuthorizations[0].id);
   const afterRevoke = createRemoteRun(revoked, { taskId: "t-001", deviceId: "d-001" });
-  assert.equal(afterRevoke.remoteRuns[0].status, "pending");
+  assert.equal(afterRevoke.remoteRuns[0].status, "running");
 });
 
 test("unavailable devices and non-running tasks cannot be started or stopped", () => {
@@ -195,13 +197,13 @@ test("unavailable devices and non-running tasks cannot be started or stopped", (
   assert.throws(() => finishRun(stopped, stopped.runs[0].id), /未在运行/);
 });
 
-test("expired remote requests are marked and cannot be approved", () => {
+test("expired remote requests are marked and not started", () => {
   const pending = createRemoteRun(initialDemoState, { taskId: "t-001", deviceId: "d-001" });
   const expiredState = {
     ...pending,
-    remoteRuns: pending.remoteRuns.map((request) => ({ ...request, expiresAt: 0 })),
+    runs: [],
+    remoteRuns: pending.remoteRuns.map((request) => ({ ...request, status: "pending", runId: null, expiresAt: 0 })),
   };
   const expired = expireRemoteRuns(expiredState, 1);
   assert.equal(expired.remoteRuns[0].status, "expired");
-  assert.throws(() => resolveRemoteRun(expiredState, expired.remoteRuns[0].id, { approved: true }), /已过期/);
 });

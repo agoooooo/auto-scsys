@@ -121,6 +121,9 @@ function createRun(state, { taskId, deviceId, version, remoteRunId = null }) {
   const user = device && state.users.find((item) => item.id === device.userId);
   if (!task || task.status !== "published" || !task.versions.includes(version)) throw new Error("任务版本不可运行");
   if (!device || device.status !== "online" || !user || user.status !== "active") throw new Error("目标设备或账号当前不可用");
+  if (state.runs.some((run) => run.deviceId === deviceId && run.status === "running")) {
+    throw new Error("设备当前有任务运行");
+  }
   const run = {
     id: newId("run"),
     taskId,
@@ -188,51 +191,10 @@ export function createRemoteRun(state, { taskId, deviceId, requestedBy = "林管
     runId: null,
   };
   const next = { ...state, remoteRuns: [request, ...state.remoteRuns] };
-  const grant = state.runAuthorizations.find((item) =>
-    item.taskId === taskId && item.deviceId === deviceId &&
-    authorizationCoversVersion(item, task.activeVersion) && item.expiresAt > Date.now());
-  if (!grant) return next;
   const started = createRun(next, { taskId, deviceId, version: request.version, remoteRunId: request.id });
   return {
     ...started,
     remoteRuns: started.remoteRuns.map((item) => item.id === request.id ? { ...item, status: "running", runId: started.runs[0].id } : item),
-  };
-}
-
-export function resolveRemoteRun(state, requestId, { approved, preauthorize = false }) {
-  const request = state.remoteRuns.find((item) => item.id === requestId);
-  if (!request || request.status !== "pending") throw new Error("此运行请求已处理或不存在");
-  if (request.expiresAt <= Date.now()) throw new Error("此运行请求已过期");
-  if (!approved) {
-    return {
-      ...state,
-      remoteRuns: state.remoteRuns.map((item) => item.id === requestId ? { ...item, status: "rejected" } : item),
-    };
-  }
-  let next = state;
-  if (preauthorize) {
-    next = {
-      ...state,
-      runAuthorizations: [{
-        id: newId("grant"),
-        taskId: request.taskId,
-        deviceId: request.deviceId,
-        version: request.version,
-        allVersions: true,
-        expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
-      }, ...state.runAuthorizations.filter((item) =>
-        !(item.taskId === request.taskId && item.deviceId === request.deviceId && item.version === request.version))],
-    };
-  }
-  const started = createRun(next, {
-    taskId: request.taskId,
-    deviceId: request.deviceId,
-    version: request.version,
-    remoteRunId: request.id,
-  });
-  return {
-    ...started,
-    remoteRuns: started.remoteRuns.map((item) => item.id === requestId ? { ...item, status: "running", runId: started.runs[0].id } : item),
   };
 }
 
