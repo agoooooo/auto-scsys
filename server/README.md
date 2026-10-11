@@ -13,7 +13,7 @@ FLOWPILOT_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32)
   uvicorn server.app:app --host 127.0.0.1 --port 8001
 ```
 
-首次启动会初始化演示账号、设备和任务。交互式 API 文档位于 <http://127.0.0.1:8001/docs>。
+首次启动会初始化演示账号、设备和任务。普通用户的订单 OCR 演示任务发布了 `v1.5.0`：脚本会打开抖音，在设备本地识别界面并统计常见订单状态，不执行点击也不上传 OCR 文本。交互式 API 文档位于 <http://127.0.0.1:8001/docs>。
 
 | 角色 | 邮箱 | 演示密码 |
 | --- | --- | --- |

@@ -1,6 +1,9 @@
 import hashlib
 import sqlite3
 import time
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -89,10 +92,41 @@ def test_user_devices_and_task_access_are_scoped(client):
     assert {device["id"] for device in devices} == {"d-001", "d-002"}
     tasks = client.get("/tasks", headers=auth(user)).json()
     assert [task["id"] for task in tasks] == ["t-001"]
-    assert tasks[0]["active_version"] == "v1.4.0"
+    assert tasks[0]["active_version"] == "v1.5.0"
     assert client.post("/devices/d-002/sync", headers=auth(user)).status_code == 200
     assert client.post("/devices/d-003/sync", headers=auth(user)).status_code == 404
     assert client.get("/devices/d-001/tasks/t-002/versions/v0.2.0/content", headers=auth(user)).status_code == 404
+
+
+def test_seeded_ocr_demo_script_is_versioned_hashed_and_does_not_click(client):
+    user = login(client)
+    downloaded = client.get(
+        "/devices/d-001/tasks/t-001/versions/v1.5.0/content",
+        headers=auth(user),
+    )
+
+    assert downloaded.status_code == 200
+    assert downloaded.headers["x-content-sha256"] == hashlib.sha256(downloaded.content).hexdigest()
+    source = downloaded.content.decode("utf-8")
+    compile(source, "order_status_ocr.py", "exec")
+    assert "bridge.open_douyin()" in source
+    assert "bridge.ocr()" in source
+    assert "bridge.click_text" not in source
+    assert "bridge.log(" in source
+    assert "screen_text" in source
+    logged_messages = []
+    bridge = SimpleNamespace(
+        open_douyin=lambda: True,
+        ocr=lambda: "订单已完成",
+        log=logged_messages.append,
+    )
+    namespace = {"bridge": bridge}
+    with patch("time.sleep") as sleep:
+        exec(compile(source, "order_status_ocr.py", "exec"), namespace)
+
+    sleep.assert_called_once_with(3)
+    assert namespace["result"] == "界面 OCR 完成；匹配到 1 项订单状态"
+    assert logged_messages == ["OCR completed; chars=5; order_status_matches=1"]
 
 
 def test_user_can_bind_devices_up_to_account_limit(client):
@@ -383,12 +417,12 @@ def test_publishing_new_version_does_not_resume_paused_task(client):
     published = client.post(
         "/tasks/t-001/versions",
         headers=auth(admin),
-        data={"version": "v1.5.0"},
+        data={"version": "v1.6.0"},
         files={"script": ("orders.py", b"print('new version')", "text/x-python")},
     )
     assert published.status_code == 201
     task = next(task for task in client.get("/tasks", headers=auth(admin)).json() if task["id"] == "t-001")
-    assert task["active_version"] == "v1.5.0"
+    assert task["active_version"] == "v1.6.0"
     assert task["status"] == "paused"
 
 
@@ -398,14 +432,14 @@ def test_task_version_can_be_activated_without_changing_immutable_content(client
     another_user = login(client, "zhou.ke@example.com", "user-demo")
 
     current_script = client.get(
-        "/devices/d-001/tasks/t-001/versions/v1.4.0/content",
+        "/devices/d-001/tasks/t-001/versions/v1.5.0/content",
         headers=auth(owner),
     )
     assert client.post(
         "/remote-runs",
         headers=auth(admin),
         json={"task_id": "t-001", "device_id": "d-001"},
-    ).json()["version"] == "v1.4.0"
+    ).json()["version"] == "v1.5.0"
     assert client.patch(
         "/tasks/t-001",
         headers=auth(admin),
@@ -436,7 +470,7 @@ def test_task_version_can_be_activated_without_changing_immutable_content(client
         json={"status": "published"},
     ).status_code == 200
     assert client.get(
-        "/devices/d-001/tasks/t-001/versions/v1.4.0/content",
+        "/devices/d-001/tasks/t-001/versions/v1.5.0/content",
         headers=auth(owner),
     ).content == current_script.content
     assert client.post(
@@ -464,7 +498,7 @@ def test_existing_database_migrates_active_task_version(client):
         admin = login(migrated_client, "admin@example.com", "admin-demo")
         tasks = migrated_client.get("/tasks", headers=auth(admin)).json()
         task = next(task for task in tasks if task["id"] == "t-001")
-        assert task["active_version"] == "v1.4.0"
+        assert task["active_version"] == "v1.5.0"
 
 
 def test_remote_run_confirmation_rejection_and_run_record(client):

@@ -28,6 +28,7 @@ REMOTE_REQUEST_TTL_SECONDS = 15 * 60
 PREAUTHORIZATION_TTL_SECONDS = 30 * 24 * 60 * 60
 MAX_SCRIPT_BYTES = 2 * 1024 * 1024
 VERSION_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
+DEMO_OCR_SCRIPT_PATH = Path(__file__).with_name("demo_scripts") / "order_status_ocr.py"
 
 
 def utc_now() -> str:
@@ -191,6 +192,7 @@ def _initialize_database(db_path: Path) -> None:
 
 def _seed_database(db: sqlite3.Connection) -> None:
     now = utc_now()
+    demo_ocr_script = DEMO_OCR_SCRIPT_PATH.read_bytes()
     users = [
         ("u-admin", "林管理员", "admin@example.com", "admin", "active", 50, "admin-demo"),
         ("u-1001", "陈晓", "chen.xiao@example.com", "user", "active", 5, "user-demo"),
@@ -219,7 +221,7 @@ def _seed_database(db: sqlite3.Connection) -> None:
         """INSERT INTO tasks(id,name,description,category,status,owner_id,source,capabilities_json)
            VALUES(?,?,?,?,?,?,?,?)""",
         [
-            ("t-001", "订单状态检查", "识别订单页面状态并记录结果", "OCR 识别", "published", "u-1001", "陈晓上传", json.dumps(["屏幕捕获（需系统授权）", "OCR 文字识别"], ensure_ascii=False)),
+            ("t-001", "抖音订单状态 OCR 演示", "仅在设备本地 OCR 当前抖音界面并统计常见订单状态关键词；不点击、不上传识别内容", "OCR 识别", "published", "u-1001", "陈晓上传", json.dumps(["屏幕捕获（需系统授权）", "OCR 文字识别"], ensure_ascii=False)),
             ("t-002", "每日签到提醒", "检查签到状态并发送提醒", "页面识别", "draft", "u-admin", "林管理员发布", json.dumps(["屏幕捕获（需系统授权）", "OCR 文字识别"], ensure_ascii=False)),
         ],
     )
@@ -228,7 +230,8 @@ def _seed_database(db: sqlite3.Connection) -> None:
            VALUES(?,?,?,?,?,?,?,?)""",
         [
             ("tv-002", "t-001", "v1.3.0", "orders.py", b"# Previous demo script placeholder; not executed.\n", hashlib.sha256(b"# Previous demo script placeholder; not executed.\n").hexdigest(), "历史演示版本", now),
-            ("tv-001", "t-001", "v1.4.0", "orders.py", b"# Demo script placeholder; not executed.\n", hashlib.sha256(b"# Demo script placeholder; not executed.\n").hexdigest(), "初始演示版本", now),
+            ("tv-001", "t-001", "v1.4.0", "orders.py", b"# Previous demo script placeholder; not executed.\n", hashlib.sha256(b"# Previous demo script placeholder; not executed.\n").hexdigest(), "历史演示版本", now),
+            ("tv-004", "t-001", "v1.5.0", "order_status_ocr.py", demo_ocr_script, hashlib.sha256(demo_ocr_script).hexdigest(), "设备端 OCR 演示；不点击且不上传 OCR 内容", now),
             ("tv-003", "t-002", "v0.2.0", "checkin.py", b"# Draft demo script placeholder; not executed.\n", hashlib.sha256(b"# Draft demo script placeholder; not executed.\n").hexdigest(), "草稿", now),
         ],
     )
