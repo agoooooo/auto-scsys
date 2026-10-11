@@ -81,69 +81,55 @@ internal class RemoteRunMonitorService : Service() {
                         }.pendingRemoteRuns(session.token, deviceId)
                     }
                     requests.forEach { request ->
-                        if (request.status == "pending") {
-                            if (requiresScreenCapture(request.capabilities)) {
-                                showRemoteNotification(
-                                    request,
-                                    "远程 OCR 等待手机授权：${request.taskName}",
-                                    "点此打开 App 审阅请求；确认后 Android 会询问屏幕捕获授权",
-                                )
-                            } else {
-                                showRemoteNotification(
-                                    request,
-                                    "需要首次授权：${request.taskName}",
-                                    "由${request.requestedBy}发起；授权后可为此设备及后续版本自动运行",
-                                )
-                            }
+                        if (requiresScreenCapture(request.capabilities)) {
+                            cancelRemoteNotification(request.id)
+                        } else if (request.status == "pending") {
+                            showRemoteNotification(
+                                request,
+                                "需要首次授权：${request.taskName}",
+                                "由${request.requestedBy}发起；授权后可为此设备及后续版本自动运行",
+                            )
                         } else if (shouldNotifyPreauthorizedRun(
-                            request.status,
-                            request.runId,
-                            hasHandled(request.id),
-                        )
+                                request.status,
+                                request.runId,
+                                hasHandled(request.id),
+                            )
                         ) {
-                            if (requiresScreenCapture(request.capabilities)) {
-                                showRemoteNotification(
-                                    request,
-                                    "远程 OCR 需要系统授权：${request.taskName}",
-                                    "点此打开 App，并按 Android 提示授权屏幕捕获",
+                            val runId = request.runId
+                            if (runId == null) {
+                                updateOngoingNotification("远程运行缺少运行 ID：${request.taskName}")
+                                return@forEach
+                            }
+                            try {
+                                TaskExecutionService.start(
+                                    context = this@RemoteRunMonitorService,
+                                    task = AvailableTask(
+                                        id = request.taskId,
+                                        name = request.taskName,
+                                        description = "",
+                                        version = request.version,
+                                        capabilities = request.capabilities,
+                                        source = request.source,
+                                    ),
+                                    runId = runId,
+                                    captureResultCode = null,
+                                    captureResultData = null,
+                                    deviceId = deviceId,
                                 )
-                            } else {
-                                val runId = request.runId
-                                if (runId == null) {
-                                    updateOngoingNotification("远程运行缺少运行 ID：${request.taskName}")
-                                    return@forEach
-                                }
+                                markHandled(request.id)
+                            } catch (exception: Exception) {
                                 try {
-                                    TaskExecutionService.start(
-                                        context = this@RemoteRunMonitorService,
-                                        task = AvailableTask(
-                                            id = request.taskId,
-                                            name = request.taskName,
-                                            description = "",
-                                            version = request.version,
-                                            capabilities = request.capabilities,
-                                            source = request.source,
-                                        ),
-                                        runId = runId,
-                                        captureResultCode = null,
-                                        captureResultData = null,
-                                        deviceId = deviceId,
+                                    ApiClient(session.apiBaseUrl).updateRun(
+                                        session.token,
+                                        runId,
+                                        "failure",
+                                        "无法启动已预授权任务：${exception.message ?: "Android 不允许后台启动"}",
                                     )
                                     markHandled(request.id)
-                                } catch (exception: Exception) {
-                                    try {
-                                        ApiClient(session.apiBaseUrl).updateRun(
-                                            session.token,
-                                            runId,
-                                            "failure",
-                                            "无法启动已预授权任务：${exception.message ?: "Android 不允许后台启动"}",
-                                        )
-                                        markHandled(request.id)
-                                    } catch (reportException: Exception) {
-                                        updateOngoingNotification(
-                                            "无法启动或记录远程任务：${reportException.message ?: "服务端不可用"}",
-                                        )
-                                    }
+                                } catch (reportException: Exception) {
+                                    updateOngoingNotification(
+                                        "无法启动或记录远程任务：${reportException.message ?: "服务端不可用"}",
+                                    )
                                 }
                             }
                         }
@@ -204,6 +190,11 @@ internal class RemoteRunMonitorService : Service() {
             .build()
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(request.id.hashCode(), notification)
+    }
+
+    private fun cancelRemoteNotification(requestId: String) {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.cancel(requestId.hashCode())
     }
 
     private fun requestDeviceId(): String? = SessionStore(this).read()?.deviceId

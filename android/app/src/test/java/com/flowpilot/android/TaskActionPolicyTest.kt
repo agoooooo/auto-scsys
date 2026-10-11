@@ -123,6 +123,17 @@ class TaskActionPolicyTest {
     }
 
     @Test
+    fun foregroundPromptSelectsUnacknowledgedScreenCaptureRequests() {
+        val ocr = listOf("屏幕捕获", "OCR")
+        assertTrue(shouldPromptForRemoteScreenCapture("pending", null, ocr, false))
+        assertTrue(shouldPromptForRemoteScreenCapture("running", "run-1", ocr, false))
+        assertFalse(shouldPromptForRemoteScreenCapture("running", null, ocr, false))
+        assertFalse(shouldPromptForRemoteScreenCapture("success", "run-1", ocr, false))
+        assertFalse(shouldPromptForRemoteScreenCapture("pending", null, listOf("无障碍"), false))
+        assertFalse(shouldPromptForRemoteScreenCapture("pending", null, ocr, true))
+    }
+
+    @Test
     fun logoutBecomesAvailableAfterPermissionIsDeniedOrRunFinishes() {
         assertFalse(canLogoutDuringRun("running"))
         assertFalse(canLogoutDuringRun("awaiting_permission"))

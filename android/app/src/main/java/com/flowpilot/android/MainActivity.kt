@@ -178,7 +178,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 while (isActive) {
-                    delay(FOREGROUND_HEARTBEAT_INTERVAL_MILLIS)
+                    delay(FOREGROUND_REMOTE_POLL_INTERVAL_MILLIS)
                     flowPilotViewModel.refreshRemoteRuns()
                 }
             }
@@ -408,7 +408,7 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_REMOTE_TASK_NAME = "remote_task_name"
         const val EXTRA_REMOTE_TASK_VERSION = "remote_task_version"
         const val EXTRA_REMOTE_DEVICE_ID = "remote_device_id"
-        private const val FOREGROUND_HEARTBEAT_INTERVAL_MILLIS = 60_000L
+        private const val FOREGROUND_REMOTE_POLL_INTERVAL_MILLIS = 15_000L
     }
 }
 
@@ -436,6 +436,7 @@ private fun FlowPilotScreen(
     var password by rememberSaveable { mutableStateOf(state.loginPassword) }
     var rememberLoginInfo by rememberSaveable { mutableStateOf(state.rememberLoginInfo) }
     var selectedRemoteRun by remember { mutableStateOf<RemoteRun?>(null) }
+    val promptedRemotePermissionIds = remember { mutableSetOf<String>() }
     var selectedTask by remember { mutableStateOf<AvailableTask?>(null) }
     var authorizationToRevoke by remember { mutableStateOf<String?>(null) }
     var confirmDeviceUnbind by rememberSaveable { mutableStateOf(false) }
@@ -453,17 +454,36 @@ private fun FlowPilotScreen(
     LaunchedEffect(remoteIntentId, state.remoteRuns) {
         if (remoteIntentId != null) {
             val request = state.remoteRuns.firstOrNull { it.id == remoteIntentId }
+            if (request != null && requiresScreenCapture(request.capabilities)) {
+                promptedRemotePermissionIds.add(request.id)
+            }
             if (request?.status == "running" && request.runId != null) {
                 onRunTask(request.asTask(), request.runId, request.id)
                 onClearRemoteTarget()
             } else {
                 selectedRemoteRun = request
             }
+        } else if (selectedRemoteRun == null) {
+            val request = state.remoteRuns.firstOrNull { candidate ->
+                shouldPromptForRemoteScreenCapture(
+                    status = candidate.status,
+                    runId = candidate.runId,
+                    capabilities = candidate.capabilities,
+                    alreadyPrompted = candidate.id in promptedRemotePermissionIds,
+                )
+            }
+            if (request != null) {
+                promptedRemotePermissionIds.add(request.id)
+                selectedRemoteRun = request
+                preauthorize = false
+            }
         }
     }
     LaunchedEffect(selectedTask?.id, selectedTask?.version, selectedRemoteRun?.id, state.loading) {
         if (state.loading) return@LaunchedEffect
-        val task = selectedTask ?: selectedRemoteRun?.takeIf { it.status == "pending" }?.asTask()
+        val task = selectedTask ?: selectedRemoteRun?.takeIf {
+            it.status == "pending" || requiresScreenCapture(it.capabilities)
+        }?.asTask()
         if (task != null) {
             val key = "${task.id}:${task.version}"
             if (scriptReviewAttempt != key) {
@@ -736,7 +756,7 @@ private fun FlowPilotScreen(
                             )
                         }
                         Text(
-                            "待命期间会显示持续通知。预授权限当前任务及此设备，包含该版本和后续版本 30 天；无需逐次系统授权的任务可自动运行并可随时停止。远程 OCR 会通知你打开 App；确认请求后仍需通过 Android 屏幕捕获系统授权。",
+                            "待命期间会显示持续服务通知。预授权限当前任务及此设备，包含该版本和后续版本 30 天；无需逐次系统授权的任务可自动运行并可随时停止。远程 OCR 在 App 前台时弹出请求；后台收到的请求会等你打开 App 后弹出，确认后仍需通过 Android 屏幕捕获系统授权。",
                         )
                         Button(
                             onClick = { onSetRemoteMonitoring(!remoteMonitoring) },
@@ -784,7 +804,7 @@ private fun FlowPilotScreen(
                             ) {
                                 Text("无障碍操作", style = MaterialTheme.typography.titleSmall)
                                 Text(
-                                    "本地及远程屏幕捕获均需 Android 系统授权；远程请求可通过通知打开 App 后审阅并发起授权。",
+                                    "本地及远程屏幕捕获均需 Android 系统授权；远程请求会在 App 前台弹窗审阅并发起授权。",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -872,7 +892,7 @@ private fun FlowPilotScreen(
                                                 onRunTask(request.asTask(), request.runId, request.id)
                                             },
                                             enabled = (!requiresAccessibility(request.capabilities) || accessibilityEnabled) &&
-                                                        state.runStatus?.status !in setOf("running", "awaiting_permission"),
+                                                state.runStatus?.status !in setOf("running", "awaiting_permission"),
                                         ) {
                                             Text("继续已授权任务")
                                         }
