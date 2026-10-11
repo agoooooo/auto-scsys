@@ -21,6 +21,7 @@ import {
   readSession,
 } from "./api-client.mjs";
 import { mapUsersForCsv, toCsv, userCsvColumns } from "./csv.mjs";
+import { filterTasks } from "./task-list.mjs";
 import { filterDevices, filterUsers, paginateItems } from "./user-list.mjs";
 
 let state = structuredClone(initialDemoState);
@@ -35,6 +36,9 @@ let userFilter = "all";
 let userListPage = 1;
 let deviceFilter = "all";
 let deviceListPage = 1;
+let taskQuery = "";
+let taskFilter = "all";
+let taskListPage = 1;
 let activityQuery = "";
 let activityFilter = "all";
 let auditEvents = [];
@@ -263,6 +267,11 @@ function renderDevices() {
 
 function renderTasks() {
   const actions = `${session ? `<button class="secondary-button" data-action="new-task">＋ 新建脚本</button>` : ""}<button class="primary-button" data-action="publish-task"><span class="button-icon">↑</span>发布新版本</button>`;
+  const filtered = filterTasks(state.tasks, taskQuery, taskFilter);
+  const pagination = paginateItems(filtered, taskListPage, 10);
+  taskListPage = pagination.page;
+  const firstShown = filtered.length ? pagination.start + 1 : 0;
+  const lastShown = pagination.start + pagination.items.length;
   return `${pageHeading("自动化任务", session ? "管理脚本版本、发布状态和设备授权。" : "管理任务版本、发布状态和设备分配。所有更改为演示操作。", actions)}
     <div class="stats-grid">
       <article class="stat-card"><div class="stat-top">任务总数<span class="stat-icon">⌘</span></div><div class="stat-value">${state.tasks.length}</div><div class="stat-foot">工作空间内的任务</div></article>
@@ -270,12 +279,23 @@ function renderTasks() {
       <article class="stat-card"><div class="stat-top">本周运行<span class="stat-icon">▶</span></div><div class="stat-value">128</div><div class="stat-foot"><span class="positive">↑ 12%</span><span>· 较上周</span></div></article>
       <article class="stat-card"><div class="stat-top">平均成功率<span class="stat-icon">✓</span></div><div class="stat-value">96.8%</div><div class="stat-foot">按最近运行统计</div></article>
     </div>
-    <div class="toolbar"><div class="eyebrow" style="margin:0">所有任务 · ${state.tasks.length}</div><div class="toolbar-right"><button class="secondary-button" data-action="task-info">ⓘ 版本说明</button></div></div>
-    <div class="task-grid">${state.tasks.map((task, index) => `<article class="task-card">
+    <div class="toolbar">
+      <label class="search-box"><span>⌕</span><input id="task-search" type="search" placeholder="搜索任务、版本、能力…" value="${escapeHtml(taskQuery)}" /></label>
+      <div class="toolbar-right"><select class="filter-select" id="task-filter" aria-label="筛选任务状态">
+        <option value="all" ${taskFilter === "all" ? "selected" : ""}>所有状态</option><option value="published" ${taskFilter === "published" ? "selected" : ""}>已发布</option><option value="draft" ${taskFilter === "draft" ? "selected" : ""}>草稿</option><option value="paused" ${taskFilter === "paused" ? "selected" : ""}>已暂停</option>
+      </select><button class="secondary-button" data-action="task-info">ⓘ 版本说明</button></div>
+    </div>
+    <div class="eyebrow" style="margin-bottom:12px">显示 ${firstShown}–${lastShown} / ${filtered.length} 个任务（共 ${state.tasks.length} 个）</div>
+    <div class="task-grid">${pagination.items.map((task, index) => `<article class="task-card">
       <div class="task-card-top"><div class="task-symbol ${index % 2 ? "mint" : ""}">${index % 2 ? "◌" : "⌕"}</div><div class="task-main"><h3>${escapeHtml(task.name)}</h3><small>${escapeHtml(task.category)}</small></div>${statusPill(task.status)}</div>
       <p>${escapeHtml(task.description)}</p>${task.scriptFile ? `<div class="file-meta">${escapeHtml(task.scriptFile.name)} · ${Math.ceil(task.scriptFile.size / 1024)} KB · SHA-256 ${escapeHtml(task.scriptFile.sha256.slice(0, 12))}…</div>` : ""}<div class="task-card-meta"><span>当前版本<strong>${escapeHtml(task.activeVersion ?? "尚未发布")}</strong></span><span>已分配设备<strong>${task.devices} 台设备</strong></span><span>最近运行<strong>${escapeHtml(task.lastRun)}</strong></span><span>成功率<strong>${task.successRate ? `${task.successRate}%` : "—"}</strong></span></div>
       <div class="task-card-footer"><button class="text-button" data-action="switch-version" data-id="${escapeHtml(task.id)}">版本管理 ⌄</button>${session?.user.role === "admin" ? `<button class="text-button" data-action="manage-task-access" data-id="${escapeHtml(task.id)}">访问授权</button>` : ""}${(!session || session.user.role === "admin") && ["published", "paused"].includes(task.status) ? `<button class="text-button" data-action="toggle-task-status" data-id="${escapeHtml(task.id)}">${task.status === "paused" ? "恢复发布" : "暂停任务"}</button>` : ""}<button class="run-button" data-action="remote-run" data-id="${escapeHtml(task.id)}" ${task.status !== "published" ? "disabled" : ""}>▶　请求远程运行</button></div>
-    </article>`).join("")}</div>`;
+    </article>`).join("") || `<div class="empty-state">没有符合条件的任务</div>`}</div>
+    <div class="table-footer"><span>显示 ${firstShown}–${lastShown} / ${filtered.length} 个任务</span><div class="pagination">
+      <button data-task-page="${pagination.page - 1}" aria-label="上一页" ${pagination.page <= 1 ? "disabled" : ""}>←</button>
+      <span>${pagination.page} / ${pagination.pageCount}</span>
+      <button data-task-page="${pagination.page + 1}" aria-label="下一页" ${pagination.page >= pagination.pageCount ? "disabled" : ""}>→</button>
+    </div></div>`;
 }
 
 function renderActivity() {
@@ -800,6 +820,13 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const taskPageButton = event.target.closest("[data-task-page]");
+  if (taskPageButton) {
+    taskListPage = Number(taskPageButton.dataset.taskPage);
+    render();
+    return;
+  }
+
   const actionButton = event.target.closest("[data-action]");
   if (!actionButton) return;
   const { action, id } = actionButton.dataset;
@@ -1208,6 +1235,15 @@ document.addEventListener("input", (event) => {
     const footer = workspace.querySelector(".table-footer span");
     if (footer) footer.textContent = `显示 ${filteredActivityRecords().length} / ${activityRecords().length} 条运行记录`;
   }
+  if (event.target.id === "task-search") {
+    const selectionStart = event.target.selectionStart;
+    taskQuery = event.target.value;
+    taskListPage = 1;
+    render();
+    const replacement = workspace.querySelector("#task-search");
+    replacement?.focus();
+    replacement?.setSelectionRange(selectionStart, selectionStart);
+  }
 });
 
 document.addEventListener("change", (event) => {
@@ -1223,6 +1259,11 @@ document.addEventListener("change", (event) => {
   if (event.target.id === "device-filter") {
     deviceFilter = event.target.value;
     deviceListPage = 1;
+    render();
+  }
+  if (event.target.id === "task-filter") {
+    taskFilter = event.target.value;
+    taskListPage = 1;
     render();
   }
   if (event.target.id === "activity-filter") {
