@@ -59,19 +59,19 @@ def test_admin_audit_contains_key_actions_without_sensitive_account_data(client)
 
 
 def test_configured_cors_origin_is_allowed_but_unconfigured_origin_is_rejected(tmp_path, monkeypatch):
-    monkeypatch.setenv("FLOWPILOT_CORS_ORIGINS", "http://192.168.1.20:8000, http://devbox.local:8000")
+    monkeypatch.setenv("FLOWPILOT_CORS_ORIGINS", "http://192.168.0.101:8000, http://devbox.local:8000")
     app = create_app(tmp_path / "cors.sqlite3", b"cors-secret-must-be-at-least-32-bytes")
     with TestClient(app) as test_client:
         allowed = test_client.options(
             "/auth/login",
             headers={
-                "Origin": "http://192.168.1.20:8000",
+                "Origin": "http://192.168.0.101:8000",
                 "Access-Control-Request-Method": "POST",
                 "Access-Control-Request-Headers": "content-type",
             },
         )
         assert allowed.status_code == 200
-        assert allowed.headers["access-control-allow-origin"] == "http://192.168.1.20:8000"
+        assert allowed.headers["access-control-allow-origin"] == "http://192.168.0.101:8000"
         rejected = test_client.options(
             "/auth/login",
             headers={
