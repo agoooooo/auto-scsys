@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import quote, urlsplit
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -24,6 +24,8 @@ from pydantic import BaseModel, Field
 
 DEFAULT_DB_PATH = Path(__file__).with_name("flowpilot.sqlite3")
 TOKEN_TTL_SECONDS = 60 * 60
+LOGIN_FAILURE_LIMIT = 5
+LOGIN_FAILURE_WINDOW_SECONDS = 15 * 60
 REMOTE_REQUEST_TTL_SECONDS = 15 * 60
 PREAUTHORIZATION_TTL_SECONDS = 30 * 24 * 60 * 60
 DEVICE_OFFLINE_AFTER_SECONDS = 2 * 60
@@ -215,6 +217,11 @@ def _initialize_database(db_path: Path, seed_demo: bool = True) -> None:
                 resource_type TEXT NOT NULL,
                 resource_id TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS auth_login_attempts (
+                attempt_key TEXT PRIMARY KEY,
+                window_started INTEGER NOT NULL,
+                failure_count INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
             CREATE INDEX IF NOT EXISTS idx_runs_device ON runs(device_id, started_at);
@@ -606,12 +613,59 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         return {"status": "ok"}
 
     @app.post("/auth/login")
-    def login(body: LoginInput, db: sqlite3.Connection = Depends(connection)):
-        user = db.execute("SELECT * FROM users WHERE email=? COLLATE NOCASE", (body.email.strip(),)).fetchone()
+    def login(body: LoginInput, request: Request, db: sqlite3.Connection = Depends(connection)):
+        email = body.email.strip().lower()
+        source = request.client.host if request.client else "unknown"
+        attempt_key = hmac.new(secret, f"{source}\0{email}".encode(), hashlib.sha256).hexdigest()
+        now = int(time.time())
+        db.execute("BEGIN IMMEDIATE")
+        attempt = db.execute(
+            "SELECT window_started,failure_count FROM auth_login_attempts WHERE attempt_key=?",
+            (attempt_key,),
+        ).fetchone()
+        if (
+            attempt
+            and now - attempt["window_started"] < LOGIN_FAILURE_WINDOW_SECONDS
+            and attempt["failure_count"] >= LOGIN_FAILURE_LIMIT
+        ):
+            retry_after = max(1, attempt["window_started"] + LOGIN_FAILURE_WINDOW_SECONDS - now)
+            raise HTTPException(
+                status_code=429,
+                detail="登录尝试过多，请稍后再试",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        db.execute(
+            """INSERT INTO auth_login_attempts(attempt_key,window_started,failure_count)
+               VALUES(?,?,1)
+               ON CONFLICT(attempt_key) DO UPDATE SET
+                 window_started=CASE
+                   WHEN auth_login_attempts.window_started<=? THEN excluded.window_started
+                   ELSE auth_login_attempts.window_started
+                 END,
+                 failure_count=CASE
+                   WHEN auth_login_attempts.window_started<=? THEN 1
+                   ELSE auth_login_attempts.failure_count+1
+                 END""",
+            (
+                attempt_key,
+                now,
+                now - LOGIN_FAILURE_WINDOW_SECONDS,
+                now - LOGIN_FAILURE_WINDOW_SECONDS,
+            ),
+        )
+        db.execute(
+            "DELETE FROM auth_login_attempts WHERE window_started<=?",
+            (now - LOGIN_FAILURE_WINDOW_SECONDS * 2,),
+        )
+        db.commit()
+
+        user = db.execute("SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
         if not user or user["status"] != "active" or not hmac.compare_digest(
             _password_hash(body.password, user["password_salt"]), user["password_hash"]
         ):
             raise HTTPException(status_code=401, detail="邮箱或密码错误")
+        db.execute("DELETE FROM auth_login_attempts WHERE attempt_key=?", (attempt_key,))
         token = _token_encode({"sub": user["id"], "exp": int(time.time()) + TOKEN_TTL_SECONDS}, secret)
         return {
             "access_token": token,

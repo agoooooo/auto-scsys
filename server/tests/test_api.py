@@ -47,6 +47,59 @@ def test_login_roles_and_disabled_accounts(client):
     assert client.get("/me", headers=auth(user)).status_code == 401
 
 
+def test_login_throttles_failed_credentials_per_email_and_source_and_recovers(tmp_path):
+    app = create_app(tmp_path / "login-limit.sqlite3", b"test-secret-must-be-at-least-32-bytes")
+    with TestClient(app, client=("192.0.2.10", 50000)) as client:
+        payload = {"email": "chen.xiao@example.com", "password": "wrong"}
+        for _ in range(5):
+            assert client.post("/auth/login", json=payload).status_code == 401
+
+        limited = client.post(
+            "/auth/login",
+            json={"email": "CHEN.XIAO@EXAMPLE.COM", "password": "wrong"},
+        )
+        assert limited.status_code == 429
+        assert 1 <= int(limited.headers["retry-after"]) <= 900
+
+        other_email = client.post(
+            "/auth/login",
+            json={"email": "zhou.ke@example.com", "password": "wrong"},
+        )
+        assert other_email.status_code == 401
+
+        with TestClient(app, client=("192.0.2.11", 50000)) as other_source:
+            same_email_other_source = other_source.post("/auth/login", json=payload)
+            assert same_email_other_source.status_code == 401
+
+        with sqlite3.connect(app.state.db_path) as db:
+            assert db.execute("SELECT COUNT(*) FROM auth_login_attempts").fetchone()[0] == 3
+            db.execute(
+                "UPDATE auth_login_attempts SET window_started=?",
+                (int(time.time()) - 900,),
+            )
+
+        recovered = client.post(
+            "/auth/login",
+            json={"email": "chen.xiao@example.com", "password": "user-demo"},
+        )
+        assert recovered.status_code == 200
+        with sqlite3.connect(app.state.db_path) as db:
+            assert db.execute("SELECT COUNT(*) FROM auth_login_attempts").fetchone()[0] == 2
+
+
+def test_successful_login_clears_prior_failures(client):
+    payload = {"email": "chen.xiao@example.com", "password": "wrong"}
+    for _ in range(4):
+        assert client.post("/auth/login", json=payload).status_code == 401
+    assert client.post(
+        "/auth/login",
+        json={"email": "chen.xiao@example.com", "password": "user-demo"},
+    ).status_code == 200
+    for _ in range(5):
+        assert client.post("/auth/login", json=payload).status_code == 401
+    assert client.post("/auth/login", json=payload).status_code == 429
+
+
 def test_admin_audit_contains_key_actions_without_sensitive_account_data(client):
     admin = login(client, "admin@example.com", "admin-demo")
     created = client.post(
