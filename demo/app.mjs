@@ -556,12 +556,12 @@ function renderLogin(error = "") {
     <p>连接本地 API 管理账号、设备与任务。手机端视图供交互验证使用，不代表真实 Android 执行。</p>
     <form id="login-form">
       <div class="form-field"><label for="api-url">服务端地址</label><input id="api-url" name="baseUrl" type="url" value="${escapeHtml(defaultApiUrl)}" required /></div>
-      <div class="form-field"><label for="login-email">邮箱</label><input id="login-email" name="email" type="email" value="admin@example.com" autocomplete="username" required /></div>
-      <div class="form-field"><label for="login-password">密码</label><input id="login-password" name="password" type="password" value="admin-demo" autocomplete="current-password" required /></div>
+      <div class="form-field"><label for="login-email">邮箱</label><input id="login-email" name="email" type="email" autocomplete="username" required /></div>
+      <div class="form-field"><label for="login-password">密码</label><input id="login-password" name="password" type="password" autocomplete="current-password" required /></div>
       <div class="login-error" role="alert">${escapeHtml(error)}</div>
       <button class="primary-button" type="submit">连接并登录</button>
     </form>
-    <div class="login-presets"><strong>本地演示账号</strong><span>管理员：admin@example.com / admin-demo</span><span>用户：chen.xiao@example.com / user-demo</span></div>
+    <div class="login-presets">本地演示账号仅在开发模式启用。生产环境请使用已初始化或分配的账号。</div>
     <button class="secondary-button demo-login" data-action="demo-mode">仅浏览离线演示</button>
   </div>`;
 }
