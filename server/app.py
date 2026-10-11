@@ -305,9 +305,20 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     app = FastAPI(title="FlowPilot API", version="0.1.0", lifespan=lifespan)
     app.state.db_path = database_path
     app.state.token_secret = secret
+    configured_origins = [
+        origin.strip()
+        for origin in os.environ.get("FLOWPILOT_CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:8000", "http://127.0.0.1:8000", "http://localhost:8765", "http://127.0.0.1:8765"],
+        allow_origins=list(dict.fromkeys([
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "http://localhost:8765",
+            "http://127.0.0.1:8765",
+            *configured_origins,
+        ])),
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],

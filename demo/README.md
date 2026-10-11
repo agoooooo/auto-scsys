@@ -12,7 +12,7 @@ python3 -m http.server 8000
 
 然后访问 <http://localhost:8000/demo/>。原型不需要安装依赖。
 
-FastAPI 服务端可按 [`server/README.md`](../server/README.md) 单独运行，Swagger 文档位于 `http://127.0.0.1:8001/docs`。登录界面默认连接 `http://127.0.0.1:8001`；也可以选择“仅浏览离线演示”。
+FastAPI 服务端可按 [`server/README.md`](../server/README.md) 单独运行，也可在仓库根目录用 `make dev` 同时启动。LAN 访问时，登录界面会默认将当前页面主机名配合 API 端口 `8001` 作为服务端地址；也可以选择“仅浏览离线演示”。
 
 ## 可体验的操作
 
