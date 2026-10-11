@@ -1,10 +1,33 @@
 package com.flowpilot.android
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TaskActionPolicyTest {
+    @Test
+    fun douyinPackagePolicySupportsOnlyMainAndLiteApps() {
+        assertTrue(DouyinPackagePolicy.isSupportedPackage(DouyinPackagePolicy.MAIN_PACKAGE))
+        assertTrue(DouyinPackagePolicy.isSupportedPackage(DouyinPackagePolicy.LITE_PACKAGE))
+        assertFalse(DouyinPackagePolicy.isSupportedPackage("com.ss.android.ugc.aweme.other"))
+        assertFalse(DouyinPackagePolicy.isSupportedPackage(null))
+    }
+
+    @Test
+    fun douyinPackagePolicyPrefersMainAppThenFallsBackToLite() {
+        assertEquals(
+            DouyinPackagePolicy.MAIN_PACKAGE,
+            DouyinPackagePolicy.preferredInstalledPackage { it == DouyinPackagePolicy.MAIN_PACKAGE },
+        )
+        assertEquals(
+            DouyinPackagePolicy.LITE_PACKAGE,
+            DouyinPackagePolicy.preferredInstalledPackage { it == DouyinPackagePolicy.LITE_PACKAGE },
+        )
+        assertNull(DouyinPackagePolicy.preferredInstalledPackage { false })
+    }
+
     @Test
     fun scriptCanBeInspectedWithoutAccessibilityPermission() {
         assertTrue(canInspectTaskScript("active", null))

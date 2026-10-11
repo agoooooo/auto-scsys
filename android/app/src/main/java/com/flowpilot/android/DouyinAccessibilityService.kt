@@ -31,13 +31,16 @@ internal class DouyinAccessibilityService : AccessibilityService() {
 
     fun openDouyin() {
         val root = rootInActiveWindow
-        if (root?.packageName?.toString() == DOUYIN_PACKAGE) {
-            root.recycle()
+        val alreadyInDouyin = DouyinPackagePolicy.isSupportedPackage(root?.packageName?.toString())
+        root?.recycle()
+        if (alreadyInDouyin) {
             return
         }
-        root?.recycle()
-        val intent = packageManager.getLaunchIntentForPackage(DOUYIN_PACKAGE)
-            ?: throw IllegalStateException("未检测到已安装的抖音，请先安装后再运行任务")
+        val packageName = DouyinPackagePolicy.preferredInstalledPackage {
+            packageManager.getLaunchIntentForPackage(it) != null
+        } ?: throw IllegalStateException("未检测到已安装的抖音或抖音极速版，请先安装后再运行任务")
+        val intent = packageManager.getLaunchIntentForPackage(packageName)
+            ?: throw IllegalStateException("无法启动已安装的抖音应用")
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         startActivity(intent)
     }
@@ -125,9 +128,9 @@ internal class DouyinAccessibilityService : AccessibilityService() {
 
     private fun checkedRoot(): AccessibilityNodeInfo {
         val root = rootInActiveWindow ?: throw IllegalStateException("无法读取当前界面，请确认抖音已打开")
-        if (root.packageName?.toString() != DOUYIN_PACKAGE) {
+        if (!DouyinPackagePolicy.isSupportedPackage(root.packageName?.toString())) {
             root.recycle()
-            throw IllegalStateException("出于隐私保护，自动化仅能读取抖音界面")
+            throw IllegalStateException("出于隐私保护，自动化仅能读取抖音或抖音极速版界面")
         }
         return root
     }
@@ -142,7 +145,6 @@ internal class DouyinAccessibilityService : AccessibilityService() {
     }
 
     companion object {
-        const val DOUYIN_PACKAGE = "com.ss.android.ugc.aweme"
         private const val MAX_NODES = 800
         private const val MAX_DEPTH = 24
         private const val MAX_CLICKABLE_ANCESTORS = 8

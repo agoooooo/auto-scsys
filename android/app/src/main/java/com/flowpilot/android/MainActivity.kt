@@ -97,8 +97,11 @@ class MainActivity : ComponentActivity() {
                 runId = activeRunId
                 pending.remoteRequestId?.let { RemoteRunMonitorService.markRequestHandled(this@MainActivity, it) }
                 val douyinIntent = if (pending.task.name.contains("抖音", ignoreCase = true)) {
-                    packageManager.getLaunchIntentForPackage(DouyinAccessibilityService.DOUYIN_PACKAGE)
-                        ?: throw IllegalStateException("未检测到已安装的抖音，请先安装后再运行任务")
+                    val packageName = DouyinPackagePolicy.preferredInstalledPackage {
+                        packageManager.getLaunchIntentForPackage(it) != null
+                    } ?: throw IllegalStateException("未检测到已安装的抖音或抖音极速版，请先安装后再运行任务")
+                    packageManager.getLaunchIntentForPackage(packageName)
+                        ?: throw IllegalStateException("无法启动已安装的抖音应用")
                 } else {
                     null
                 }
@@ -498,7 +501,7 @@ private fun FlowPilotScreen(
                         ) {
                             Text("需要启用无障碍操作", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "FlowPilot 仅在已启动任务时读取抖音界面文字并点击脚本指定的文字。请在系统设置中手动启用；可随时关闭。",
+                                "FlowPilot 仅在已启动任务时读取抖音或抖音极速版界面文字并点击脚本指定的文字。请在系统设置中手动启用；可随时关闭。",
                             )
                             TextButton(onClick = onOpenAccessibilitySettings) {
                                 Text("打开系统无障碍设置")
