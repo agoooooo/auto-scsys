@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -23,6 +24,7 @@ from pydantic import BaseModel, Field
 
 
 DEFAULT_DB_PATH = Path(__file__).with_name("flowpilot.sqlite3")
+LOGGER = logging.getLogger(__name__)
 TOKEN_TTL_SECONDS = 60 * 60
 LOGIN_FAILURE_LIMIT = 5
 LOGIN_FAILURE_WINDOW_SECONDS = 15 * 60
@@ -608,8 +610,19 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         db.execute("UPDATE remote_runs SET status='running',run_id=? WHERE id=?", (run_id, request["id"]))
         return run_id
 
+    @app.get("/health/live")
+    def liveness():
+        return {"status": "ok"}
+
     @app.get("/health")
-    def health():
+    @app.get("/health/ready")
+    def readiness():
+        try:
+            with _connect(database_path) as db:
+                db.execute("SELECT 1 FROM users LIMIT 1").fetchone()
+        except (OSError, sqlite3.Error) as error:
+            LOGGER.exception("Readiness check failed")
+            raise HTTPException(status_code=503, detail="database unavailable") from error
         return {"status": "ok"}
 
     @app.post("/auth/login")

@@ -52,6 +52,10 @@ python -m server.database_backup restore --backup /secure-backups/flowpilot-2026
 
 Keep backup destinations on protected storage; this database contains account data and uploaded script contents. This CLI does not schedule, encrypt, upload, rotate, or monitor backups. Put backups in an encrypted off-host system and periodically rehearse restores before relying on them.
 
+## Health probes
+
+`GET /health/live` is a process liveness probe and does not depend on the database. `GET /health/ready` (also available at `/health`) verifies that the service can open the configured database and read the user table; it returns `503` and logs the underlying failure if the database is unavailable. Use liveness to restart a stuck process and readiness to stop routing traffic until the database is available.
+
 ## 已实现接口
 
 - `POST /auth/login`、`POST /auth/refresh`、`GET /me`

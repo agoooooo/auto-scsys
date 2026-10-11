@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+import server.app as server_app
 from server.app import create_app, create_initial_admin
 
 
@@ -45,6 +46,23 @@ def test_login_roles_and_disabled_accounts(client):
 
     client.patch("/users/u-1001", headers=auth(admin), json={"status": "disabled"})
     assert client.get("/me", headers=auth(user)).status_code == 401
+
+
+def test_health_readiness_checks_database_and_liveness_stays_available(client, monkeypatch):
+    assert client.get("/health/live").status_code == 200
+    assert client.get("/health/live").json() == {"status": "ok"}
+    assert client.get("/health/ready").status_code == 200
+    assert client.get("/health").json() == {"status": "ok"}
+
+    def unavailable_database(_):
+        raise sqlite3.OperationalError("database is unavailable")
+
+    monkeypatch.setattr(server_app, "_connect", unavailable_database)
+    assert client.get("/health/live").status_code == 200
+    unavailable = client.get("/health/ready")
+    assert unavailable.status_code == 503
+    assert unavailable.json() == {"detail": "database unavailable"}
+    assert client.get("/health").status_code == 503
 
 
 def test_login_throttles_failed_credentials_per_email_and_source_and_recovers(tmp_path):
