@@ -177,6 +177,7 @@ internal class RemoteRunMonitorService : Service() {
                                     }
                                 }
                             }
+                        }
                     }
                     updateOngoingNotification("远程待命中 · ${requests.size} 个请求")
                 } catch (exception: CancellationException) {
