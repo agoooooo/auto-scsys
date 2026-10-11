@@ -18,6 +18,9 @@ internal data class RememberedLogin(
     val password: String,
 )
 
+internal fun permissionOnboardingPreferenceKey(apiBaseUrl: String, userId: String): String =
+    "permission_onboarding_seen_${apiBaseUrl}_$userId"
+
 @Suppress("DEPRECATION")
 internal class SessionStore(context: Context) {
     private val preferences = EncryptedSharedPreferences.create(
@@ -97,6 +100,17 @@ internal class SessionStore(context: Context) {
             .apply()
     }
 
+    fun hasSeenPermissionOnboarding(apiBaseUrl: String, userId: String): Boolean =
+        preferences.getBoolean(permissionOnboardingKey(apiBaseUrl, userId), false)
+
+    fun markPermissionOnboardingSeen(apiBaseUrl: String, userId: String) {
+        preferences.edit().putBoolean(permissionOnboardingKey(apiBaseUrl, userId), true).apply()
+    }
+
+    fun clearPermissionOnboarding(apiBaseUrl: String, userId: String) {
+        preferences.edit().remove(permissionOnboardingKey(apiBaseUrl, userId)).apply()
+    }
+
     fun clear() {
         preferences.edit()
             .remove(KEY_TOKEN)
@@ -109,6 +123,8 @@ internal class SessionStore(context: Context) {
     }
 
     private fun deviceKey(userId: String) = "device_id_$userId"
+    private fun permissionOnboardingKey(apiBaseUrl: String, userId: String) =
+        permissionOnboardingPreferenceKey(apiBaseUrl, userId)
 
     private companion object {
         const val KEY_API_URL = "api_url"

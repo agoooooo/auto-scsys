@@ -378,8 +378,9 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
     }
 
     fun logout() {
-        sessionStore.clear()
         val current = _state.value
+        current.user?.id?.let { sessionStore.clearPermissionOnboarding(current.apiBaseUrl, it) }
+        sessionStore.clear()
         val remembered = sessionStore.readRememberedLogin()
         _state.value = AppUiState(
             apiBaseUrl = remembered?.apiBaseUrl ?: current.apiBaseUrl,
@@ -387,6 +388,13 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
             loginPassword = remembered?.password.orEmpty(),
             rememberLoginInfo = remembered != null,
         )
+    }
+
+    fun hasSeenPermissionOnboarding(userId: String): Boolean =
+        sessionStore.hasSeenPermissionOnboarding(_state.value.apiBaseUrl, userId)
+
+    fun markPermissionOnboardingSeen(userId: String) {
+        sessionStore.markPermissionOnboardingSeen(_state.value.apiBaseUrl, userId)
     }
 
     fun setRememberLoginInfo(enabled: Boolean) {

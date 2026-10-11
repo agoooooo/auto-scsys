@@ -143,6 +143,14 @@ class TaskActionPolicyTest {
     }
 
     @Test
+    fun permissionOnboardingAcknowledgementIsScopedToServerAndUser() {
+        val userOne = permissionOnboardingPreferenceKey("http://server-a", "user-1")
+        assertEquals(userOne, permissionOnboardingPreferenceKey("http://server-a", "user-1"))
+        assertTrue(userOne != permissionOnboardingPreferenceKey("http://server-b", "user-1"))
+        assertTrue(userOne != permissionOnboardingPreferenceKey("http://server-a", "user-2"))
+    }
+
+    @Test
     fun logoutBecomesAvailableAfterPermissionIsDeniedOrRunFinishes() {
         assertFalse(canLogoutDuringRun("running"))
         assertFalse(canLogoutDuringRun("awaiting_permission"))

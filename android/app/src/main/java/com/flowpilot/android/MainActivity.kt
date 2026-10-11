@@ -471,7 +471,8 @@ private fun FlowPilotScreen(
         } else if (shouldShowPermissionOnboarding(
                 userId = user.id,
                 loading = state.loading,
-                alreadyShownForUser = permissionOnboardingShownForUser == user.id,
+                alreadyShownForUser = permissionOnboardingShownForUser == user.id ||
+                    viewModel.hasSeenPermissionOnboarding(user.id),
             )
         ) {
             permissionOnboardingShownForUser = user.id
@@ -1078,8 +1079,12 @@ private fun FlowPilotScreen(
     }
 
     if (permissionOnboardingVisible && user != null) {
+        val dismissPermissionOnboarding = {
+            viewModel.markPermissionOnboardingSeen(user.id)
+            permissionOnboardingVisible = false
+        }
         AlertDialog(
-            onDismissRequest = { permissionOnboardingVisible = false },
+            onDismissRequest = dismissPermissionOnboarding,
             title = { Text("FlowPilot 权限设置") },
             text = {
                 Column(
@@ -1124,12 +1129,12 @@ private fun FlowPilotScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { permissionOnboardingVisible = false }) {
+                TextButton(onClick = dismissPermissionOnboarding) {
                     Text("完成")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { permissionOnboardingVisible = false }) {
+                TextButton(onClick = dismissPermissionOnboarding) {
                     Text("稍后")
                 }
             },
