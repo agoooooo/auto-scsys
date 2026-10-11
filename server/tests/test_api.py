@@ -122,6 +122,43 @@ def test_login_source_limit_cannot_be_evaded_by_rotating_emails(client):
     assert limited.status_code == 429
 
 
+def test_valid_credentials_are_not_locked_out_by_account_or_source_failure_limits(tmp_path):
+    app = create_app(tmp_path / "login-lockout.sqlite3", b"test-secret-must-be-at-least-32-bytes")
+    with TestClient(app, client=("192.0.2.20", 50000)) as client:
+        for _ in range(5):
+            assert client.post(
+                "/auth/login",
+                json={"email": "chen.xiao@example.com", "password": "wrong"},
+            ).status_code == 401
+
+        valid_account = client.post(
+            "/auth/login",
+            json={"email": "chen.xiao@example.com", "password": "user-demo"},
+        )
+        assert valid_account.status_code == 200
+        assert client.post(
+            "/auth/login",
+            json={"email": "chen.xiao@example.com", "password": "wrong"},
+        ).status_code == 401
+
+        with TestClient(app, client=("192.0.2.21", 50000)) as source_limited_client:
+            for index in range(30):
+                assert source_limited_client.post(
+                    "/auth/login",
+                    json={"email": f"other-{index}@example.com", "password": "wrong"},
+                ).status_code == 401
+
+            valid_source = source_limited_client.post(
+                "/auth/login",
+                json={"email": "zhou.ke@example.com", "password": "user-demo"},
+            )
+            assert valid_source.status_code == 200
+            assert source_limited_client.post(
+                "/auth/login",
+                json={"email": "last-unknown@example.com", "password": "wrong"},
+            ).status_code == 429
+
+
 def test_successful_login_clears_prior_failures(client):
     payload = {"email": "chen.xiao@example.com", "password": "wrong"}
     for _ in range(4):

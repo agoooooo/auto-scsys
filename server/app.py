@@ -641,7 +641,17 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         now = int(time.time())
         attempt_keys = (account_key, source_key)
 
-        def enforce_attempt_limits() -> None:
+        user = db.execute("SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
+        credentials_valid = bool(
+            user
+            and user["status"] == "active"
+            and hmac.compare_digest(
+                _password_hash(body.password, user["password_salt"]),
+                user["password_hash"],
+            )
+        )
+        if not credentials_valid:
+            db.execute("BEGIN IMMEDIATE")
             for attempt_key, failure_limit in zip(
                 attempt_keys,
                 (LOGIN_FAILURE_LIMIT, LOGIN_SOURCE_FAILURE_LIMIT),
@@ -661,14 +671,6 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                         detail="登录尝试过多，请稍后再试",
                         headers={"Retry-After": str(retry_after)},
                     )
-
-        enforce_attempt_limits()
-        user = db.execute("SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
-        if not user or user["status"] != "active" or not hmac.compare_digest(
-            _password_hash(body.password, user["password_salt"]), user["password_hash"]
-        ):
-            db.execute("BEGIN IMMEDIATE")
-            enforce_attempt_limits()
             for attempt_key in attempt_keys:
                 db.execute(
                     """INSERT INTO auth_login_attempts(attempt_key,window_started,failure_count)
@@ -695,7 +697,9 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             )
             db.commit()
             raise HTTPException(status_code=401, detail="邮箱或密码错误")
+        db.execute("BEGIN IMMEDIATE")
         db.execute("DELETE FROM auth_login_attempts WHERE attempt_key=?", (account_key,))
+        db.commit()
         token = _token_encode({"sub": user["id"], "exp": int(time.time()) + TOKEN_TTL_SECONDS}, secret)
         return {
             "access_token": token,
