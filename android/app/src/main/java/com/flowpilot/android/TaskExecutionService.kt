@@ -232,7 +232,7 @@ internal class TaskExecutionService : Service() {
         private val capture: ScreenCaptureSession,
         private val stopRequested: AtomicBoolean,
     ) {
-        private val clickUsed = AtomicBoolean(false)
+        private val clickGate = SingleClickGate()
 
         fun openDouyin(): Boolean {
             checkRunning()
@@ -248,8 +248,9 @@ internal class TaskExecutionService : Service() {
 
         fun clickText(text: String): Boolean {
             checkRunning()
-            check(clickUsed.compareAndSet(false, true)) { "每次运行只允许点击一次" }
-            return DouyinAccessibilityService.requireInstance().clickText(text)
+            return clickGate.click {
+                DouyinAccessibilityService.requireInstance().clickText(text)
+            }
         }
 
         fun log(message: String) {
