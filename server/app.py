@@ -260,9 +260,11 @@ def create_initial_admin(db_path: str | Path, name: str, email: str, password: s
         raise ValueError("管理员密码必须为 12–256 个字符")
 
     _initialize_database(database_path, seed_demo=False)
+    os.chmod(database_path, 0o600)
     user_id = str(uuid.uuid4())
     salt = secrets.token_bytes(16)
     with _connect(database_path) as db:
+        db.execute("BEGIN IMMEDIATE")
         if db.execute("SELECT 1 FROM users LIMIT 1").fetchone():
             raise ValueError("数据库已有用户；不能通过此命令创建或重置管理员")
         db.execute(

@@ -1,6 +1,8 @@
+import concurrent.futures
 import hashlib
 import os
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -249,6 +251,7 @@ def test_initial_admin_bootstrap_creates_one_admin_without_demo_accounts(tmp_pat
         ).status_code == 401
     with pytest.raises(ValueError, match="already has users|已有用户"):
         create_initial_admin(database, "Other Admin", "other@example.com", "another-strong-password")
+    assert stat.S_IMODE(os.stat(database).st_mode) == 0o600
 
     environment = os.environ.copy()
     environment["FLOWPILOT_DB_PATH"] = str(tmp_path / "cli.sqlite3")
@@ -263,6 +266,28 @@ def test_initial_admin_bootstrap_creates_one_admin_without_demo_accounts(tmp_pat
     assert result.returncode == 0, result.stderr
     assert "cli-admin@example.com" in result.stdout
     assert "a-strong-cli-password" not in result.stdout + result.stderr
+
+
+def test_concurrent_initial_admin_bootstraps_create_only_one_admin(tmp_path):
+    database = tmp_path / "concurrent.sqlite3"
+
+    def bootstrap(index):
+        return create_initial_admin(
+            database,
+            f"Initial Admin {index}",
+            f"admin{index}@example.com",
+            "a-strong-production-password",
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(bootstrap, index) for index in range(2)]
+    results = [future.exception() for future in futures]
+
+    assert sum(error is None for error in results) == 1
+    assert sum(isinstance(error, ValueError) for error in results) == 1
+    with sqlite3.connect(database) as db:
+        assert db.execute("SELECT COUNT(*) FROM users WHERE role='admin'").fetchone()[0] == 1
+    assert stat.S_IMODE(os.stat(database).st_mode) == 0o600
 
 
 def test_user_devices_and_task_access_are_scoped(client):
