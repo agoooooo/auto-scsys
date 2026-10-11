@@ -91,7 +91,7 @@ test("snapshot loading maps API resources and requests only online devices", asy
     "/run-authorizations": [],
     "/devices/d1/remote-runs": [{
       id: "q1", task_id: "t1", task: "OCR", version: "v1.0.0", device_id: "d1",
-      requested_by: "u-admin", requested_by_name: "Admin", status: "pending", created_at: "now",
+      requested_by: "u-admin", requested_by_name: "Admin", status: "running", run_id: "r2", created_at: "now",
       expires_at: 9999999999, source: "Owner", capabilities: ["OCR"],
     }],
   };
@@ -111,5 +111,6 @@ test("snapshot loading maps API resources and requests only online devices", asy
   assert.equal(snapshot.runs[0].deviceId, "d1");
   assert.equal(snapshot.runs[0].task, "OCR");
   assert.equal(snapshot.remoteRuns[0].requestedBy, "Admin");
+  assert.equal(snapshot.remoteRuns[0].runId, "r2");
   assert.equal(calls.includes("/devices/d2/remote-runs"), false);
 });

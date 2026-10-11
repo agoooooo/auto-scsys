@@ -7,6 +7,7 @@ import {
   publishTaskVersion,
   resolveRemoteRun,
   revokeRunAuthorization,
+  requiresRemoteSystemAuthorization,
   setUserDeviceLimit,
   setTaskPaused,
   startLocalRun,
@@ -446,7 +447,7 @@ function phoneTaskCard(task) {
   return `<article class="phone-task"><div class="phone-task-top"><div class="task-symbol">⌕</div><div style="flex:1"><strong>${escapeHtml(task.name)}</strong><small>${escapeHtml(task.category)} · ${escapeHtml(task.activeVersion)}</small></div>${statusPill(task.status)}</div>
     <p>${escapeHtml(task.description)}</p>
     ${activeRun ? `<div class="run-live"><span class="status-pill running">设备上运行中 · ${escapeHtml(activeRun.version)}</span>${canRun ? `<button class="phone-run" data-action="finish-run" data-id="${escapeHtml(activeRun.id)}">模拟完成 OCR</button><button class="secondary-button" data-action="stop-run" data-id="${escapeHtml(activeRun.id)}">停止任务</button>` : `<small class="form-hint">请以设备所属用户账号登录以更新运行状态。</small>`}</div>` : `<button class="phone-run" data-action="local-run" data-id="${escapeHtml(task.id)}" ${task.status !== "published" || !canRun ? "disabled" : ""}>▶　查看说明并运行</button>`}
-    ${grants.map((grant) => `<div class="phone-result">已预授权此设备运行 ${escapeHtml(grant.version)} · ${new Date(grant.expiresAt).toLocaleDateString("zh-CN")} 到期</div>`).join("")}</article>`;
+    ${grants.map((grant) => `<div class="phone-result">已预授权此设备运行 ${escapeHtml(grant.version)}${grant.allVersions ? " 及后续版本" : ""} · ${new Date(grant.expiresAt).toLocaleDateString("zh-CN")} 到期</div>`).join("")}</article>`;
 }
 
 function renderPhoneContent() {
@@ -455,7 +456,7 @@ function renderPhoneContent() {
     const myDevices = state.devices.filter((device) => device.userId === phoneUserId());
     const grants = state.runAuthorizations.filter((item) => myDevices.some((device) => device.id === item.deviceId) && item.expiresAt > Date.now());
     return `<div class="phone-section-title">我的设备 <small>${myDevices.length} 台已绑定</small></div><div class="phone-devices">${myDevices.map((device) => `<div class="phone-device"><div class="device-avatar ${escapeHtml(device.color)}">${escapeHtml(device.initial)}</div><span><strong>${escapeHtml(device.name)}</strong><small>${escapeHtml(device.model)}</small></span>${statusPill(device.status)}</div>`).join("")}</div>
-      ${grants.length ? `<div class="phone-section-title">远程运行预授权 <small>仅限指定设备和版本</small></div><div class="phone-devices">${grants.map((grant) => `<div class="phone-device"><span><strong>${escapeHtml(state.tasks.find((task) => task.id === grant.taskId)?.name ?? "已删除任务")} · ${escapeHtml(grant.version)}</strong><small>${escapeHtml(state.devices.find((device) => device.id === grant.deviceId)?.name ?? "")} · 30 天内有效</small></span><button class="text-button" data-action="revoke-grant" data-id="${escapeHtml(grant.id)}">撤销</button></div>`).join("")}</div>` : ""}
+      ${grants.length ? `<div class="phone-section-title">远程运行预授权 <small>限指定任务和设备</small></div><div class="phone-devices">${grants.map((grant) => `<div class="phone-device"><span><strong>${escapeHtml(state.tasks.find((task) => task.id === grant.taskId)?.name ?? "已删除任务")} · ${escapeHtml(grant.version)}${grant.allVersions ? " 及后续版本" : ""}</strong><small>${escapeHtml(state.devices.find((device) => device.id === grant.deviceId)?.name ?? "")} · 30 天内有效</small></span><button class="text-button" data-action="revoke-grant" data-id="${escapeHtml(grant.id)}">撤销</button></div>`).join("")}</div>` : ""}
       <button class="secondary-button" style="width:100%;margin-top:12px" data-action="phone-bind-device">＋ 绑定新设备</button>`;
   }
   if (phoneTab === "activity") {
@@ -471,7 +472,8 @@ function renderPhoneContent() {
     ${pending.length ? `<div class="phone-section-title">远程运行请求 <small>需要你的确认</small></div>${pending.map((request) => {
     const task = state.tasks.find((item) => item.id === request.taskId);
     const canConfirm = session?.user.role === "user";
-    return `<article class="request-card"><strong>${escapeHtml(request.task)} ${request.status === "expired" ? statusPill("expired") : ""}</strong><small>${escapeHtml(request.version)} · ${escapeHtml(request.requestedBy)} 发起 · ${escapeHtml(request.device)}</small><p>脚本来源：${escapeHtml(task?.source ?? "未知")}<br>能力：${(task?.capabilities ?? []).map(escapeHtml).join("、")}</p>${request.status === "pending" && canConfirm ? `<label class="grant-choice"><input type="checkbox" data-grant-request="${escapeHtml(request.id)}" /> 预授权此脚本版本与设备 30 天</label><div class="request-actions"><button class="secondary-button" data-action="reject-request" data-id="${escapeHtml(request.id)}">拒绝</button><button class="primary-button" data-action="approve-request" data-id="${escapeHtml(request.id)}">确认并运行</button></div>` : request.status === "pending" ? `<small>请由设备所属用户账号确认。</small>` : `<small>请求已超过有效时间，未启动。</small>`}</article>`;
+    const blocked = requiresRemoteSystemAuthorization(task?.capabilities);
+    return `<article class="request-card"><strong>${escapeHtml(request.task)} ${request.status === "expired" ? statusPill("expired") : ""}</strong><small>${escapeHtml(request.version)} · ${escapeHtml(request.requestedBy)} 发起 · ${escapeHtml(request.device)}</small><p>脚本来源：${escapeHtml(task?.source ?? "未知")}<br>能力：${(task?.capabilities ?? []).map(escapeHtml).join("、")}</p>${request.status === "pending" && blocked ? `<small>该远程任务需要屏幕捕获/OCR 系统授权，不会执行。</small>` : request.status === "pending" && canConfirm ? `<label class="grant-choice"><input type="checkbox" data-grant-request="${escapeHtml(request.id)}" /> 为此任务、此设备及本版本之后的版本预授权 30 天</label><div class="request-actions"><button class="secondary-button" data-action="reject-request" data-id="${escapeHtml(request.id)}">拒绝</button><button class="primary-button" data-action="approve-request" data-id="${escapeHtml(request.id)}">确认并运行</button></div>` : request.status === "pending" ? `<small>请由设备所属用户账号确认。</small>` : `<small>请求已超过有效时间，未启动。</small>`}</article>`;
   }).join("")}` : ""}
     ${running.length ? `<div class="phone-section-title">前台运行 <small>可随时停止</small></div>${running.map((run) => `<div class="phone-device"><div class="activity-icon">▶</div><span><strong>${escapeHtml(run.task)} · ${escapeHtml(run.version)}</strong><small>${escapeHtml(run.device)} · 持续运行中</small></span>${session?.user.role === "user" ? `<button class="text-button" data-action="stop-run" data-id="${escapeHtml(run.id)}">停止</button>` : ""}</div>`).join("")}` : ""}
     <div class="phone-section-title">可用任务 <small>${tasks.length} 个</small></div>${tasks.length ? tasks.map(phoneTaskCard).join("") : `<div class="empty-state">暂时没有可用任务</div>`}
@@ -647,6 +649,7 @@ function showDeviceLimitModal(userId) {
 
 function showRemoteRunModal(taskId) {
   const task = state.tasks.find((item) => item.id === taskId);
+  const blockedBySystemAuthorization = requiresRemoteSystemAuthorization(task.capabilities);
   const devices = state.devices.filter((device) =>
     device.status === "online" &&
     (!session || session.user.role === "admin" || device.userId === session.user.id));
@@ -658,9 +661,9 @@ function showRemoteRunModal(taskId) {
     <div class="modal-header"><div><h2 id="modal-title">请求远程运行</h2><p>${escapeHtml(task.name)} · ${escapeHtml(task.activeVersion)}</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
     <form id="remote-run-form" data-task-id="${escapeHtml(task.id)}"><div class="modal-body">
       <div class="form-field"><label for="target-device">目标设备</label><select id="target-device" name="deviceId">${devices.map((device) => `<option value="${escapeHtml(device.id)}">${escapeHtml(device.userName)} · ${escapeHtml(device.name)}</option>`).join("")}</select></div>
-      <div class="permission-summary"><strong>脚本来源：${escapeHtml(task.source ?? "用户脚本")}</strong><span>运行请求将在设备端等待用户确认，不会静默执行。</span><span>所需能力：${(task.capabilities ?? []).map(escapeHtml).join("、")}</span></div>
+      <div class="permission-summary"><strong>脚本来源：${escapeHtml(task.source ?? "用户脚本")}</strong><span>已预授权的设备会自动运行；否则设备用户需先审阅并确认。</span><span>所需能力：${(task.capabilities ?? []).map(escapeHtml).join("、")}</span>${blockedBySystemAuthorization ? `<span class="form-hint">该任务需要 Android 屏幕捕获/OCR 系统授权，远程请求不会执行。</span>` : ""}</div>
       <div class="form-hint">请求 15 分钟后过期。发布或请求不会自动运行脚本。</div>
-    </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit">发送请求</button></div></form>
+    </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit" ${blockedBySystemAuthorization ? "disabled" : ""}>发送请求</button></div></form>
   </section></div>`;
   modalRoot.querySelector(".modal-root-inner").addEventListener("click", (event) => {
     if (event.target.classList.contains("modal-root-inner")) closeModal();
@@ -673,7 +676,7 @@ function showConsentModal(taskId) {
     <div class="modal-header"><div><h2 id="modal-title">运行前确认</h2><p>${escapeHtml(task.name)} · ${escapeHtml(task.activeVersion)}</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
     <form id="local-run-form" data-task-id="${escapeHtml(task.id)}"><div class="modal-body">
       <div class="permission-summary"><strong>来源：${escapeHtml(task.source ?? "用户脚本")}</strong><span>版本：${escapeHtml(task.activeVersion)}</span><span>能力说明：${(task.capabilities ?? []).map(escapeHtml).join("、")}</span><span>演示 OCR 场景会读取屏幕内容；真实 App 必须另行取得 Android 系统授权。</span></div>
-      <label class="grant-choice"><input type="checkbox" name="preauthorize" /> 在此设备上预授权此明确版本 30 天（可撤销；不会授权新版本）</label>
+      <label class="grant-choice"><input type="checkbox" name="preauthorize" /> 为此任务、此设备及本版本之后的版本预授权 30 天（可撤销）</label>
       <div class="form-hint">脚本在 App 进程内运行并非安全沙箱。确认运行不代表脚本已被隔离或证明安全。</div>
     </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit">同意并运行</button></div></form>
   </section></div>`;
@@ -1143,7 +1146,12 @@ document.addEventListener("submit", async (event) => {
         if (formData.get("preauthorize") === "on") {
           await apiRequest(session, "/run-authorizations", {
             method: "POST",
-            body: { task_id: task.id, version: task.activeVersion, device_id: currentPhoneDeviceId },
+            body: {
+              task_id: task.id,
+              version: task.activeVersion,
+              device_id: currentPhoneDeviceId,
+              all_versions: true,
+            },
           });
         }
         await apiRequest(session, `/devices/${encodeURIComponent(currentPhoneDeviceId)}/runs`, {

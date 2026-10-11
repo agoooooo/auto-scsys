@@ -136,6 +136,28 @@ function createRun(state, { taskId, deviceId, version, remoteRunId = null }) {
   return { ...state, runs: [run, ...state.runs] };
 }
 
+function compareVersions(left, right) {
+  const leftParts = /^v(\d+)\.(\d+)\.(\d+)$/.exec(left)?.slice(1).map(Number);
+  const rightParts = /^v(\d+)\.(\d+)\.(\d+)$/.exec(right)?.slice(1).map(Number);
+  if (!leftParts || !rightParts) return null;
+  for (let index = 0; index < leftParts.length; index += 1) {
+    if (leftParts[index] !== rightParts[index]) return leftParts[index] - rightParts[index];
+  }
+  return 0;
+}
+
+export function authorizationCoversVersion(authorization, version) {
+  if (authorization.version === version) return true;
+  if (!authorization.allVersions) return false;
+  const comparison = compareVersions(version, authorization.version);
+  return comparison !== null && comparison >= 0;
+}
+
+export function requiresRemoteSystemAuthorization(capabilities = []) {
+  return capabilities.some((capability) =>
+    /屏幕|screen|OCR|文字识别|界面识别|读屏/i.test(capability));
+}
+
 export function createRemoteRun(state, { taskId, deviceId, requestedBy = "林管理员" }) {
   const task = state.tasks.find((item) => item.id === taskId);
   const device = state.devices.find((item) => item.id === deviceId);
@@ -157,7 +179,8 @@ export function createRemoteRun(state, { taskId, deviceId, requestedBy = "林管
   };
   const next = { ...state, remoteRuns: [request, ...state.remoteRuns] };
   const grant = state.runAuthorizations.find((item) =>
-    item.taskId === taskId && item.deviceId === deviceId && item.version === task.activeVersion && item.expiresAt > Date.now());
+    item.taskId === taskId && item.deviceId === deviceId &&
+    authorizationCoversVersion(item, task.activeVersion) && item.expiresAt > Date.now());
   if (!grant) return next;
   const started = createRun(next, { taskId, deviceId, version: request.version, remoteRunId: request.id });
   return {
@@ -185,6 +208,7 @@ export function resolveRemoteRun(state, requestId, { approved, preauthorize = fa
         taskId: request.taskId,
         deviceId: request.deviceId,
         version: request.version,
+        allVersions: true,
         expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
       }, ...state.runAuthorizations.filter((item) =>
         !(item.taskId === request.taskId && item.deviceId === request.deviceId && item.version === request.version))],
@@ -222,6 +246,7 @@ export function startLocalRun(state, { taskId, deviceId, preauthorize = false })
         taskId,
         deviceId,
         version: task.activeVersion,
+        allVersions: true,
         expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
       }, ...state.runAuthorizations.filter((item) =>
         !(item.taskId === taskId && item.deviceId === deviceId && item.version === task.activeVersion))],

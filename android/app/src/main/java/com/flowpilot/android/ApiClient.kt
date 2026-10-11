@@ -19,13 +19,14 @@ internal data class RunAuthorization(
     val taskId: String,
     val taskName: String,
     val version: String,
+    val allVersions: Boolean,
     val deviceId: String,
     val deviceName: String,
     val expiresAt: Long,
 )
 
-internal fun runAuthorizationVersionLabel(version: String): String =
-    if (version == "*") "该版本及后续版本" else version
+internal fun runAuthorizationVersionLabel(version: String, allVersions: Boolean): String =
+    if (allVersions) "$version 及后续版本" else version
 
 internal data class RemoteRun(
     val id: String,
@@ -237,6 +238,7 @@ internal class ApiClient(baseUrl: String) {
                 taskId = item.optString("task_id"),
                 taskName = item.optString("task_name"),
                 version = item.optString("version"),
+                allVersions = item.optBoolean("all_versions"),
                 deviceId = item.optString("device_id"),
                 deviceName = item.optString("device_name"),
                 expiresAt = item.optLong("expires_at"),

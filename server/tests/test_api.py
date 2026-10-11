@@ -576,10 +576,11 @@ def test_task_version_can_be_activated_without_changing_immutable_content(client
     )
 
 
-def test_existing_database_migrates_active_task_version(client):
+def test_existing_database_migrates_active_version_and_authorization_scope(client):
     db_path = client.app.state.db_path
     with sqlite3.connect(db_path) as db:
         db.execute("ALTER TABLE tasks DROP COLUMN active_version")
+        db.execute("ALTER TABLE run_authorizations DROP COLUMN all_versions")
 
     app = create_app(db_path, b"test-secret-must-be-at-least-32-bytes")
     with TestClient(app) as migrated_client:
@@ -587,6 +588,11 @@ def test_existing_database_migrates_active_task_version(client):
         tasks = migrated_client.get("/tasks", headers=auth(admin)).json()
         task = next(task for task in tasks if task["id"] == "t-001")
         assert task["active_version"] == "v1.7.0"
+        with sqlite3.connect(db_path) as db:
+            authorization_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(run_authorizations)")
+            }
+        assert "all_versions" in authorization_columns
 
 
 def test_remote_run_confirmation_rejection_and_run_record(client):
@@ -699,7 +705,7 @@ def test_preauthorization_covers_current_and_future_versions_on_one_device(clien
     grants = client.get("/run-authorizations", headers=auth(user)).json()
     assert len(grants) == 1
     assert grants[0]["device_id"] == "d-001"
-    assert grants[0]["version"] == "*"
+    assert grants[0]["version"] == "v1.7.0"
     assert grants[0]["all_versions"] is True
     next_run = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
     assert next_run["status"] == "running"
@@ -742,7 +748,7 @@ def test_all_version_preauthorization_applies_to_future_versions_and_is_revocabl
     )
     assert created.status_code == 201
     assert created.json()["all_versions"] is True
-    assert created.json()["version"] == "*"
+    assert created.json()["version"] == "v1.7.0"
 
     published = client.post(
         "/tasks/t-001/versions",
@@ -774,7 +780,7 @@ def test_all_version_preauthorization_applies_to_future_versions_and_is_revocabl
     assert older_version.json()["status"] == "pending"
 
     grants = client.get("/run-authorizations", headers=auth(user)).json()
-    grant = next(item for item in grants if item["version"] == "*")
+    grant = next(item for item in grants if item["all_versions"])
     assert client.delete(
         f"/run-authorizations/{grant['id']}",
         headers=auth(user),

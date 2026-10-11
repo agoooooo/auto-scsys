@@ -2,12 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   addUser,
+  authorizationCoversVersion,
   createRemoteRun,
   expireRemoteRuns,
   finishRun,
   initialDemoState,
   publishTaskVersion,
   resolveRemoteRun,
+  requiresRemoteSystemAuthorization,
   revokeRunAuthorization,
   setUserDeviceLimit,
   setTaskPaused,
@@ -136,13 +138,14 @@ test("remote runs wait for device confirmation and record completion or refusal"
   assert.equal(rejected.runs.length, 0);
 });
 
-test("preauthorization is scoped to one device and script version and can be revoked", () => {
+test("preauthorization covers the reviewed and newer versions on one device and can be revoked", () => {
   const authorized = startLocalRun(initialDemoState, {
     taskId: "t-001",
     deviceId: "d-001",
     preauthorize: true,
   });
   assert.equal(authorized.runAuthorizations[0].version, "v1.4.0");
+  assert.equal(authorized.runAuthorizations[0].allVersions, true);
 
   const sameDevice = createRemoteRun(authorized, { taskId: "t-001", deviceId: "d-001" });
   assert.equal(sameDevice.remoteRuns[0].status, "running");
@@ -155,7 +158,18 @@ test("preauthorization is scoped to one device and script version and can be rev
   });
   const newRequest = createRemoteRun(newerVersion, { taskId: "t-001", deviceId: "d-001" });
   assert.equal(newRequest.remoteRuns[0].version, "v1.5.0");
-  assert.equal(newRequest.remoteRuns[0].status, "pending");
+  assert.equal(newRequest.remoteRuns[0].status, "running");
+
+  const olderVersion = {
+    ...authorized,
+    tasks: authorized.tasks.map((task) => task.id === "t-001" ? { ...task, activeVersion: "v1.3.0" } : task),
+  };
+  const olderRequest = createRemoteRun(olderVersion, { taskId: "t-001", deviceId: "d-001" });
+  assert.equal(olderRequest.remoteRuns[0].status, "pending");
+  assert.equal(authorizationCoversVersion(authorized.runAuthorizations[0], "v1.10.0"), true);
+  assert.equal(authorizationCoversVersion(authorized.runAuthorizations[0], "v1.3.0"), false);
+  assert.equal(requiresRemoteSystemAuthorization(["OCR 文字识别"]), true);
+  assert.equal(requiresRemoteSystemAuthorization(["无障碍操作"]), false);
 
   const revoked = revokeRunAuthorization(authorized, authorized.runAuthorizations[0].id);
   const afterRevoke = createRemoteRun(revoked, { taskId: "t-001", deviceId: "d-001" });

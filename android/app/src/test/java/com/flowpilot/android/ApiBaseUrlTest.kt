@@ -36,7 +36,7 @@ class ApiBaseUrlTest {
 
     @Test
     fun labelsFutureVersionRunAuthorizationsClearly() {
-        assertEquals("该版本及后续版本", runAuthorizationVersionLabel("*"))
-        assertEquals("v1.2.3", runAuthorizationVersionLabel("v1.2.3"))
+        assertEquals("v1.2.3 及后续版本", runAuthorizationVersionLabel("v1.2.3", true))
+        assertEquals("v1.2.3", runAuthorizationVersionLabel("v1.2.3", false))
     }
 }

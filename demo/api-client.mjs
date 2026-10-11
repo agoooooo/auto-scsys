@@ -128,7 +128,7 @@ export async function loadSnapshot(session, fetchImpl = fetch) {
     requestedBy: request.requested_by_name ?? request.requested_by,
     requestedAt: new Date(request.created_at).getTime(),
     expiresAt: request.expires_at * 1000,
-    runId: null,
+    runId: request.run_id,
   }));
   const mappedAuthorizations = authorizations.map((item) => ({
     ...item,

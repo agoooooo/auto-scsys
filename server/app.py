@@ -1056,7 +1056,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     def list_run_authorizations(user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         if user["role"] == "admin":
             rows = db.execute(
-                """SELECT a.id,a.task_id,CASE WHEN a.all_versions=1 THEN '*' ELSE a.version END AS version,
+                """SELECT a.id,a.task_id,a.version,
                           a.device_id,a.user_id,a.expires_at,a.revoked_at,a.all_versions,
                           t.name AS task_name,d.name AS device_name FROM run_authorizations a
                    JOIN tasks t ON t.id=a.task_id JOIN devices d ON d.id=a.device_id
@@ -1065,7 +1065,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             )
         else:
             rows = db.execute(
-                """SELECT a.id,a.task_id,CASE WHEN a.all_versions=1 THEN '*' ELSE a.version END AS version,
+                """SELECT a.id,a.task_id,a.version,
                           a.device_id,a.user_id,a.expires_at,a.revoked_at,a.all_versions,
                           t.name AS task_name,d.name AS device_name FROM run_authorizations a
                    JOIN tasks t ON t.id=a.task_id JOIN devices d ON d.id=a.device_id
@@ -1101,7 +1101,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             (task["id"], body.version, device["id"]),
         ).fetchone()
         audit(db, user["id"], "run_authorization.created", "run_authorization", row["id"])
-        return {"id": row["id"], "task_id": task["id"], "version": "*" if body.all_versions else body.version, "all_versions": body.all_versions, "device_id": device["id"], "expires_at": expires_at}
+        return {"id": row["id"], "task_id": task["id"], "version": body.version, "all_versions": body.all_versions, "device_id": device["id"], "expires_at": expires_at}
 
     @app.delete("/run-authorizations/{authorization_id}")
     def revoke_authorization(authorization_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):

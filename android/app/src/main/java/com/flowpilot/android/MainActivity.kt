@@ -259,7 +259,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (runId != null && !canAutoRunRemote(task.capabilities)) {
-            val message = "该远程任务需要屏幕捕获系统授权；远程屏幕捕获/OCR 任务不会执行"
+            val message = "该远程任务需要 Android 屏幕捕获系统授权；远程 OCR/屏幕捕获任务不会执行"
             RunStatusStore(this).update(runId, task.name, task.version, "failure", message)
             RemoteRunMonitorService.markRequestHandled(this, remoteRequestId.orEmpty())
             flowPilotViewModel.showError(message)
@@ -704,7 +704,9 @@ private fun FlowPilotScreen(
                                     verticalArrangement = Arrangement.spacedBy(2.dp),
                                 ) {
                                     Text(
-                                        "${authorization.taskName} · ${runAuthorizationVersionLabel(authorization.version)}",
+                                        "${authorization.taskName} · ${
+                                            runAuthorizationVersionLabel(authorization.version, authorization.allVersions)
+                                        }",
                                         style = MaterialTheme.typography.bodyMedium,
                                     )
                                     Text(
@@ -791,7 +793,7 @@ private fun FlowPilotScreen(
                             ) {
                                 Text("无障碍操作", style = MaterialTheme.typography.titleSmall)
                                 Text(
-                                    "本地屏幕捕获仍需 Android 系统授权；远程 OCR/屏幕捕获任务不会自动执行。",
+                                    "本地屏幕捕获仍需 Android 系统授权；远程 OCR/屏幕捕获任务不会执行。",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -1079,7 +1081,7 @@ private fun FlowPilotScreen(
                         }
                     }
                     Text(
-                        "授权后，后续不需要屏幕捕获的远程版本会自动在可见前台服务中运行并可停止。屏幕捕获型远程任务不会执行；本地运行仍遵循 Android 系统授权。",
+                        "授权后，后续不需要逐次系统授权的远程版本会自动在可见前台服务中运行并可停止。远程 OCR/屏幕捕获任务不会执行；本地运行仍遵循 Android 系统授权。",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
