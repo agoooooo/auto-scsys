@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f5f7fb" />
+    <title>自动化控制台 · Demo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="#" aria-label="自动化控制台首页">
+          <span class="brand-mark"><span></span><span></span><span></span></span>
+          <span class="brand-name">flow<span>pilot</span></span>
+        </a>
+
+        <div class="workspace-label">工作空间</div>
+        <button class="workspace-switcher">
+          <span class="workspace-avatar">A</span>
+          <span class="workspace-copy"><strong>Acme Studio</strong><small>个人工作空间</small></span>
+          <span class="chevron">⌄</span>
+        </button>
+
+        <div class="nav-label">管理</div>
+        <nav class="side-nav" aria-label="管理后台导航">
+          <button class="nav-item active" data-page="overview"><span class="nav-icon">◫</span>总览</button>
+          <button class="nav-item" data-page="users"><span class="nav-icon">♙</span>用户管理<span class="nav-count" id="user-count">03</span></button>
+          <button class="nav-item" data-page="devices"><span class="nav-icon">▣</span>设备管理</button>
+          <button class="nav-item" data-page="tasks"><span class="nav-icon">⌘</span>自动化任务</button>
+          <button class="nav-item" data-page="activity"><span class="nav-icon">◷</span>运行记录</button>
+        </nav>
+
+        <div class="sidebar-bottom">
+          <div class="help-card">
+            <div class="help-icon">✳</div>
+            <strong>第一次使用？</strong>
+            <p>试试发布一个任务，然后在手机端运行。</p>
+            <button data-action="go-tasks">了解任务发布 <span>→</span></button>
+          </div>
+          <button class="profile-button">
+            <span class="profile-avatar">林</span>
+            <span class="profile-copy"><strong>林管理员</strong><small>系统管理员</small></span>
+            <span class="more">···</span>
+          </button>
+        </div>
+      </aside>
+
+      <main class="main-area">
+        <header class="topbar">
+          <button class="mobile-menu" id="mobile-menu" aria-label="打开菜单">☰</button>
+          <div class="breadcrumbs"><span>工作空间</span><b>/</b><strong id="breadcrumb-current">总览</strong></div>
+          <div class="topbar-actions">
+            <span class="demo-indicator"><i></i>演示数据</span>
+            <div class="view-switch" role="group" aria-label="切换界面">
+              <button class="view-option selected" data-view="admin"><span>▦</span>管理后台</button>
+              <button class="view-option" data-view="mobile"><span>▯</span>手机 App</button>
+            </div>
+            <button class="icon-button notification-button" aria-label="通知">♧<i></i></button>
+          </div>
+        </header>
+
+        <section class="workspace" id="workspace" aria-live="polite"></section>
+      </main>
+    </div>
+
+    <div class="modal-root" id="modal-root"></div>
+    <div class="toast-region" id="toast-region" aria-live="polite"></div>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>
