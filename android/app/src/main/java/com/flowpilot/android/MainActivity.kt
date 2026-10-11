@@ -577,6 +577,13 @@ private fun FlowPilotScreen(
                             ) {
                                 Text("最近一次运行", style = MaterialTheme.typography.titleMedium)
                                 Text("${runStatus.taskName.orEmpty()} · ${runStatusLabel(runStatus.status)}")
+                                runStatus.startedAtMillis?.let { startedAt ->
+                                    Text(
+                                        "开始时间：${formatRunStartTime(startedAt)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                                 Text(runStatus.summary.orEmpty())
                                 if (runStatus.log.isNotBlank()) {
                                     Text("运行日志", style = MaterialTheme.typography.titleSmall)

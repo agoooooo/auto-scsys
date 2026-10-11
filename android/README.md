@@ -1,6 +1,6 @@
 # FlowPilot Android 客户端
 
-原生 Kotlin/Jetpack Compose 客户端可登录普通用户账号、绑定设备、同步任务版本、检查脚本 SHA-256、查看完整脚本后再明确确认运行，并显示运行结果和本地日志。Python 3.12 由 Chaquopy 在 App 进程内运行。演示后端仍只负责账号、授权、脚本分发和运行记录，不会执行 Python。
+原生 Kotlin/Jetpack Compose 客户端可登录普通用户账号、绑定设备、同步任务版本、检查脚本 SHA-256、查看完整脚本后再明确确认运行，并显示带开始时间的最近运行结果和本地日志。Python 3.12 由 Chaquopy 在 App 进程内运行。演示后端仍只负责账号、授权、脚本分发和运行记录，不会执行 Python。
 
 ## 构建
 

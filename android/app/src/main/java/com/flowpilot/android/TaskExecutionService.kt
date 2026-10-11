@@ -328,9 +328,11 @@ internal class RunStatusStore(context: Context) {
     fun update(runId: String, taskName: String, status: String, summary: String) {
         val previousRunId = preferences.getString(KEY_RUN_ID, null)
         val previousStatus = preferences.getString(KEY_STATUS, null)
+        val startsNewRun = shouldStartNewRun(previousRunId, previousStatus, runId, status)
         val editor = preferences.edit()
-        if (shouldClearRunLog(previousRunId, previousStatus, runId, status)) {
+        if (startsNewRun) {
             editor.remove(KEY_LOG)
+            editor.putLong(KEY_STARTED_AT, System.currentTimeMillis())
         }
         editor
             .putString(KEY_RUN_ID, runId)
@@ -351,6 +353,7 @@ internal class RunStatusStore(context: Context) {
             taskName = preferences.getString(KEY_TASK_NAME, null),
             status = preferences.getString(KEY_STATUS, null),
             summary = preferences.getString(KEY_SUMMARY, null),
+            startedAtMillis = preferences.getLong(KEY_STARTED_AT, 0L).takeIf { it > 0L },
             log = preferences.getString(KEY_LOG, "").orEmpty(),
         )
 
@@ -359,6 +362,7 @@ internal class RunStatusStore(context: Context) {
         const val KEY_TASK_NAME = "task_name"
         const val KEY_STATUS = "status"
         const val KEY_SUMMARY = "summary"
+        const val KEY_STARTED_AT = "started_at"
         const val KEY_LOG = "log"
         const val MAX_LOG_CHARS = 4000
     }
@@ -369,12 +373,15 @@ internal data class RunStatus(
     val taskName: String?,
     val status: String?,
     val summary: String?,
+    val startedAtMillis: Long?,
     val log: String,
 )
 
-internal fun shouldClearRunLog(
+internal fun shouldStartNewRun(
     previousRunId: String?,
     previousStatus: String?,
     runId: String,
     status: String,
-): Boolean = previousRunId != runId || (status == "running" && previousStatus != "running")
+): Boolean = previousRunId != runId ||
+    (status == "awaiting_permission" && previousStatus != "awaiting_permission") ||
+    (status == "running" && previousStatus !in setOf("running", "awaiting_permission"))
