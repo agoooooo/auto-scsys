@@ -120,6 +120,45 @@ def test_user_can_bind_devices_up_to_account_limit(client):
     assert client.get(f"/devices/{created_ids[0]}/remote-runs", headers=auth(login(client, "zhou.ke@example.com", "user-demo"))).status_code == 404
 
 
+def test_admin_can_update_user_device_limit_with_validation_and_audit(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+
+    assert client.patch(
+        "/users/u-1001",
+        headers=auth(user),
+        json={"device_limit": 10},
+    ).status_code == 403
+    assert client.patch("/users/u-1001", headers=auth(admin), json={}).status_code == 422
+    assert client.patch(
+        "/users/u-1001",
+        headers=auth(admin),
+        json={"device_limit": 1},
+    ).status_code == 409
+    assert client.patch(
+        "/users/u-1001",
+        headers=auth(admin),
+        json={"device_limit": 51},
+    ).status_code == 422
+
+    updated = client.patch(
+        "/users/u-1001",
+        headers=auth(admin),
+        json={"device_limit": 4},
+    )
+    assert updated.status_code == 200
+    assert updated.json() == {"id": "u-1001", "status": "active", "device_limit": 4}
+    assert client.post(
+        "/devices",
+        headers=auth(user),
+        json={"name": "Within new limit", "model": "Android"},
+    ).status_code == 201
+    assert any(
+        event["action"] == "user.device_limit_updated" and event["resource_id"] == "u-1001"
+        for event in client.get("/admin/audit", headers=auth(admin)).json()
+    )
+
+
 def test_user_can_create_and_publish_owned_task_but_not_another_users_task(client):
     user = login(client)
     created = client.post(

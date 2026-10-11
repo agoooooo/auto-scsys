@@ -260,8 +260,9 @@ class RegisterDeviceInput(BaseModel):
     app_version: str = Field(default="1.0.0", max_length=32)
 
 
-class UserStatusInput(BaseModel):
-    status: Literal["active", "disabled"]
+class UserUpdateInput(BaseModel):
+    status: Literal["active", "disabled"] | None = None
+    device_limit: int | None = Field(default=None, ge=1, le=50)
 
 
 class DeviceStatusInput(BaseModel):
@@ -471,12 +472,28 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         return {"id": user_id, "name": name, "email": email, "role": "user", "status": "active", "device_limit": body.device_limit}
 
     @app.patch("/users/{user_id}")
-    def set_user_status(user_id: str, body: UserStatusInput, user: dict = Depends(require_admin), db: sqlite3.Connection = Depends(connection)):
-        target = db.execute("SELECT id FROM users WHERE id=? AND role='user'", (user_id,)).fetchone()
+    def update_user(user_id: str, body: UserUpdateInput, user: dict = Depends(require_admin), db: sqlite3.Connection = Depends(connection)):
+        if body.status is None and body.device_limit is None:
+            raise HTTPException(status_code=422, detail="至少提供一个要更新的用户字段")
+        target = db.execute("SELECT id,status,device_limit FROM users WHERE id=? AND role='user'", (user_id,)).fetchone()
         if not target:
             raise HTTPException(status_code=404, detail="用户不存在")
-        db.execute("UPDATE users SET status=? WHERE id=?", (body.status, user_id))
-        if body.status == "disabled":
+        if body.device_limit is not None:
+            active_devices = db.execute(
+                "SELECT COUNT(*) FROM devices WHERE user_id=? AND status!='disabled'",
+                (user_id,),
+            ).fetchone()[0]
+            if body.device_limit < active_devices:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"用户当前有 {active_devices} 台已启用设备，设备上限不能低于此数量",
+                )
+            db.execute("UPDATE users SET device_limit=? WHERE id=?", (body.device_limit, user_id))
+            if body.device_limit != target["device_limit"]:
+                audit(db, user["id"], "user.device_limit_updated", "user", user_id)
+        if body.status is not None:
+            db.execute("UPDATE users SET status=? WHERE id=?", (body.status, user_id))
+        if body.status == "disabled" and target["status"] != "disabled":
             now = utc_now()
             db.execute("UPDATE run_authorizations SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (now, user_id))
             db.execute("UPDATE remote_runs SET status='expired' WHERE status='pending' AND device_id IN (SELECT id FROM devices WHERE user_id=?)", (user_id,))
@@ -491,8 +508,13 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                      (SELECT id FROM devices WHERE user_id=?) AND status='stopped') AND status='running'""",
                 (user_id,),
             )
-        audit(db, user["id"], f"user.{body.status}", "user", user_id)
-        return {"id": user_id, "status": body.status}
+        if body.status is not None and body.status != target["status"]:
+            audit(db, user["id"], f"user.{body.status}", "user", user_id)
+        updated = db.execute(
+            "SELECT id,status,device_limit FROM users WHERE id=?",
+            (user_id,),
+        ).fetchone()
+        return dict(updated)
 
     @app.get("/devices")
     def list_devices(user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):

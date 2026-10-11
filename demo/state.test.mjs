@@ -9,6 +9,7 @@ import {
   publishTaskVersion,
   resolveRemoteRun,
   revokeRunAuthorization,
+  setUserDeviceLimit,
   setTaskPaused,
   startLocalRun,
   toggleDevice,
@@ -43,6 +44,15 @@ test("user and device status actions update only the selected record", () => {
   assert.equal(disabledDevice.devices[0].status, "disabled");
   assert.equal(disabledDevice.devices[1].status, "online");
   assert.equal(toggleDevice(disabledDevice, "d-001").devices[0].status, "offline");
+});
+
+test("updating a user's device limit validates active devices and preserves other users", () => {
+  const updated = setUserDeviceLimit(initialDemoState, "u-1001", 2);
+  assert.equal(updated.users[0].deviceLimit, 2);
+  assert.equal(updated.users[1].deviceLimit, 3);
+  assert.throws(() => setUserDeviceLimit(initialDemoState, "u-1001", 1), /设备上限必须/);
+  assert.throws(() => setUserDeviceLimit(initialDemoState, "u-1001", 51), /50 台之间/);
+  assert.throws(() => setUserDeviceLimit(initialDemoState, "missing", 3), /用户不存在/);
 });
 
 test("publishing a valid task version activates it and records the release", () => {

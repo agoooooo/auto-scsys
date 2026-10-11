@@ -7,6 +7,7 @@ import {
   publishTaskVersion,
   resolveRemoteRun,
   revokeRunAuthorization,
+  setUserDeviceLimit,
   setTaskPaused,
   startLocalRun,
   toggleDevice,
@@ -53,6 +54,7 @@ const pageNames = {
 
 const auditActionLabels = {
   "user.created": "创建用户",
+  "user.device_limit_updated": "调整设备数量上限",
   "user.active": "启用用户",
   "user.disabled": "停用用户",
   "device.bound": "绑定设备",
@@ -196,7 +198,7 @@ function userRows() {
     const count = state.devices.filter((device) => device.userId === user.id && device.status !== "disabled").length;
     return `<tr>
       <td><div class="person-cell"><span class="avatar a${(index % 4) + 1}">${escapeHtml(user.name.slice(0, 1))}</span><span class="person-details"><strong>${escapeHtml(user.name)}</strong><small>${escapeHtml(user.email)}</small></span></div></td>
-      <td>${statusPill(user.status)}</td><td>${count} / ${user.deviceLimit} 台</td><td>${escapeHtml(user.joined)}</td>
+      <td>${statusPill(user.status)}</td><td>${count} / ${user.deviceLimit} 台 <button class="text-button" data-action="edit-device-limit" data-id="${escapeHtml(user.id)}">调整</button></td><td>${escapeHtml(user.joined)}</td>
       <td><span style="color:#9aa2b1">基础用户</span></td>
       <td><button class="table-action" data-action="toggle-user" data-id="${escapeHtml(user.id)}" title="${user.status === "active" ? "停用用户" : "启用用户"}">${user.status === "active" ? "···" : "↻"}</button></td>
     </tr>`;
@@ -572,6 +574,20 @@ function showUserModal() {
   modalRoot.querySelector("#user-name").focus();
 }
 
+function showDeviceLimitModal(userId) {
+  const user = state.users.find((item) => item.id === userId);
+  if (!user) return;
+  const count = state.devices.filter((device) => device.userId === user.id && device.status !== "disabled").length;
+  modalRoot.innerHTML = `<div class="modal-root-inner"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-header"><div><h2 id="modal-title">调整设备上限</h2><p>${escapeHtml(user.name)} · ${escapeHtml(user.email)}</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
+    <form id="device-limit-form" data-user-id="${escapeHtml(user.id)}"><div class="modal-body">
+      <div class="form-field"><label for="user-device-limit">设备数量上限</label><input id="user-device-limit" name="deviceLimit" type="number" min="${Math.max(1, count)}" max="50" value="${user.deviceLimit}" required /></div>
+      <div class="form-hint">当前有 ${count} 台已启用设备。上限范围为 ${Math.max(1, count)}–50 台；不会停用用户现有设备。</div>
+    </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit">保存上限</button></div></form>
+  </section></div>`;
+  modalRoot.querySelector("#user-device-limit").focus();
+}
+
 function showRemoteRunModal(taskId) {
   const task = state.tasks.find((item) => item.id === taskId);
   const devices = state.devices.filter((device) =>
@@ -738,6 +754,7 @@ document.addEventListener("click", async (event) => {
   const { action, id } = actionButton.dataset;
   if (action === "refresh-audit") await refreshAudit();
   else if (action === "new-user") showUserModal();
+  else if (action === "edit-device-limit") showDeviceLimitModal(id);
   else if (action === "new-task") showNewTaskModal();
   else if (action === "publish-task") showPublishModal();
   else if (action === "switch-version") showVersionModal(id);
@@ -958,6 +975,23 @@ document.addEventListener("submit", async (event) => {
     } catch (error) {
       showToast(error.message);
     }
+  } else if (event.target.id === "device-limit-form") {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    try {
+      if (session) {
+        await apiRequest(session, `/users/${encodeURIComponent(event.target.dataset.userId)}`, {
+          method: "PATCH",
+          body: { device_limit: Number(formData.get("deviceLimit")) },
+        });
+      } else {
+        state = setUserDeviceLimit(state, event.target.dataset.userId, formData.get("deviceLimit"));
+      }
+      closeModal();
+      if (session) await refreshFromApi();
+      else render();
+      showToast(session ? "设备上限已更新" : "设备上限已更新（演示）");
+    } catch (error) { showToast(error.message); }
   } else if (event.target.id === "device-form") {
     event.preventDefault();
     const formData = new FormData(event.target);

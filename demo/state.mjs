@@ -49,6 +49,20 @@ export function toggleUser(state, userId) {
   };
 }
 
+export function setUserDeviceLimit(state, userId, deviceLimit) {
+  const user = state.users.find((item) => item.id === userId);
+  if (!user) throw new Error("用户不存在");
+  const limit = Number(deviceLimit);
+  const activeDevices = state.devices.filter((device) => device.userId === userId && device.status !== "disabled").length;
+  if (!Number.isInteger(limit) || limit < Math.max(1, activeDevices) || limit > 50) {
+    throw new Error(`设备上限必须在 ${Math.max(1, activeDevices)}–50 台之间`);
+  }
+  return {
+    ...state,
+    users: state.users.map((item) => item.id === userId ? { ...item, deviceLimit: limit } : item),
+  };
+}
+
 export function toggleDevice(state, deviceId) {
   return {
     ...state,
