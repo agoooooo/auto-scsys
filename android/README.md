@@ -34,7 +34,7 @@ APK 位于 `android/app/build/outputs/apk/debug/app-debug.apk`。当前配置为
 脚本在全局变量 `bridge` 上可用以下方法：
 
 - `bridge.open_douyin()`：打开已安装的抖音；若已在抖音前台则不重复启动。
-- `bridge.wait_for_douyin(timeout_seconds=15)`：等待抖音主版/极速版进入前台，超时范围为 1–30 秒；用于避免启动动画或系统切换期间过早截图。
+- `bridge.wait_for_douyin(timeout_seconds=15)`：等待抖音主版/极速版进入前台，超时范围为 1–30 秒；用于避免启动动画或系统切换期间过早截图，用户停止任务时会尽快结束等待。
 - `bridge.ocr()`：OCR 当前屏幕并返回识别文本；仅在抖音处于前台时允许。
 - `bridge.click_text(text)`：按无障碍节点文字执行一次点击；每次任务最多一次，且只能作用于抖音主版或极速版。
 - `bridge.log(message)`：将最多 4 KB 的日志保留在本机。

@@ -6,6 +6,7 @@ internal fun awaitDouyinForeground(
     isForeground: () -> Boolean,
     timeoutMillis: Long,
     pollIntervalMillis: Long,
+    isCancelled: () -> Boolean = { false },
     wait: (Long) -> Unit = Thread::sleep,
     nowNanos: () -> Long = System::nanoTime,
 ): Boolean {
@@ -13,6 +14,7 @@ internal fun awaitDouyinForeground(
     require(pollIntervalMillis > 0) { "pollIntervalMillis must be positive" }
     val deadline = nowNanos() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
     while (true) {
+        if (isCancelled()) return false
         if (isForeground()) return true
         val remainingNanos = deadline - nowNanos()
         if (remainingNanos <= 0) return false

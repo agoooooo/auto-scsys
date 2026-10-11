@@ -51,11 +51,12 @@ internal class DouyinAccessibilityService : AccessibilityService() {
         startActivity(intent)
     }
 
-    fun waitForDouyin(timeoutSeconds: Int): Boolean =
+    fun waitForDouyin(timeoutSeconds: Int, isCancelled: () -> Boolean = { false }): Boolean =
         awaitDouyinForeground(
             isForeground = ::isDouyinForeground,
             timeoutMillis = TimeUnit.SECONDS.toMillis(timeoutSeconds.toLong()),
             pollIntervalMillis = FOREGROUND_POLL_INTERVAL_MILLIS,
+            isCancelled = isCancelled,
         )
 
     private fun isDouyinForeground(): Boolean = onServiceThread {

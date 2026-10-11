@@ -61,6 +61,26 @@ class TaskActionPolicyTest {
     }
 
     @Test
+    fun douyinForegroundWaitStopsPromptlyWhenCancelled() {
+        var elapsedMillis = 0L
+        var cancelled = false
+        val active = awaitDouyinForeground(
+            isForeground = { false },
+            timeoutMillis = 10_000,
+            pollIntervalMillis = 250,
+            isCancelled = { cancelled },
+            wait = {
+                elapsedMillis += it
+                cancelled = true
+            },
+            nowNanos = { elapsedMillis * 1_000_000 },
+        )
+
+        assertFalse(active)
+        assertEquals(250L, elapsedMillis)
+    }
+
+    @Test
     fun scriptCanBeInspectedWithoutAccessibilityPermission() {
         assertTrue(canInspectTaskScript("active", null))
     }
