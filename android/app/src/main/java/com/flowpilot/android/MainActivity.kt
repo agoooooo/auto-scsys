@@ -311,6 +311,7 @@ private fun FlowPilotScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val user = state.user
     val device = state.device
+    val canLogout = canLogoutDuringRun(state.runStatus?.status)
     var apiBaseUrl by rememberSaveable { mutableStateOf(state.apiBaseUrl) }
     var email by rememberSaveable { mutableStateOf(state.loginEmail) }
     var password by rememberSaveable { mutableStateOf(state.loginPassword) }
@@ -424,9 +425,16 @@ private fun FlowPilotScreen(
                     Text(user.name, style = MaterialTheme.typography.titleLarge)
                     Text(user.email, style = MaterialTheme.typography.bodyMedium)
                 }
-                TextButton(onClick = onLogout, enabled = !state.loading) {
+                TextButton(onClick = onLogout, enabled = !state.loading && canLogout) {
                     Text("退出")
                 }
+            }
+            if (!canLogout) {
+                Text(
+                    "任务结束前暂不能退出，以确保运行状态可以同步。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             if (device == null) {

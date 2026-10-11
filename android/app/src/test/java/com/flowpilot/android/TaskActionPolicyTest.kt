@@ -99,4 +99,14 @@ class TaskActionPolicyTest {
         assertFalse(canExecuteTaskScript(true, false, true))
         assertFalse(canExecuteTaskScript(true, true, false))
     }
+
+    @Test
+    fun logoutIsBlockedOnlyWhileWaitingForPermissionOrRunning() {
+        assertTrue(canLogoutDuringRun(null))
+        assertTrue(canLogoutDuringRun("success"))
+        assertTrue(canLogoutDuringRun("failure"))
+        assertTrue(canLogoutDuringRun("stopped"))
+        assertFalse(canLogoutDuringRun("running"))
+        assertFalse(canLogoutDuringRun("awaiting_permission"))
+    }
 }
