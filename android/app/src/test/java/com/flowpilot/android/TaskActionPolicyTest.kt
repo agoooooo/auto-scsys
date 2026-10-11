@@ -109,6 +109,17 @@ class TaskActionPolicyTest {
     }
 
     @Test
+    fun remoteAutoRunIsDisabledForScreenCaptureCapabilities() {
+        assertFalse(canAutoRunRemote(listOf("OCR 文字识别")))
+        assertFalse(canAutoRunRemote(listOf("屏幕捕获（需系统授权）", "OCR 文字识别")))
+        assertFalse(canAutoRunRemote(listOf("Screen capture")))
+        assertFalse(canAutoRunRemote(listOf("文字识别")))
+        assertTrue(canAutoRunRemote(listOf("无障碍操作")))
+        assertTrue(requiresAccessibility(listOf("无障碍点击")))
+        assertFalse(requiresAccessibility(listOf("OCR 文字识别")))
+    }
+
+    @Test
     fun logoutBecomesAvailableAfterPermissionIsDeniedOrRunFinishes() {
         assertFalse(canLogoutDuringRun("running"))
         assertFalse(canLogoutDuringRun("awaiting_permission"))

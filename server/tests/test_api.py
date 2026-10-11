@@ -687,7 +687,7 @@ def test_device_user_must_confirm_remote_runs_and_can_report_local_runs(client):
     ).status_code == 403
 
 
-def test_preauthorization_is_limited_to_device_and_version_and_revocable(client):
+def test_preauthorization_covers_current_and_future_versions_on_one_device(client):
     admin = login(client, "admin@example.com", "admin-demo")
     user = login(client)
     first = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
@@ -699,16 +699,93 @@ def test_preauthorization_is_limited_to_device_and_version_and_revocable(client)
     grants = client.get("/run-authorizations", headers=auth(user)).json()
     assert len(grants) == 1
     assert grants[0]["device_id"] == "d-001"
+    assert grants[0]["version"] == "*"
+    assert grants[0]["all_versions"] is True
     next_run = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
     assert next_run["status"] == "running"
     other_device = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-002"}).json()
     assert other_device["status"] == "pending"
+
+    published = client.post(
+        "/tasks/t-001/versions",
+        headers=auth(admin),
+        data={"version": "v1.8.0"},
+        files={"script": ("orders.py", b"result = 'future release'")},
+    )
+    assert published.status_code == 201
+    future_run = client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).json()
+    assert future_run["status"] == "running"
 
     revoked = client.delete(f"/run-authorizations/{grants[0]['id']}", headers=auth(user))
     assert revoked.status_code == 200
     after_revoke = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
     assert after_revoke["status"] == "pending"
     assert client.delete(f"/run-authorizations/{grants[0]['id']}", headers=auth(user)).status_code == 404
+
+
+def test_all_version_preauthorization_applies_to_future_versions_and_is_revocable(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    created = client.post(
+        "/run-authorizations",
+        headers=auth(user),
+        json={
+            "task_id": "t-001",
+            "version": "v1.7.0",
+            "device_id": "d-001",
+            "all_versions": True,
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["all_versions"] is True
+    assert created.json()["version"] == "*"
+
+    published = client.post(
+        "/tasks/t-001/versions",
+        headers=auth(admin),
+        data={"version": "v1.8.0"},
+        files={"script": ("orders.py", b"result = 'future release'")},
+    )
+    assert published.status_code == 201
+    remote_run = client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    )
+    assert remote_run.status_code == 201
+    assert remote_run.json()["version"] == "v1.8.0"
+    assert remote_run.json()["status"] == "running"
+
+    assert client.patch(
+        "/tasks/t-001/versions/v1.6.0/activate",
+        headers=auth(admin),
+    ).status_code == 200
+    older_version = client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    )
+    assert older_version.status_code == 201
+    assert older_version.json()["version"] == "v1.6.0"
+    assert older_version.json()["status"] == "pending"
+
+    grants = client.get("/run-authorizations", headers=auth(user)).json()
+    grant = next(item for item in grants if item["version"] == "*")
+    assert client.delete(
+        f"/run-authorizations/{grant['id']}",
+        headers=auth(user),
+    ).status_code == 200
+    after_revoke = client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    )
+    assert after_revoke.status_code == 201
+    assert after_revoke.json()["status"] == "pending"
 
 
 def test_user_can_create_only_own_device_and_granted_version_authorization(client):

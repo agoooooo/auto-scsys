@@ -52,7 +52,7 @@ internal class TaskExecutionService : Service() {
         }
 
         stopRequested.set(false)
-        startForegroundTask()
+        startForegroundTask(intent.hasExtra(EXTRA_CAPTURE_RESULT_DATA))
         executionJob = serviceScope.launch {
             executeTask(intent, startId)
         }
@@ -65,14 +65,18 @@ internal class TaskExecutionService : Service() {
         super.onDestroy()
     }
 
-    private fun startForegroundTask() {
+    private fun startForegroundTask(requiresMediaProjection: Boolean) {
         ensureNotificationChannel()
         val notification = taskNotification("正在准备任务…", ongoing = true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
                 notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+                if (requiresMediaProjection) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                } else {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                },
             )
         } else {
             startForeground(NOTIFICATION_ID, notification)
@@ -127,13 +131,18 @@ internal class TaskExecutionService : Service() {
                 capabilities = emptyList(),
             )
             require(task.id.isNotBlank() && task.version.isNotBlank()) { "任务或版本信息不完整" }
-            if (!DouyinAccessibilityService.isEnabled(this)) {
-                throw IllegalStateException("请先在系统设置中启用 FlowPilot 自动化操作服务")
-            }
             val resultCode = intent.getIntExtra(EXTRA_CAPTURE_RESULT_CODE, 0)
             val resultData = intent.parcelableExtra<Intent>(EXTRA_CAPTURE_RESULT_DATA)
-                ?: throw IllegalStateException("缺少 Android 屏幕捕获授权")
-            capture = ScreenCaptureSession(this, resultCode, resultData)
+            if (resultData != null) {
+                capture = ScreenCaptureSession(this, resultCode, resultData)
+            }
+            val declaredCapabilities = intent.getStringArrayExtra(EXTRA_TASK_CAPABILITIES)?.toList().orEmpty()
+            if (capture != null && !DouyinAccessibilityService.isEnabled(this)) {
+                throw IllegalStateException("请先在系统设置中启用 FlowPilot 自动化操作服务")
+            }
+            if (requiresAccessibility(declaredCapabilities) && !DouyinAccessibilityService.isEnabled(this)) {
+                throw IllegalStateException("此任务需要先启用 FlowPilot 无障碍服务")
+            }
 
             val script = withContext(Dispatchers.IO) {
                 val cache = ScriptCache(File(filesDir, SCRIPT_CACHE_DIRECTORY))
@@ -269,7 +278,7 @@ internal class TaskExecutionService : Service() {
 
     private inner class NativeTaskBridge(
         private val context: Context,
-        private val capture: ScreenCaptureSession,
+        private val capture: ScreenCaptureSession?,
         private val stopRequested: AtomicBoolean,
     ) {
         private val clickGate = SingleClickGate()
@@ -290,8 +299,10 @@ internal class TaskExecutionService : Service() {
 
         fun ocr(): String {
             checkRunning()
+            val captureSession = capture
+                ?: throw IllegalStateException("此远程任务未获屏幕捕获授权，不能调用 OCR")
             DouyinAccessibilityService.requireInstance().currentScreenText()
-            return capture.recognizeText()
+            return captureSession.recognizeText()
         }
 
         fun clickText(text: String): Boolean {
@@ -327,6 +338,7 @@ internal class TaskExecutionService : Service() {
         const val EXTRA_TASK_ID = "task_id"
         const val EXTRA_TASK_NAME = "task_name"
         const val EXTRA_TASK_VERSION = "task_version"
+        const val EXTRA_TASK_CAPABILITIES = "task_capabilities"
         const val EXTRA_DEVICE_ID = "device_id"
         const val EXTRA_CAPTURE_RESULT_CODE = "capture_result_code"
         const val EXTRA_CAPTURE_RESULT_DATA = "capture_result_data"
@@ -343,8 +355,8 @@ internal class TaskExecutionService : Service() {
             context: Context,
             task: AvailableTask,
             runId: String,
-            captureResultCode: Int,
-            captureResultData: Intent,
+            captureResultCode: Int?,
+            captureResultData: Intent?,
             deviceId: String,
         ) {
             val intent = Intent(context, TaskExecutionService::class.java)
@@ -354,8 +366,11 @@ internal class TaskExecutionService : Service() {
                 .putExtra(EXTRA_TASK_NAME, task.name)
                 .putExtra(EXTRA_TASK_VERSION, task.version)
                 .putExtra(EXTRA_DEVICE_ID, deviceId)
-                .putExtra(EXTRA_CAPTURE_RESULT_CODE, captureResultCode)
-                .putExtra(EXTRA_CAPTURE_RESULT_DATA, captureResultData)
+                .putExtra(EXTRA_TASK_CAPABILITIES, task.capabilities.toTypedArray())
+            if (captureResultCode != null && captureResultData != null) {
+                intent.putExtra(EXTRA_CAPTURE_RESULT_CODE, captureResultCode)
+                    .putExtra(EXTRA_CAPTURE_RESULT_DATA, captureResultData)
+            }
             ContextCompat.startForegroundService(context, intent)
         }
 

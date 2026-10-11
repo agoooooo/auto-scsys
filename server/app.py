@@ -36,6 +36,12 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _version_key(version: str) -> tuple[int, int, int]:
+    if not VERSION_PATTERN.fullmatch(version):
+        raise ValueError("版本号格式无效")
+    return tuple(int(part) for part in version[1:].split("."))
+
+
 def _device_is_recent(device: sqlite3.Row, now: datetime | None = None) -> bool:
     try:
         last_active = datetime.fromisoformat(device["last_active"])
@@ -177,6 +183,7 @@ def _initialize_database(db_path: Path) -> None:
                 user_id TEXT NOT NULL REFERENCES users(id),
                 expires_at INTEGER NOT NULL,
                 revoked_at TEXT,
+                all_versions INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(task_id, version, device_id)
             );
             CREATE TABLE IF NOT EXISTS runs (
@@ -206,6 +213,9 @@ def _initialize_database(db_path: Path) -> None:
         task_columns = {row["name"] for row in db.execute("PRAGMA table_info(tasks)")}
         if "active_version" not in task_columns:
             db.execute("ALTER TABLE tasks ADD COLUMN active_version TEXT")
+        authorization_columns = {row["name"] for row in db.execute("PRAGMA table_info(run_authorizations)")}
+        if "all_versions" not in authorization_columns:
+            db.execute("ALTER TABLE run_authorizations ADD COLUMN all_versions INTEGER NOT NULL DEFAULT 0")
         if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
             _seed_database(db)
         db.execute(
@@ -342,6 +352,7 @@ class RunAuthorizationInput(BaseModel):
     task_id: str
     version: str
     device_id: str
+    all_versions: bool = False
 
 
 class RunUpdate(BaseModel):
@@ -897,11 +908,21 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             (request_id, task["id"], task["active_version"], body.device_id, user["id"], utc_now(), expires_at),
         )
         _expire_requests(db)
-        grant = db.execute(
-            """SELECT id FROM run_authorizations WHERE task_id=? AND version=? AND device_id=?
+        grants = db.execute(
+            """SELECT version,all_versions FROM run_authorizations WHERE task_id=? AND device_id=?
                AND user_id=? AND revoked_at IS NULL AND expires_at>?""",
-            (task["id"], task["active_version"], body.device_id, device["user_id"], now),
-        ).fetchone()
+            (task["id"], body.device_id, device["user_id"], now),
+        ).fetchall()
+        active_version_key = _version_key(task["active_version"])
+        grant = next(
+            (
+                row
+                for row in grants
+                if row["version"] == task["active_version"]
+                or (row["all_versions"] and active_version_key >= _version_key(row["version"]))
+            ),
+            None,
+        )
         run_id = None
         status = "pending"
         if grant:
@@ -990,10 +1011,11 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if body.preauthorize:
             grant_id = str(uuid.uuid4())
             db.execute(
-                """INSERT INTO run_authorizations(id,task_id,version,device_id,user_id,expires_at)
-                   VALUES(?,?,?,?,?,?)
+                """INSERT INTO run_authorizations(id,task_id,version,device_id,user_id,expires_at,all_versions)
+                   VALUES(?,?,?,?,?,?,1)
                    ON CONFLICT(task_id,version,device_id) DO UPDATE SET
-                     id=excluded.id,user_id=excluded.user_id,expires_at=excluded.expires_at,revoked_at=NULL""",
+                     id=excluded.id,user_id=excluded.user_id,expires_at=excluded.expires_at,revoked_at=NULL,
+                     all_versions=excluded.all_versions""",
                 (grant_id, task["id"], request["version"], device["id"], device["user_id"], int(time.time()) + PREAUTHORIZATION_TTL_SECONDS),
             )
         run_id = _start_run(db, request)
@@ -1034,19 +1056,23 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     def list_run_authorizations(user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         if user["role"] == "admin":
             rows = db.execute(
-                """SELECT a.*,t.name AS task_name,d.name AS device_name FROM run_authorizations a
+                """SELECT a.id,a.task_id,CASE WHEN a.all_versions=1 THEN '*' ELSE a.version END AS version,
+                          a.device_id,a.user_id,a.expires_at,a.revoked_at,a.all_versions,
+                          t.name AS task_name,d.name AS device_name FROM run_authorizations a
                    JOIN tasks t ON t.id=a.task_id JOIN devices d ON d.id=a.device_id
                    WHERE a.revoked_at IS NULL AND a.expires_at>?""",
                 (int(time.time()),),
             )
         else:
             rows = db.execute(
-                """SELECT a.*,t.name AS task_name,d.name AS device_name FROM run_authorizations a
+                """SELECT a.id,a.task_id,CASE WHEN a.all_versions=1 THEN '*' ELSE a.version END AS version,
+                          a.device_id,a.user_id,a.expires_at,a.revoked_at,a.all_versions,
+                          t.name AS task_name,d.name AS device_name FROM run_authorizations a
                    JOIN tasks t ON t.id=a.task_id JOIN devices d ON d.id=a.device_id
                    WHERE a.user_id=? AND a.revoked_at IS NULL AND a.expires_at>?""",
                 (user["id"], int(time.time())),
             )
-        return [dict(row) for row in rows]
+        return [{**dict(row), "all_versions": bool(row["all_versions"])} for row in rows]
 
     @app.post("/run-authorizations", status_code=201)
     def create_run_authorization(body: RunAuthorizationInput, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
@@ -1063,18 +1089,19 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         authorization_id = str(uuid.uuid4())
         expires_at = int(time.time()) + PREAUTHORIZATION_TTL_SECONDS
         db.execute(
-            """INSERT INTO run_authorizations(id,task_id,version,device_id,user_id,expires_at)
-               VALUES(?,?,?,?,?,?)
+            """INSERT INTO run_authorizations(id,task_id,version,device_id,user_id,expires_at,all_versions)
+               VALUES(?,?,?,?,?,?,?)
                ON CONFLICT(task_id,version,device_id) DO UPDATE SET
-                 id=excluded.id,user_id=excluded.user_id,expires_at=excluded.expires_at,revoked_at=NULL""",
-            (authorization_id, task["id"], body.version, device["id"], user["id"], expires_at),
+                 id=excluded.id,user_id=excluded.user_id,expires_at=excluded.expires_at,revoked_at=NULL,
+                 all_versions=excluded.all_versions""",
+            (authorization_id, task["id"], body.version, device["id"], user["id"], expires_at, int(body.all_versions)),
         )
         row = db.execute(
             "SELECT id FROM run_authorizations WHERE task_id=? AND version=? AND device_id=?",
             (task["id"], body.version, device["id"]),
         ).fetchone()
         audit(db, user["id"], "run_authorization.created", "run_authorization", row["id"])
-        return {"id": row["id"], "task_id": task["id"], "version": body.version, "device_id": device["id"], "expires_at": expires_at}
+        return {"id": row["id"], "task_id": task["id"], "version": "*" if body.all_versions else body.version, "all_versions": body.all_versions, "device_id": device["id"], "expires_at": expires_at}
 
     @app.delete("/run-authorizations/{authorization_id}")
     def revoke_authorization(authorization_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):

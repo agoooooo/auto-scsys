@@ -33,4 +33,10 @@ class ApiBaseUrlTest {
             assertThrows(IllegalArgumentException::class.java) { normalizeApiBaseUrl(value) }
         }
     }
+
+    @Test
+    fun labelsFutureVersionRunAuthorizationsClearly() {
+        assertEquals("该版本及后续版本", runAuthorizationVersionLabel("*"))
+        assertEquals("v1.2.3", runAuthorizationVersionLabel("v1.2.3"))
+    }
 }

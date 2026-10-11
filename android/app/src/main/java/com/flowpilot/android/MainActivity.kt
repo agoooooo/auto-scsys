@@ -258,18 +258,51 @@ class MainActivity : ComponentActivity() {
             runId?.let { reportRemoteRunFailure(it, "设备上已有任务运行，本次远程任务未启动") }
             return
         }
+        if (runId != null && !canAutoRunRemote(task.capabilities)) {
+            val message = "该远程任务需要屏幕捕获系统授权；远程屏幕捕获/OCR 任务不会执行"
+            RunStatusStore(this).update(runId, task.name, task.version, "failure", message)
+            RemoteRunMonitorService.markRequestHandled(this, remoteRequestId.orEmpty())
+            flowPilotViewModel.showError(message)
+            reportRemoteRunFailure(runId, message)
+            return
+        }
+        if (runId != null && requiresAccessibility(task.capabilities) && !accessibilityEnabled.value) {
+            val message = "此任务需要无障碍服务，当前未启用，远程任务未启动"
+            RunStatusStore(this).update(runId, task.name, task.version, "failure", message)
+            RemoteRunMonitorService.markRequestHandled(this, remoteRequestId.orEmpty())
+            flowPilotViewModel.showError(message)
+            reportRemoteRunFailure(runId, message)
+            return
+        }
+        if (runId != null) {
+            val deviceId = flowPilotViewModel.state.value.device?.id
+            if (deviceId == null) {
+                reportRemoteRunFailure(runId, "当前账号尚未绑定此设备")
+                flowPilotViewModel.showError("当前账号尚未绑定此设备")
+                return
+            }
+            try {
+                TaskExecutionService.start(
+                    context = this,
+                    task = task,
+                    runId = runId,
+                    captureResultCode = null,
+                    captureResultData = null,
+                    deviceId = deviceId,
+                )
+                RemoteRunMonitorService.markRequestHandled(this, remoteRequestId.orEmpty())
+                flowPilotViewModel.refreshRunStatus()
+            } catch (exception: Exception) {
+                val message = "无法启动远程任务：${exception.message ?: "Android 不允许后台启动"}"
+                RunStatusStore(this).update(runId, task.name, task.version, "failure", message)
+                RemoteRunMonitorService.markRequestHandled(this, remoteRequestId.orEmpty())
+                flowPilotViewModel.showError(message)
+                reportRemoteRunFailure(runId, message)
+            }
+            return
+        }
         if (!accessibilityEnabled.value) {
             flowPilotViewModel.showError("请先启用 FlowPilot 自动化操作服务，再运行需要点击界面的任务")
-            runId?.let {
-                RunStatusStore(this).update(
-                    it,
-                    task.name,
-                    task.version,
-                    "failure",
-                    "未启用无障碍服务，远程任务未启动",
-                )
-                reportRemoteRunFailure(it, "未启用无障碍服务，远程任务未启动")
-            }
             return
         }
         RunStatusStore(this).update(
@@ -286,8 +319,25 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun decideRemoteRun(request: RemoteRun, approve: Boolean, preauthorize: Boolean) {
+        if (approve && !canAutoRunRemote(request.capabilities)) {
+            flowPilotViewModel.showError(
+                "此任务需要 Android 屏幕捕获系统授权；屏幕捕获/OCR 型远程任务不会执行",
+            )
+            lifecycleScope.launch {
+                try {
+                    flowPilotViewModel.decideRemoteRun(request, approve = false, preauthorize = false)
+                    RemoteRunMonitorService.markRequestHandled(this@MainActivity, request.id)
+                    flowPilotViewModel.refreshRemoteRuns()
+                } catch (exception: Exception) {
+                    flowPilotViewModel.showError(
+                        "无法拒绝需要屏幕捕获的远程请求：${exception.message ?: "服务器不可用"}",
+                    )
+                }
+            }
+            return
+        }
         if (approve && !remoteRunCanBeApproved(
-                accessibilityEnabled.value,
+                accessibilityEnabled.value || !requiresAccessibility(request.capabilities),
                 RunStatusStore(this).snapshot().status,
             )
         ) {
@@ -631,7 +681,7 @@ private fun FlowPilotScreen(
                             }
                         }
                         Text(
-                            "仅列出当前账号仍有效的任务、版本和设备授权；撤销后该版本不能再免逐次确认运行。",
+                            "仅列出当前账号仍有效的任务和设备授权；“该版本及后续版本”表示从当前审阅版本起生效，撤销后不再自动运行。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -654,7 +704,7 @@ private fun FlowPilotScreen(
                                     verticalArrangement = Arrangement.spacedBy(2.dp),
                                 ) {
                                     Text(
-                                        "${authorization.taskName} · ${authorization.version}",
+                                        "${authorization.taskName} · ${runAuthorizationVersionLabel(authorization.version)}",
                                         style = MaterialTheme.typography.bodyMedium,
                                     )
                                     Text(
@@ -693,7 +743,7 @@ private fun FlowPilotScreen(
                             )
                         }
                         Text(
-                            "待命期间会显示持续通知。预授权只限明确任务和此设备；运行仍需屏幕捕获系统授权，并可随时停止。",
+                            "待命期间会显示持续通知。预授权限当前任务及此设备，包含该版本和后续版本 30 天；无需逐次系统授权的任务可自动运行并可随时停止。屏幕捕获/OCR 型远程任务不会执行。",
                         )
                         Button(
                             onClick = { onSetRemoteMonitoring(!remoteMonitoring) },
@@ -741,7 +791,7 @@ private fun FlowPilotScreen(
                             ) {
                                 Text("无障碍操作", style = MaterialTheme.typography.titleSmall)
                                 Text(
-                                    "屏幕捕获仍由 Android 在每次任务启动时单独授权。",
+                                    "本地屏幕捕获仍需 Android 系统授权；远程 OCR/屏幕捕获任务不会自动执行。",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -1025,11 +1075,11 @@ private fun FlowPilotScreen(
                                 checked = preauthorize,
                                 onCheckedChange = { preauthorize = it },
                             )
-                            Text("同时为此任务和设备预授权 30 天")
+                            Text("为此任务、此设备及后续版本预授权 30 天")
                         }
                     }
                     Text(
-                        "确认后会显示前台运行通知并提供停止入口；Android 屏幕捕获仍需系统授权。",
+                        "授权后，后续不需要屏幕捕获的远程版本会自动在可见前台服务中运行并可停止。屏幕捕获型远程任务不会执行；本地运行仍遵循 Android 系统授权。",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(

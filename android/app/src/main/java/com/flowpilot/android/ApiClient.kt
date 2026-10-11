@@ -24,6 +24,9 @@ internal data class RunAuthorization(
     val expiresAt: Long,
 )
 
+internal fun runAuthorizationVersionLabel(version: String): String =
+    if (version == "*") "该版本及后续版本" else version
+
 internal data class RemoteRun(
     val id: String,
     val taskId: String,
