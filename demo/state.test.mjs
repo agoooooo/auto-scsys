@@ -11,7 +11,7 @@ import {
   resolveRemoteRun,
   requiresRemoteSystemAuthorization,
   remoteRunFollowUpView,
-  remoteRunRestriction,
+  remoteRunSystemConsentNotice,
   revokeRunAuthorization,
   setUserDeviceLimit,
   setTaskPaused,
@@ -178,8 +178,8 @@ test("preauthorization covers the reviewed and newer versions on one device and 
   assert.equal(authorizationCoversVersion(authorized.runAuthorizations[0], "v1.3.0"), false);
   assert.equal(requiresRemoteSystemAuthorization(["OCR 文字识别"]), true);
   assert.equal(requiresRemoteSystemAuthorization(["无障碍操作"]), false);
-  assert.match(remoteRunRestriction(["OCR 文字识别"]), /不能通过 Web 远程运行/);
-  assert.equal(remoteRunRestriction(["无障碍操作"]), null);
+  assert.match(remoteRunSystemConsentNotice(["OCR 文字识别"]), /Android 系统弹窗中授权/);
+  assert.equal(remoteRunSystemConsentNotice(["无障碍操作"]), null);
 
   const revoked = revokeRunAuthorization(authorized, authorized.runAuthorizations[0].id);
   const afterRevoke = createRemoteRun(revoked, { taskId: "t-001", deviceId: "d-001" });

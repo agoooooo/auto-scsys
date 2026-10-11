@@ -110,6 +110,9 @@ class TaskActionPolicyTest {
 
     @Test
     fun remoteAutoRunIsDisabledForScreenCaptureCapabilities() {
+        assertTrue(requiresScreenCapture(listOf("OCR 文字识别")))
+        assertTrue(requiresScreenCapture(listOf("屏幕捕获（需系统授权）")))
+        assertFalse(requiresScreenCapture(listOf("无障碍操作")))
         assertFalse(canAutoRunRemote(listOf("OCR 文字识别")))
         assertFalse(canAutoRunRemote(listOf("屏幕捕获（需系统授权）", "OCR 文字识别")))
         assertFalse(canAutoRunRemote(listOf("Screen capture")))

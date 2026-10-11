@@ -158,9 +158,9 @@ export function requiresRemoteSystemAuthorization(capabilities = []) {
     /屏幕|screen|OCR|文字识别|界面识别|读屏/i.test(capability));
 }
 
-export function remoteRunRestriction(capabilities = []) {
+export function remoteRunSystemConsentNotice(capabilities = []) {
   return requiresRemoteSystemAuthorization(capabilities)
-    ? "此任务需要 Android 屏幕捕获/OCR 系统授权，不能通过 Web 远程运行。"
+    ? "此任务需要设备用户在 Android 系统弹窗中授权屏幕捕获；App 或 Web 不能静默授予。"
     : null;
 }
 

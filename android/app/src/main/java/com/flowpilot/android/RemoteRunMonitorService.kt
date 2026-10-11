@@ -83,24 +83,11 @@ internal class RemoteRunMonitorService : Service() {
                     requests.forEach { request ->
                         if (request.status == "pending") {
                             if (requiresScreenCapture(request.capabilities)) {
-                                try {
-                                    ApiClient(session.apiBaseUrl).decideRemoteRun(
-                                        session.token,
-                                        request.id,
-                                        approve = false,
-                                        preauthorize = false,
-                                    )
-                                    markHandled(request.id)
-                                    showRemoteNotification(
-                                        request,
-                                        "远程任务未执行：${request.taskName}",
-                                        "需要 Android 屏幕捕获系统授权；为避免系统弹窗，屏幕捕获/OCR 型远程任务不执行",
-                                    )
-                                } catch (exception: Exception) {
-                                    updateOngoingNotification(
-                                        "无法拒绝屏幕捕获任务：${exception.message ?: "服务端不可用"}",
-                                    )
-                                }
+                                showRemoteNotification(
+                                    request,
+                                    "远程 OCR 等待手机授权：${request.taskName}",
+                                    "点此打开 App 审阅请求；确认后 Android 会询问屏幕捕获授权",
+                                )
                             } else {
                                 showRemoteNotification(
                                     request,
@@ -115,29 +102,11 @@ internal class RemoteRunMonitorService : Service() {
                         )
                         ) {
                             if (requiresScreenCapture(request.capabilities)) {
-                                val runId = request.runId
-                                if (runId != null) {
-                                    try {
-                                        ApiClient(session.apiBaseUrl).updateRun(
-                                            session.token,
-                                            runId,
-                                            "failure",
-                                            "需要 Android 屏幕捕获系统授权；屏幕捕获/OCR 型远程任务不会执行",
-                                        )
-                                        markHandled(request.id)
-                                        showRemoteNotification(
-                                            request,
-                                            "远程任务未执行：${request.taskName}",
-                                            "此版本需要屏幕捕获系统授权，已记录为失败",
-                                        )
-                                    } catch (exception: Exception) {
-                                        updateOngoingNotification(
-                                            "无法记录未执行的远程任务：${exception.message ?: "服务端不可用"}",
-                                        )
-                                    }
-                                } else {
-                                    updateOngoingNotification("远程运行缺少运行 ID：${request.taskName}")
-                                }
+                                showRemoteNotification(
+                                    request,
+                                    "远程 OCR 需要系统授权：${request.taskName}",
+                                    "点此打开 App，并按 Android 提示授权屏幕捕获",
+                                )
                             } else {
                                 val runId = request.runId
                                 if (runId == null) {
@@ -230,6 +199,7 @@ internal class RemoteRunMonitorService : Service() {
             .setContentTitle(title)
             .setContentText(message)
             .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
             .setContentIntent(pending)
             .build()
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

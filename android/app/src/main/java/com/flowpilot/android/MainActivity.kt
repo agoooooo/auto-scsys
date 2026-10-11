@@ -84,6 +84,7 @@ class MainActivity : ComponentActivity() {
         val pending = pendingExecution
         pendingExecution = null
         if (pending == null) return@registerForActivityResult
+        pending.remoteRequestId?.let { RemoteRunMonitorService.markRequestHandled(this, it) }
         if (result.resultCode != Activity.RESULT_OK || result.data == null) {
             if (pending.runId != null) {
                 lifecycleScope.launch {
@@ -258,14 +259,6 @@ class MainActivity : ComponentActivity() {
             runId?.let { reportRemoteRunFailure(it, "设备上已有任务运行，本次远程任务未启动") }
             return
         }
-        if (runId != null && !canAutoRunRemote(task.capabilities)) {
-            val message = "该远程任务需要 Android 屏幕捕获系统授权；远程 OCR/屏幕捕获任务不会执行"
-            RunStatusStore(this).update(runId, task.name, task.version, "failure", message)
-            RemoteRunMonitorService.markRequestHandled(this, remoteRequestId.orEmpty())
-            flowPilotViewModel.showError(message)
-            reportRemoteRunFailure(runId, message)
-            return
-        }
         if (runId != null && requiresAccessibility(task.capabilities) && !accessibilityEnabled.value) {
             val message = "此任务需要无障碍服务，当前未启用，远程任务未启动"
             RunStatusStore(this).update(runId, task.name, task.version, "failure", message)
@@ -279,6 +272,10 @@ class MainActivity : ComponentActivity() {
             if (deviceId == null) {
                 reportRemoteRunFailure(runId, "当前账号尚未绑定此设备")
                 flowPilotViewModel.showError("当前账号尚未绑定此设备")
+                return
+            }
+            if (requiresScreenCapture(task.capabilities)) {
+                beginScreenCaptureExecution(task, runId, remoteRequestId)
                 return
             }
             try {
@@ -305,6 +302,17 @@ class MainActivity : ComponentActivity() {
             flowPilotViewModel.showError("请先启用 FlowPilot 自动化操作服务，再运行需要点击界面的任务")
             return
         }
+        beginScreenCaptureExecution(task, runId, remoteRequestId)
+    }
+
+    private fun beginScreenCaptureExecution(
+        task: AvailableTask,
+        runId: String?,
+        remoteRequestId: String?,
+    ) {
+        if (remoteRequestId != null) {
+            RemoteRunMonitorService.markRequestHandled(this, remoteRequestId)
+        }
         RunStatusStore(this).update(
             runId.orEmpty(),
             task.name,
@@ -319,23 +327,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun decideRemoteRun(request: RemoteRun, approve: Boolean, preauthorize: Boolean) {
-        if (approve && !canAutoRunRemote(request.capabilities)) {
-            flowPilotViewModel.showError(
-                "此任务需要 Android 屏幕捕获系统授权；屏幕捕获/OCR 型远程任务不会执行",
-            )
-            lifecycleScope.launch {
-                try {
-                    flowPilotViewModel.decideRemoteRun(request, approve = false, preauthorize = false)
-                    RemoteRunMonitorService.markRequestHandled(this@MainActivity, request.id)
-                    flowPilotViewModel.refreshRemoteRuns()
-                } catch (exception: Exception) {
-                    flowPilotViewModel.showError(
-                        "无法拒绝需要屏幕捕获的远程请求：${exception.message ?: "服务器不可用"}",
-                    )
-                }
-            }
-            return
-        }
         if (approve && !remoteRunCanBeApproved(
                 accessibilityEnabled.value || !requiresAccessibility(request.capabilities),
                 RunStatusStore(this).snapshot().status,
@@ -745,7 +736,7 @@ private fun FlowPilotScreen(
                             )
                         }
                         Text(
-                            "待命期间会显示持续通知。预授权限当前任务及此设备，包含该版本和后续版本 30 天；无需逐次系统授权的任务可自动运行并可随时停止。屏幕捕获/OCR 型远程任务不会执行。",
+                            "待命期间会显示持续通知。预授权限当前任务及此设备，包含该版本和后续版本 30 天；无需逐次系统授权的任务可自动运行并可随时停止。远程 OCR 会通知你打开 App；确认请求后仍需通过 Android 屏幕捕获系统授权。",
                         )
                         Button(
                             onClick = { onSetRemoteMonitoring(!remoteMonitoring) },
@@ -793,7 +784,7 @@ private fun FlowPilotScreen(
                             ) {
                                 Text("无障碍操作", style = MaterialTheme.typography.titleSmall)
                                 Text(
-                                    "本地屏幕捕获仍需 Android 系统授权；远程 OCR/屏幕捕获任务不会执行。",
+                                    "本地及远程屏幕捕获均需 Android 系统授权；远程请求可通过通知打开 App 后审阅并发起授权。",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -880,8 +871,8 @@ private fun FlowPilotScreen(
                                             onClick = {
                                                 onRunTask(request.asTask(), request.runId, request.id)
                                             },
-                                            enabled = accessibilityEnabled &&
-                                                state.runStatus?.status !in setOf("running", "awaiting_permission"),
+                                            enabled = (!requiresAccessibility(request.capabilities) || accessibilityEnabled) &&
+                                                        state.runStatus?.status !in setOf("running", "awaiting_permission"),
                                         ) {
                                             Text("继续已授权任务")
                                         }
@@ -1081,7 +1072,11 @@ private fun FlowPilotScreen(
                         }
                     }
                     Text(
-                        "授权后，后续不需要逐次系统授权的远程版本会自动在可见前台服务中运行并可停止。远程 OCR/屏幕捕获任务不会执行；本地运行仍遵循 Android 系统授权。",
+                        if (requiresScreenCapture(request.capabilities)) {
+                            "确认后仍需通过 Android 系统屏幕捕获授权，拒绝系统授权则任务不会运行。此授权由系统控制，不能预先或静默授予。"
+                        } else {
+                            "授权后，后续不需要逐次系统授权的远程版本会自动在可见前台服务中运行并可停止。"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
