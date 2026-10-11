@@ -14,8 +14,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -30,6 +35,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -46,8 +52,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -159,8 +171,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         handleRemoteIntent(intent)
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+            MaterialTheme(colorScheme = FlowPilotColorScheme) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background,
+                ) {
                     FlowPilotScreen(
                         viewModel = flowPilotViewModel,
                         remoteIntentId = remoteIntentId.value,
@@ -361,71 +376,86 @@ private fun FlowPilotScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .padding(horizontal = 18.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text("FlowPilot", style = MaterialTheme.typography.headlineLarge)
-        Text(
-            "Android 自动化客户端 · 演示服务端",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        FlowPilotBrandHeader()
 
         if (user == null) {
-            Text("连接服务并登录", style = MaterialTheme.typography.titleLarge)
-            OutlinedTextField(
-                value = apiBaseUrl,
-                onValueChange = { apiBaseUrl = it },
-                label = { Text("API 地址") },
-                placeholder = {
+            FlowPilotHero(
+                title = "安全连接自动化设备",
+                subtitle = "审阅任务脚本，在设备端确认并运行。",
+            )
+            FlowPilotCard {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text("连接服务并登录", style = MaterialTheme.typography.titleLarge)
                     Text(
-                        if (apiBaseUrl == defaultApiBaseUrl(isEmulator = true)) {
-                            "http://10.0.2.2:8001"
-                        } else {
-                            "http://192.168.0.101:8001"
-                        },
+                        "Android 自动化客户端 · 演示环境",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                },
-                supportingText = {
-                    Text("测试服务地址；真机与开发机连接同一局域网即可测试")
-                },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = email,
-                onValueChange = { email = it },
-                label = { Text("邮箱") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("密码") },
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(
-                    checked = rememberLoginInfo,
-                    onCheckedChange = {
-                        rememberLoginInfo = it
-                        onRememberLoginInfoChanged(it)
-                    },
-                )
-                Text("记住登录信息（加密保存账号和密码）")
-            }
-            Button(
-                onClick = { viewModel.login(apiBaseUrl, email, password, rememberLoginInfo) },
-                enabled = !state.loading && apiBaseUrl.isNotBlank() &&
-                    email.isNotBlank() && password.isNotBlank(),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("登录")
+                    OutlinedTextField(
+                        value = apiBaseUrl,
+                        onValueChange = { apiBaseUrl = it },
+                        label = { Text("API 地址") },
+                        placeholder = {
+                            Text(
+                                if (apiBaseUrl == defaultApiBaseUrl(isEmulator = true)) {
+                                    "http://10.0.2.2:8001"
+                                } else {
+                                    "http://192.168.0.101:8001"
+                                },
+                            )
+                        },
+                        supportingText = {
+                            Text("真机与开发机连接同一局域网即可测试")
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = email,
+                        onValueChange = { email = it },
+                        label = { Text("邮箱") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text("密码") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = rememberLoginInfo,
+                            onCheckedChange = {
+                                rememberLoginInfo = it
+                                onRememberLoginInfoChanged(it)
+                            },
+                        )
+                        Text("记住登录信息（加密保存账号和密码）")
+                    }
+                    Button(
+                        onClick = { viewModel.login(apiBaseUrl, email, password, rememberLoginInfo) },
+                        enabled = !state.loading && apiBaseUrl.isNotBlank() &&
+                            email.isNotBlank() && password.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("登录")
+                    }
+                }
             }
         } else {
+            FlowPilotHero(
+                title = "欢迎回来，${user.name}",
+                subtitle = "任务在设备本地执行，运行结果一目了然。",
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -448,7 +478,7 @@ private fun FlowPilotScreen(
             }
 
             if (device == null) {
-                Card(modifier = Modifier.fillMaxWidth()) {
+                FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -465,7 +495,7 @@ private fun FlowPilotScreen(
                     }
                 }
             } else {
-                Card(modifier = Modifier.fillMaxWidth()) {
+                FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -499,7 +529,7 @@ private fun FlowPilotScreen(
                     }
                 }
 
-                Card(modifier = Modifier.fillMaxWidth()) {
+                FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -518,7 +548,7 @@ private fun FlowPilotScreen(
                 }
 
                 if (!accessibilityEnabled) {
-                    Card(modifier = Modifier.fillMaxWidth()) {
+                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                         Column(
                             modifier = Modifier.padding(16.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -563,7 +593,7 @@ private fun FlowPilotScreen(
                     Text("远程请求（${state.remoteRuns.size}）", style = MaterialTheme.typography.titleLarge)
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         state.remoteRuns.forEach { request ->
-                            Card(modifier = Modifier.fillMaxWidth()) {
+                            FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                                 Column(
                                     modifier = Modifier.padding(16.dp),
                                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -628,7 +658,7 @@ private fun FlowPilotScreen(
                 if (state.runHistory.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         visibleRunHistory(state.runHistory).forEach { run ->
-                            Card(modifier = Modifier.fillMaxWidth()) {
+                            FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                                 Column(
                                     modifier = Modifier.padding(12.dp),
                                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -652,7 +682,7 @@ private fun FlowPilotScreen(
 
                 state.runStatus?.let { runStatus ->
                     if (runStatus.status != null) {
-                        Card(modifier = Modifier.fillMaxWidth()) {
+                        FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                             Column(
                                 modifier = Modifier.padding(16.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -895,8 +925,116 @@ private fun ScriptContent(source: String) {
 }
 
 @Composable
+private fun FlowPilotBrandHeader() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.height(26.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                listOf(13.dp, 22.dp, 17.dp).forEachIndexed { index, height ->
+                    Box(
+                        modifier = Modifier
+                            .width(6.dp)
+                            .height(height)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(
+                                FlowPilotPalette.Purple.copy(
+                                    alpha = when (index) {
+                                        0 -> 0.62f
+                                        2 -> 0.8f
+                                        else -> 1f
+                                    },
+                                ),
+                            ),
+                    )
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Row {
+                    Text("Flow", style = MaterialTheme.typography.titleLarge, color = FlowPilotPalette.Ink)
+                    Text("Pilot", style = MaterialTheme.typography.titleLarge, color = FlowPilotPalette.Purple)
+                }
+                Text(
+                    "ANDROID AUTOMATION",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer,
+        ) {
+            Text(
+                "演示环境",
+                modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FlowPilotHero(title: String, subtitle: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(Color(0xFF7968ED), Color(0xFF574BD0)),
+                ),
+            )
+            .padding(horizontal = 20.dp, vertical = 19.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            "FLOWPILOT · 设备端自动化",
+            style = MaterialTheme.typography.labelMedium,
+            color = Color.White.copy(alpha = 0.76f),
+        )
+        Text(
+            title,
+            style = MaterialTheme.typography.headlineSmall,
+            color = Color.White,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            subtitle,
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White.copy(alpha = 0.84f),
+        )
+    }
+}
+
+@Composable
+private fun FlowPilotCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        content = content,
+    )
+}
+
+@Composable
 private fun TaskCard(task: AvailableTask, canInspectScript: Boolean, onRun: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),

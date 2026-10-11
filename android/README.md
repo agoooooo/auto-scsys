@@ -2,6 +2,8 @@
 
 原生 Kotlin/Jetpack Compose 客户端可登录普通用户账号、绑定设备、同步任务版本、检查脚本 SHA-256、查看完整脚本后再明确确认运行，并显示带脚本版本和开始时间的最近运行结果、本地日志及最近 10 条服务端运行历史。Python 3.12 由 Chaquopy 在 App 进程内运行。演示后端仍只负责账号、授权、脚本分发和运行记录，不会执行 Python。
 
+客户端使用与 Web demo 一致的浅灰底色、FlowPilot 紫色强调色、渐变欢迎横幅和白色圆角卡片。
+
 ## 构建
 
 - Android Studio（Android Gradle Plugin 8.7.3）
