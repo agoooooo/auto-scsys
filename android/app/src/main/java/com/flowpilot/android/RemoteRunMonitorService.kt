@@ -83,30 +83,43 @@ internal class RemoteRunMonitorService : Service() {
                     requests.forEach { request ->
                         val requiresCapture = requiresScreenCapture(request.capabilities)
                         val captureReady = OcrStandbyService.isActive(this@RemoteRunMonitorService)
-                        if (requiresCapture && !captureReady) {
-                            cancelRemoteNotification(request.id)
-                        } else if (request.status == "pending") {
-                            if (requiresCapture) {
-                                cancelRemoteNotification(request.id)
-                            } else {
-                                showRemoteNotification(
-                                    request,
-                                    "需要首次授权：${request.taskName}",
-                                    "由${request.requestedBy}发起；授权后可为此设备及后续版本自动运行",
-                                )
-                            }
-                        } else if (shouldNotifyPreauthorizedRun(
-                                request.status,
-                                request.runId,
-                                hasHandled(request.id),
-                            )
+                        val canStartFromMonitor = !requiresCapture || captureReady
+                        val hasRunnableRequest = request.status == "pending" ||
+                            (request.status == "running" && request.runId != null)
+                        val accessibilityReady = !requiresAccessibility(request.capabilities) ||
+                            DouyinAccessibilityService.isEnabled(this@RemoteRunMonitorService)
+                        if (hasRunnableRequest && !accessibilityReady &&
+                            !isRequestHandled(this@RemoteRunMonitorService, request.id)
                         ) {
-                            val runId = request.runId
-                            if (runId == null) {
-                                updateOngoingNotification("远程运行缺少运行 ID：${request.taskName}")
-                                return@forEach
-                            }
+                            showRemoteNotification(
+                                request,
+                                "需要启用无障碍服务：${request.taskName}",
+                                "打开 FlowPilot 并开启无障碍服务；之后任务会直接运行",
+                            )
+                        } else if (hasRunnableRequest && !canStartFromMonitor &&
+                            !isRequestHandled(this@RemoteRunMonitorService, request.id)
+                        ) {
+                            showRemoteNotification(
+                                request,
+                                "需要屏幕捕获授权：${request.taskName}",
+                                "打开 FlowPilot 并在 Android 系统弹窗中授权；任务无需额外确认",
+                            )
+                        } else if (hasRunnableRequest && canStartFromMonitor &&
+                            canStartOcrStandby(RunStatusStore(this@RemoteRunMonitorService).snapshot().status) &&
+                            accessibilityReady &&
+                            claimRequest(this@RemoteRunMonitorService, request.id)
+                        ) {
+                            var runId = request.runId
                             try {
+                                if (request.status == "pending") {
+                                    runId = ApiClient(session.apiBaseUrl).approveRemoteRun(
+                                        session.token,
+                                        request.id,
+                                    )
+                                }
+                                if (runId == null) {
+                                    throw IllegalStateException("服务器没有返回运行记录 ID")
+                                }
                                 TaskExecutionService.start(
                                     context = this@RemoteRunMonitorService,
                                     task = AvailableTask(
@@ -124,20 +137,37 @@ internal class RemoteRunMonitorService : Service() {
                                 )
                                 markHandled(request.id)
                             } catch (exception: Exception) {
-                                try {
-                                    ApiClient(session.apiBaseUrl).updateRun(
-                                        session.token,
-                                        runId,
-                                        "failure",
-                                        "无法启动已预授权任务：${exception.message ?: "Android 不允许后台启动"}",
-                                    )
-                                    markHandled(request.id)
-                                } catch (reportException: Exception) {
+                                if (runId != null) {
+                                    try {
+                                        ApiClient(session.apiBaseUrl).updateRun(
+                                            session.token,
+                                            runId,
+                                            "failure",
+                                            "无法直接启动远程任务：${exception.message ?: "Android 不允许后台启动"}",
+                                        )
+                                        markHandled(request.id)
+                                    } catch (reportException: Exception) {
+                                        updateOngoingNotification(
+                                            "无法启动或记录远程任务：${reportException.message ?: "服务端不可用"}",
+                                        )
+                                        releaseRequestClaim(request.id)
+                                    }
+                                } else {
+                                    releaseRequestClaim(request.id)
+                                    if (exception.message?.contains("过期") == true ||
+                                        exception.message?.contains("已处理") == true
+                                    ) {
+                                        markHandled(request.id)
+                                    }
                                     updateOngoingNotification(
-                                        "无法启动或记录远程任务：${reportException.message ?: "服务端不可用"}",
+                                        "无法直接启动${request.taskName}：${exception.message ?: "服务器不可用"}",
                                     )
                                 }
                             }
+                        } else if (request.status == "pending" &&
+                            !isRequestHandled(this@RemoteRunMonitorService, request.id)
+                        ) {
+                            cancelRemoteNotification(request.id)
                         }
                     }
                     updateOngoingNotification("远程待命中 · ${requests.size} 个请求")
@@ -173,12 +203,6 @@ internal class RemoteRunMonitorService : Service() {
 
     private fun showRemoteNotification(request: RemoteRun, title: String, message: String) {
         val intent = Intent(this, MainActivity::class.java)
-            .putExtra(MainActivity.EXTRA_REMOTE_REQUEST_ID, request.id)
-            .putExtra(MainActivity.EXTRA_REMOTE_RUN_ID, request.runId)
-            .putExtra(MainActivity.EXTRA_REMOTE_TASK_ID, request.taskId)
-            .putExtra(MainActivity.EXTRA_REMOTE_TASK_NAME, request.taskName)
-            .putExtra(MainActivity.EXTRA_REMOTE_TASK_VERSION, request.version)
-            .putExtra(MainActivity.EXTRA_REMOTE_DEVICE_ID, requestDeviceId())
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val pending = PendingIntent.getActivity(
             this,
@@ -203,20 +227,8 @@ internal class RemoteRunMonitorService : Service() {
         manager.cancel(requestId.hashCode())
     }
 
-    private fun requestDeviceId(): String? = SessionStore(this).read()?.deviceId
-
-    private fun hasHandled(requestId: String): Boolean =
-        requestId in getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-            .getStringSet(KEY_HANDLED_REQUESTS, emptySet()).orEmpty()
-
     private fun markHandled(requestId: String) {
-        val preferences = getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        val handled = preferences.getStringSet(KEY_HANDLED_REQUESTS, emptySet()).orEmpty().toMutableSet()
-        handled.add(requestId)
-        preferences.edit().putStringSet(
-            KEY_HANDLED_REQUESTS,
-            handled.toList().takeLast(MAX_HANDLED_REQUESTS).toSet(),
-        ).apply()
+        markRequestHandled(this, requestId)
     }
 
     private fun updateOngoingNotification(message: String) {
@@ -267,6 +279,7 @@ internal class RemoteRunMonitorService : Service() {
         private const val MAX_HANDLED_REQUESTS = 500
         private const val POLL_INTERVAL_MILLIS = 15_000L
         private const val REFRESH_LEAD_SECONDS = 5 * 60L
+        private val inFlightRequests = mutableSetOf<String>()
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(
@@ -281,10 +294,38 @@ internal class RemoteRunMonitorService : Service() {
             )
         }
 
+        @Synchronized
+        fun claimRequest(context: Context, requestId: String): Boolean {
+            if (requestId in inFlightRequests) return false
+            if (requestId in context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+                    .getStringSet(KEY_HANDLED_REQUESTS, emptySet()).orEmpty()
+            ) return false
+            inFlightRequests.add(requestId)
+            return true
+        }
+
+        @Synchronized
+        fun isRequestAvailable(context: Context, requestId: String): Boolean =
+            requestId !in inFlightRequests &&
+                requestId !in context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+                    .getStringSet(KEY_HANDLED_REQUESTS, emptySet()).orEmpty()
+
+        @Synchronized
+        fun isRequestHandled(context: Context, requestId: String): Boolean =
+            requestId in context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+                .getStringSet(KEY_HANDLED_REQUESTS, emptySet()).orEmpty()
+
+        @Synchronized
+        fun releaseRequestClaim(requestId: String) {
+            inFlightRequests.remove(requestId)
+        }
+
+        @Synchronized
         fun markRequestHandled(context: Context, requestId: String) {
             val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             val handled = preferences.getStringSet(KEY_HANDLED_REQUESTS, emptySet()).orEmpty().toMutableSet()
             handled.add(requestId)
+            inFlightRequests.remove(requestId)
             preferences.edit()
                 .putStringSet(KEY_HANDLED_REQUESTS, handled.toList().takeLast(MAX_HANDLED_REQUESTS).toSet())
                 .apply()

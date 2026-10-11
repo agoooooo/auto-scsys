@@ -28,8 +28,8 @@ class RunStatusLabelTest {
     }
 
     @Test
-    fun showsAuthorizationStateRatherThanExecutionStateForRemoteRequests() {
-        assertEquals("待确认", remoteRunStatusLabel("pending"))
-        assertEquals("已授权", remoteRunStatusLabel("running"))
+    fun showsExecutionStateForRemoteRequests() {
+        assertEquals("待运行", remoteRunStatusLabel("pending"))
+        assertEquals("运行中", remoteRunStatusLabel("running"))
     }
 }

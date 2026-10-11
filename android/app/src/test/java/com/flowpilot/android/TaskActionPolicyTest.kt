@@ -101,25 +101,75 @@ class TaskActionPolicyTest {
     }
 
     @Test
-    fun remoteApprovalRequiresAccessibilityAndAnIdleDevice() {
-        assertTrue(remoteRunCanBeApproved(accessibilityEnabled = true, runStatus = null))
-        assertFalse(remoteRunCanBeApproved(accessibilityEnabled = false, runStatus = null))
-        assertFalse(remoteRunCanBeApproved(accessibilityEnabled = true, runStatus = "running"))
-        assertFalse(remoteRunCanBeApproved(accessibilityEnabled = true, runStatus = "awaiting_permission"))
-    }
-
-    @Test
-    fun remoteAutoRunIsDisabledForScreenCaptureCapabilities() {
+    fun remoteRequestsRunDirectlyWhenRequiredSystemCapabilitiesAreReady() {
         assertTrue(requiresScreenCapture(listOf("OCR 文字识别")))
         assertTrue(requiresScreenCapture(listOf("屏幕捕获（需系统授权）")))
         assertFalse(requiresScreenCapture(listOf("无障碍操作")))
-        assertFalse(canAutoRunRemote(listOf("OCR 文字识别")))
-        assertFalse(canAutoRunRemote(listOf("屏幕捕获（需系统授权）", "OCR 文字识别")))
-        assertFalse(canAutoRunRemote(listOf("Screen capture")))
-        assertFalse(canAutoRunRemote(listOf("文字识别")))
-        assertTrue(canAutoRunRemote(listOf("无障碍操作")))
         assertTrue(requiresAccessibility(listOf("无障碍点击")))
         assertFalse(requiresAccessibility(listOf("OCR 文字识别")))
+        assertTrue(
+            shouldDirectlyRunRemoteRequest(
+                "pending",
+                null,
+                accessibilityRequired = false,
+                accessibilityEnabled = false,
+                deviceRunStatus = null,
+            ),
+        )
+        assertTrue(
+            shouldDirectlyRunRemoteRequest(
+                "running",
+                "run-1",
+                accessibilityRequired = true,
+                accessibilityEnabled = true,
+                deviceRunStatus = null,
+            ),
+        )
+        assertFalse(
+            shouldDirectlyRunRemoteRequest(
+                "running",
+                "run-1",
+                accessibilityRequired = true,
+                accessibilityEnabled = false,
+                deviceRunStatus = null,
+            ),
+        )
+        assertFalse(
+            shouldDirectlyRunRemoteRequest(
+                "pending",
+                null,
+                accessibilityRequired = false,
+                accessibilityEnabled = true,
+                deviceRunStatus = "running",
+            ),
+        )
+        assertFalse(
+            shouldDirectlyRunRemoteRequest(
+                "running",
+                null,
+                accessibilityRequired = false,
+                accessibilityEnabled = true,
+                deviceRunStatus = null,
+            ),
+        )
+        assertFalse(
+            shouldDirectlyRunRemoteRequest(
+                "success",
+                "run-1",
+                accessibilityRequired = false,
+                accessibilityEnabled = true,
+                deviceRunStatus = null,
+            ),
+        )
+        assertFalse(
+            shouldDirectlyRunRemoteRequest(
+                "pending",
+                null,
+                accessibilityRequired = false,
+                accessibilityEnabled = true,
+                deviceRunStatus = "awaiting_permission",
+            ),
+        )
     }
 
     @Test
@@ -141,35 +191,6 @@ class TaskActionPolicyTest {
         assertTrue(canStartOcrStandby("success"))
         assertFalse(canStartOcrStandby("running"))
         assertFalse(canStartOcrStandby("awaiting_permission"))
-    }
-
-    @Test
-    fun foregroundPromptSelectsUnacknowledgedScreenCaptureRequests() {
-        val ocr = listOf("屏幕捕获", "OCR")
-        assertTrue(shouldPromptForRemoteScreenCapture("pending", null, ocr, false))
-        assertTrue(shouldPromptForRemoteScreenCapture("running", "run-1", ocr, false))
-        assertFalse(shouldPromptForRemoteScreenCapture("running", null, ocr, false))
-        assertFalse(shouldPromptForRemoteScreenCapture("success", "run-1", ocr, false))
-        assertFalse(shouldPromptForRemoteScreenCapture("pending", null, listOf("无障碍"), false))
-        assertFalse(shouldPromptForRemoteScreenCapture("pending", null, ocr, true))
-        assertFalse(
-            shouldPromptForRemoteScreenCapture(
-                "running",
-                "run-1",
-                ocr,
-                false,
-                captureSessionActive = true,
-            ),
-        )
-        assertTrue(
-            shouldPromptForRemoteScreenCapture(
-                "pending",
-                null,
-                ocr,
-                false,
-                captureSessionActive = true,
-            ),
-        )
     }
 
     @Test

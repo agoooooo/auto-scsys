@@ -14,20 +14,6 @@ internal data class LoginResult(val token: String, val expiresIn: Long, val user
 
 internal data class BoundDevice(val id: String, val name: String, val model: String, val status: String)
 
-internal data class RunAuthorization(
-    val id: String,
-    val taskId: String,
-    val taskName: String,
-    val version: String,
-    val allVersions: Boolean,
-    val deviceId: String,
-    val deviceName: String,
-    val expiresAt: Long,
-)
-
-internal fun runAuthorizationVersionLabel(version: String, allVersions: Boolean): String =
-    if (allVersions) "$version 及后续版本" else version
-
 internal data class RemoteRun(
     val id: String,
     val taskId: String,
@@ -214,43 +200,18 @@ internal class ApiClient(baseUrl: String) {
             )
         }
 
-    fun decideRemoteRun(
+    fun approveRemoteRun(
         token: String,
         requestId: String,
-        approve: Boolean,
-        preauthorize: Boolean,
     ): String? {
         val response = JSONObject(request(
             "/remote-runs/${encodePathSegment(requestId)}",
             method = "PATCH",
             token = token,
             payload = JSONObject()
-                .put("decision", if (approve) "approve" else "reject")
-                .put("preauthorize", approve && preauthorize),
+                .put("decision", "approve"),
         ))
         return response.optString("run_id").takeIf(String::isNotBlank)
-    }
-
-    fun listRunAuthorizations(token: String): List<RunAuthorization> =
-        requestArray("/run-authorizations", token).map { item ->
-            RunAuthorization(
-                id = item.optString("id"),
-                taskId = item.optString("task_id"),
-                taskName = item.optString("task_name"),
-                version = item.optString("version"),
-                allVersions = item.optBoolean("all_versions"),
-                deviceId = item.optString("device_id"),
-                deviceName = item.optString("device_name"),
-                expiresAt = item.optLong("expires_at"),
-            )
-        }
-
-    fun revokeRunAuthorization(token: String, authorizationId: String) {
-        request(
-            "/run-authorizations/${encodePathSegment(authorizationId)}",
-            method = "DELETE",
-            token = token,
-        )
     }
 
     fun listRuns(token: String): List<RunRecord> =

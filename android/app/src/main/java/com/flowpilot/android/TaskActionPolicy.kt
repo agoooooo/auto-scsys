@@ -12,11 +12,6 @@ internal fun canExecuteTaskScript(
     accessibilityEnabled: Boolean,
 ): Boolean = scriptReviewed && confirmationChecked && accessibilityEnabled
 
-internal fun remoteRunCanBeApproved(
-    accessibilityEnabled: Boolean,
-    runStatus: String?,
-): Boolean = accessibilityEnabled && runStatus !in setOf("running", "awaiting_permission")
-
 internal fun requiresScreenCapture(capabilities: List<String>): Boolean =
     capabilities.any { capability ->
         capability.contains("屏幕", ignoreCase = true) ||
@@ -35,19 +30,15 @@ internal fun requiresNewScreenCaptureAuthorization(
 internal fun canStartOcrStandby(runStatus: String?): Boolean =
     runStatus !in setOf("running", "awaiting_permission")
 
-internal fun canAutoRunRemote(capabilities: List<String>): Boolean =
-    !requiresScreenCapture(capabilities)
-
-internal fun shouldPromptForRemoteScreenCapture(
+internal fun shouldDirectlyRunRemoteRequest(
     status: String,
     runId: String?,
-    capabilities: List<String>,
-    alreadyPrompted: Boolean,
-    captureSessionActive: Boolean = false,
-): Boolean = !alreadyPrompted &&
-    requiresScreenCapture(capabilities) &&
-    !(captureSessionActive && status == "running" && !runId.isNullOrBlank()) &&
-    (status == "pending" || (status == "running" && !runId.isNullOrBlank()))
+    accessibilityRequired: Boolean,
+    accessibilityEnabled: Boolean,
+    deviceRunStatus: String?,
+): Boolean = (status == "pending" || (status == "running" && !runId.isNullOrBlank())) &&
+    (!accessibilityRequired || accessibilityEnabled) &&
+    canStartOcrStandby(deviceRunStatus)
 
 internal fun shouldShowPermissionOnboarding(
     userId: String?,

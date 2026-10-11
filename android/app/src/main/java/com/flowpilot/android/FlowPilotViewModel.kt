@@ -28,9 +28,6 @@ internal data class AppUiState(
     val runHistoryError: String? = null,
     val remoteRunsLoading: Boolean = false,
     val remoteRunsError: String? = null,
-    val runAuthorizations: List<RunAuthorization> = emptyList(),
-    val runAuthorizationsLoading: Boolean = false,
-    val runAuthorizationsError: String? = null,
     val scriptReview: ScriptReview? = null,
     val loading: Boolean = false,
     val error: String? = null,
@@ -148,7 +145,6 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                     tasks = tasks,
                 )
                 refreshRunHistory()
-                refreshRunAuthorizations()
             } catch (exception: Exception) {
                 _state.value = _state.value.copy(
                     loading = false,
@@ -221,61 +217,6 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         _state.value = _state.value.copy(remoteRunsError = null)
     }
 
-    fun refreshRunAuthorizations() {
-        val current = _state.value
-        val userId = current.user?.id ?: return
-        if (current.token == null || current.runAuthorizationsLoading) return
-        val device = current.device ?: return
-        _state.value = current.copy(runAuthorizationsLoading = true, runAuthorizationsError = null)
-        viewModelScope.launch {
-            try {
-                val session = withContext(Dispatchers.IO) { freshSession() }
-                val authorizations = withContext(Dispatchers.IO) {
-                    ApiClient(session.apiBaseUrl).listRunAuthorizations(session.token)
-                }
-                if (_state.value.user?.id != userId || _state.value.device?.id != device.id) return@launch
-                _state.value = _state.value.copy(
-                    token = session.token,
-                    tokenExpiresAt = session.tokenExpiresAt,
-                    runAuthorizations = authorizations,
-                    runAuthorizationsLoading = false,
-                    runAuthorizationsError = null,
-                )
-            } catch (exception: Exception) {
-                if (_state.value.user?.id != userId || _state.value.device?.id != device.id) return@launch
-                _state.value = _state.value.copy(
-                    runAuthorizationsLoading = false,
-                    runAuthorizationsError = "预授权同步失败：${exception.message ?: "服务器不可用"}",
-                )
-            }
-        }
-    }
-
-    fun revokeRunAuthorization(authorizationId: String) {
-        val current = _state.value
-        if (current.token == null || current.loading) return
-        _state.value = current.copy(loading = true, error = null)
-        viewModelScope.launch {
-            try {
-                val session = withContext(Dispatchers.IO) { freshSession() }
-                withContext(Dispatchers.IO) {
-                    ApiClient(session.apiBaseUrl).revokeRunAuthorization(session.token, authorizationId)
-                }
-                _state.value = _state.value.copy(
-                    token = session.token,
-                    tokenExpiresAt = session.tokenExpiresAt,
-                    loading = false,
-                )
-                refreshRunAuthorizations()
-            } catch (exception: Exception) {
-                _state.value = _state.value.copy(
-                    loading = false,
-                    error = exception.message ?: "撤销预授权失败",
-                )
-            }
-        }
-    }
-
     fun unbindDevice() {
         val current = _state.value
         val user = current.user ?: return
@@ -299,8 +240,6 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                     tasks = emptyList(),
                     remoteRuns = emptyList(),
                     remoteRunsLoading = false,
-                    runAuthorizations = emptyList(),
-                    runAuthorizationsLoading = false,
                     remoteMonitoring = false,
                     loading = false,
                 )
@@ -445,17 +384,11 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         ApiClient(session.apiBaseUrl).startLocalRun(session.token, device.id, task)
     }
 
-    suspend fun decideRemoteRun(
-        request: RemoteRun,
-        approve: Boolean,
-        preauthorize: Boolean,
-    ): String? = withContext(Dispatchers.IO) {
+    suspend fun approveRemoteRun(requestId: String): String? = withContext(Dispatchers.IO) {
         val session = freshSession()
-        ApiClient(session.apiBaseUrl).decideRemoteRun(
+        ApiClient(session.apiBaseUrl).approveRemoteRun(
             session.token,
-            request.id,
-            approve,
-            preauthorize,
+            requestId,
         )
     }
 
@@ -520,7 +453,6 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                 loadExistingDevice(client, token, user)
                 _state.value = _state.value.copy(loading = false)
                 refreshRunHistory()
-                refreshRunAuthorizations()
             } catch (exception: Exception) {
                 sessionStore.clear()
                 val remembered = sessionStore.readRememberedLogin()

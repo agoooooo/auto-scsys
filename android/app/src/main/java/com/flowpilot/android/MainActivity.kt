@@ -55,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -183,7 +184,6 @@ class MainActivity : ComponentActivity() {
     private val accessibilityEnabled = mutableStateOf(false)
     private val remoteMonitoring = mutableStateOf(false)
     private val ocrStandbyActive = mutableStateOf(false)
-    private val remoteIntentId = mutableStateOf<String?>(null)
     private var pendingExecution: PendingExecution? = null
     private val runStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -204,7 +204,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        handleRemoteIntent(intent)
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 while (isActive) {
@@ -221,7 +220,6 @@ class MainActivity : ComponentActivity() {
                 ) {
                     FlowPilotScreen(
                         viewModel = flowPilotViewModel,
-                        remoteIntentId = remoteIntentId.value,
                         accessibilityEnabled = accessibilityEnabled.value,
                         notificationPermissionGranted = notificationPermissionGranted.value,
                         remoteMonitoring = remoteMonitoring.value,
@@ -230,9 +228,8 @@ class MainActivity : ComponentActivity() {
                             requestNotificationPermission()
                         },
                         onSetOcrStandby = ::setOcrStandby,
+                        onAutoRunRemoteRequest = ::autoRunRemoteRequest,
                         onRunTask = ::beginExecution,
-                        onDecideRemoteRun = ::decideRemoteRun,
-                        onClearRemoteTarget = { remoteIntentId.value = null },
                         onSetRemoteMonitoring = ::setRemoteMonitoring,
                         onOpenAccessibilitySettings = {
                             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -253,7 +250,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleRemoteIntent(intent)
+        flowPilotViewModel.refreshRemoteRuns()
     }
 
     override fun onResume() {
@@ -289,12 +286,42 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
 
-    private fun handleRemoteIntent(intent: Intent?) {
-        val requestId = intent?.getStringExtra(EXTRA_REMOTE_REQUEST_ID)
-        val runId = intent?.getStringExtra(EXTRA_REMOTE_RUN_ID)
-        if (requestId != null || runId != null) {
-            remoteIntentId.value = requestId ?: runId
-            flowPilotViewModel.refreshRemoteRuns()
+    private fun autoRunRemoteRequest(request: RemoteRun) {
+        if (!RemoteRunMonitorService.claimRequest(this, request.id)) return
+        lifecycleScope.launch {
+            var runId = request.runId
+            try {
+                if (request.status == "pending") {
+                    runId = flowPilotViewModel.approveRemoteRun(request.id)
+                }
+                if (runId == null) throw IllegalStateException("服务器没有返回运行记录 ID")
+                beginExecution(request.asTask(), runId, request.id)
+                if (!RemoteRunMonitorService.isRequestHandled(this@MainActivity, request.id)) {
+                    RemoteRunMonitorService.markRequestHandled(this@MainActivity, request.id)
+                }
+                flowPilotViewModel.refreshRemoteRuns()
+            } catch (exception: Exception) {
+                if (runId != null) {
+                    try {
+                        flowPilotViewModel.failRun(
+                            runId,
+                            "无法直接启动远程任务：${exception.message ?: "未知错误"}",
+                        )
+                        RemoteRunMonitorService.markRequestHandled(this@MainActivity, request.id)
+                    } catch (reportException: Exception) {
+                        RemoteRunMonitorService.releaseRequestClaim(request.id)
+                        flowPilotViewModel.showError(
+                            "无法直接启动远程任务：${exception.message ?: "未知错误"}；失败状态同步失败：${reportException.message ?: "服务器不可用"}",
+                        )
+                    }
+                } else {
+                    RemoteRunMonitorService.releaseRequestClaim(request.id)
+                    flowPilotViewModel.showError(
+                        "无法直接启动远程任务：${exception.message ?: "服务器不可用"}",
+                    )
+                }
+                flowPilotViewModel.refreshRemoteRuns()
+            }
         }
     }
 
@@ -431,36 +458,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun decideRemoteRun(request: RemoteRun, approve: Boolean, preauthorize: Boolean) {
-        if (approve && !remoteRunCanBeApproved(
-                accessibilityEnabled.value || !requiresAccessibility(request.capabilities),
-                RunStatusStore(this).snapshot().status,
-            )
-        ) {
-            flowPilotViewModel.showError(
-                if (!accessibilityEnabled.value) {
-                    "请先启用无障碍服务，再确认远程任务"
-                } else {
-                    "当前已有任务运行，请先停止或等待完成"
-                },
-            )
-            return
-        }
-        RemoteRunMonitorService.markRequestHandled(this, request.id)
-        lifecycleScope.launch {
-            try {
-                val runId = flowPilotViewModel.decideRemoteRun(request, approve, preauthorize)
-                if (approve && runId != null) {
-                    beginExecution(request.asTask(), runId, request.id)
-                }
-                flowPilotViewModel.refreshRemoteRuns()
-                flowPilotViewModel.refreshRunAuthorizations()
-            } catch (exception: Exception) {
-                flowPilotViewModel.showError(exception.message ?: "无法处理远程运行请求")
-            }
-        }
-    }
-
     private fun reportRemoteRunFailure(runId: String, message: String) {
         lifecycleScope.launch {
             try {
@@ -539,12 +536,6 @@ class MainActivity : ComponentActivity() {
     )
 
     companion object {
-        const val EXTRA_REMOTE_REQUEST_ID = "remote_request_id"
-        const val EXTRA_REMOTE_RUN_ID = "remote_run_id"
-        const val EXTRA_REMOTE_TASK_ID = "remote_task_id"
-        const val EXTRA_REMOTE_TASK_NAME = "remote_task_name"
-        const val EXTRA_REMOTE_TASK_VERSION = "remote_task_version"
-        const val EXTRA_REMOTE_DEVICE_ID = "remote_device_id"
         private const val FOREGROUND_REMOTE_POLL_INTERVAL_MILLIS = 15_000L
     }
 }
@@ -552,7 +543,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun FlowPilotScreen(
     viewModel: FlowPilotViewModel,
-    remoteIntentId: String?,
     accessibilityEnabled: Boolean,
     notificationPermissionGranted: Boolean,
     remoteMonitoring: Boolean,
@@ -560,14 +550,14 @@ private fun FlowPilotScreen(
     onRequestNotificationPermission: () -> Unit,
     onSetOcrStandby: (Boolean) -> Unit,
     onRunTask: (AvailableTask, String?, String?) -> Unit,
-    onDecideRemoteRun: (RemoteRun, Boolean, Boolean) -> Unit,
-    onClearRemoteTarget: () -> Unit,
+    onAutoRunRemoteRequest: (RemoteRun) -> Unit,
     onSetRemoteMonitoring: (Boolean) -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onRememberLoginInfoChanged: (Boolean) -> Unit,
     onLogout: () -> Unit,
     onStopTask: () -> Unit,
 ) {
+    val context = LocalContext.current
     val state by viewModel.state.collectAsStateWithLifecycle()
     val user = state.user
     val device = state.device
@@ -576,15 +566,11 @@ private fun FlowPilotScreen(
     var email by rememberSaveable { mutableStateOf(state.loginEmail) }
     var password by rememberSaveable { mutableStateOf(state.loginPassword) }
     var rememberLoginInfo by rememberSaveable { mutableStateOf(state.rememberLoginInfo) }
-    var selectedRemoteRun by remember { mutableStateOf<RemoteRun?>(null) }
-    val promptedRemotePermissionIds = remember { mutableSetOf<String>() }
     var permissionOnboardingVisible by remember { mutableStateOf(false) }
     var permissionOnboardingShownForUser by remember { mutableStateOf<String?>(null) }
     var selectedTask by remember { mutableStateOf<AvailableTask?>(null) }
-    var authorizationToRevoke by remember { mutableStateOf<String?>(null) }
     var confirmDeviceUnbind by rememberSaveable { mutableStateOf(false) }
     var scriptReviewAttempt by remember { mutableStateOf<String?>(null) }
-    var preauthorize by rememberSaveable { mutableStateOf(true) }
     var confirmScriptRun by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(user?.id, state.loading) {
         if (user == null) {
@@ -604,47 +590,36 @@ private fun FlowPilotScreen(
     LaunchedEffect(user?.id, device?.id, ocrStandbyActive) {
         if (user != null && device != null) {
             viewModel.refreshRemoteRuns()
-            viewModel.refreshRunAuthorizations()
         } else if (user != null) {
             onSetRemoteMonitoring(false)
             if (ocrStandbyActive) onSetOcrStandby(false)
         }
     }
-    LaunchedEffect(remoteIntentId, state.remoteRuns, permissionOnboardingVisible, ocrStandbyActive) {
-        if (permissionOnboardingVisible) return@LaunchedEffect
-        if (remoteIntentId != null) {
-            val request = state.remoteRuns.firstOrNull { it.id == remoteIntentId }
-            if (request != null && requiresScreenCapture(request.capabilities)) {
-                promptedRemotePermissionIds.add(request.id)
-            }
-            if (request?.status == "running" && request.runId != null) {
-                onRunTask(request.asTask(), request.runId, request.id)
-                onClearRemoteTarget()
-            } else {
-                selectedRemoteRun = request
-            }
-        } else if (selectedRemoteRun == null) {
-            val request = state.remoteRuns.firstOrNull { candidate ->
-                shouldPromptForRemoteScreenCapture(
+    LaunchedEffect(
+        state.remoteRuns,
+        state.remoteRunsLoading,
+        state.runStatus?.status,
+        accessibilityEnabled,
+        user?.id,
+        device?.id,
+    ) {
+        if (user == null || device == null || state.remoteRunsLoading) return@LaunchedEffect
+        val runStatus = state.runStatus?.status
+        val request = state.remoteRuns.firstOrNull { candidate ->
+            RemoteRunMonitorService.isRequestAvailable(context, candidate.id) &&
+                shouldDirectlyRunRemoteRequest(
                     status = candidate.status,
                     runId = candidate.runId,
-                    capabilities = candidate.capabilities,
-                    alreadyPrompted = candidate.id in promptedRemotePermissionIds,
-                    captureSessionActive = ocrStandbyActive,
+                    accessibilityRequired = requiresAccessibility(candidate.capabilities),
+                    accessibilityEnabled = accessibilityEnabled,
+                    deviceRunStatus = runStatus,
                 )
-            }
-            if (request != null) {
-                promptedRemotePermissionIds.add(request.id)
-                selectedRemoteRun = request
-                preauthorize = false
-            }
         }
+        if (request != null) onAutoRunRemoteRequest(request)
     }
-    LaunchedEffect(selectedTask?.id, selectedTask?.version, selectedRemoteRun?.id, state.loading) {
+    LaunchedEffect(selectedTask?.id, selectedTask?.version, state.loading) {
         if (state.loading) return@LaunchedEffect
-        val task = selectedTask ?: selectedRemoteRun?.takeIf {
-            it.status == "pending" || requiresScreenCapture(it.capabilities)
-        }?.asTask()
+        val task = selectedTask
         if (task != null) {
             val key = "${task.id}:${task.version}"
             if (scriptReviewAttempt != key) {
@@ -666,7 +641,7 @@ private fun FlowPilotScreen(
         if (user == null) {
             FlowPilotHero(
                 title = "安全连接自动化设备",
-                subtitle = "审阅任务脚本，在设备端确认并运行。",
+                subtitle = "安全连接设备，远程任务将自动运行。",
             )
             FlowPilotCard {
                 Column(
@@ -803,7 +778,6 @@ private fun FlowPilotScreen(
                                     viewModel.refreshTasks()
                                     viewModel.refreshRemoteRuns()
                                     viewModel.refreshRunHistory()
-                                    viewModel.refreshRunAuthorizations()
                                 },
                                 enabled = !state.loading,
                             ) {
@@ -815,7 +789,6 @@ private fun FlowPilotScreen(
                                     viewModel.clearRemoteRunsError()
                                     viewModel.refreshRemoteRuns()
                                     viewModel.refreshRunHistory()
-                                    viewModel.refreshRunAuthorizations()
                                 },
                                 enabled = !state.loading && !state.remoteRunsLoading,
                             ) {
@@ -844,72 +817,6 @@ private fun FlowPilotScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("远程运行预授权", style = MaterialTheme.typography.titleMedium)
-                            TextButton(
-                                onClick = viewModel::refreshRunAuthorizations,
-                                enabled = !state.runAuthorizationsLoading,
-                            ) {
-                                Text(if (state.runAuthorizationsLoading) "刷新中" else "刷新")
-                            }
-                        }
-                        Text(
-                            "仅列出当前账号仍有效的任务和设备授权；“该版本及后续版本”表示从当前审阅版本起生效，撤销后不再自动运行。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        state.runAuthorizationsError?.let { error ->
-                            Text(error, color = MaterialTheme.colorScheme.error)
-                        }
-                        if (state.runAuthorizations.isEmpty() && !state.runAuthorizationsLoading &&
-                            state.runAuthorizationsError == null
-                        ) {
-                            Text("当前没有有效预授权。")
-                        }
-                        state.runAuthorizations.forEach { authorization ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                                ) {
-                                    Text(
-                                        "${authorization.taskName} · ${
-                                            runAuthorizationVersionLabel(authorization.version, authorization.allVersions)
-                                        }",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                    )
-                                    Text(
-                                        "${authorization.deviceName} · 有效期至 ${
-                                            formatEpochSeconds(authorization.expiresAt) ?: "时间未知"
-                                        }",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                TextButton(
-                                    onClick = { authorizationToRevoke = authorization.id },
-                                    enabled = !state.loading,
-                                ) {
-                                    Text("撤销")
-                                }
-                            }
-                        }
-                    }
-                }
-
-                FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
                             Text("远程运行待命", style = MaterialTheme.typography.titleMedium)
                             StatusBadge(
                                 label = if (remoteMonitoring) "已开启" else "未开启",
@@ -917,7 +824,7 @@ private fun FlowPilotScreen(
                             )
                         }
                         Text(
-                            "待命期间会显示持续服务通知。预授权限当前任务及此设备，包含该版本和后续版本 30 天；无需逐次系统授权的任务可自动运行并可随时停止。远程 OCR 在 App 前台时弹出请求；后台收到的请求会等你打开 App 后弹出。若持续 OCR 待命已开启，确认后复用当前授权会话；否则需通过 Android 屏幕捕获系统授权。",
+                            "待命期间会显示持续服务通知。所有远程请求都会自动运行，无需逐项审阅或确认；任务可随时停止。若任务需要无障碍或屏幕捕获，仍须先在 Android 系统中启用或授权。持续 OCR 待命开启时可复用当前屏幕捕获授权；否则收到请求后打开 App 并按系统提示授权。",
                         )
                         Button(
                             onClick = { onSetRemoteMonitoring(!remoteMonitoring) },
@@ -1072,19 +979,21 @@ private fun FlowPilotScreen(
                                         )
                                     }
                                     if (request.status == "pending") {
-                                        Button(onClick = { selectedRemoteRun = request }) {
-                                            Text("查看并确认")
-                                        }
-                                    } else if (request.runId != null) {
-                                        Button(
-                                            onClick = {
-                                                onRunTask(request.asTask(), request.runId, request.id)
+                                        Text(
+                                            when {
+                                                requiresAccessibility(request.capabilities) && !accessibilityEnabled ->
+                                                    "等待启用无障碍服务；启用后会直接运行。"
+                                                requiresScreenCapture(request.capabilities) && !ocrStandbyActive ->
+                                                    "打开 App 后会直接运行；Android 仍会要求屏幕捕获系统授权。"
+                                                else -> "已收到请求，正在直接启动，无需任务审阅或逐次确认。"
                                             },
-                                            enabled = (!requiresAccessibility(request.capabilities) || accessibilityEnabled) &&
-                                                state.runStatus?.status !in setOf("running", "awaiting_permission"),
-                                        ) {
-                                            Text("继续已授权任务")
-                                        }
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    } else if (request.runId != null) {
+                                        Text(
+                                            "任务已直接启动，无需逐次任务确认。",
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
                                     }
                                 }
                             }
@@ -1298,122 +1207,6 @@ private fun FlowPilotScreen(
         )
     }
 
-    selectedRemoteRun?.let { request ->
-        val review = state.scriptReview?.takeIf {
-            it.task.id == request.taskId && it.task.version == request.version
-        }
-        AlertDialog(
-            onDismissRequest = {
-                selectedRemoteRun = null
-                scriptReviewAttempt = null
-                viewModel.clearScriptReview()
-                onClearRemoteTarget()
-            },
-            title = {
-                Text(if (request.status == "pending") "确认远程运行" else "继续已预授权任务")
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        buildString {
-                            append("任务：${request.taskName}\n版本：${request.version}\n发起人：${request.requestedBy}")
-                            formatEpochSeconds(request.expiresAt)?.let { append("\n请求有效期至：$it") }
-                        },
-                    )
-                    Text("来源：${sourceLabel(request.source)}")
-                    if (request.capabilities.isNotEmpty()) {
-                        Text("声明能力：${request.capabilities.joinToString("、")}")
-                    }
-                    if (state.loading && review == null) {
-                        CircularProgressIndicator()
-                    } else if (review == null) {
-                        Text("无法读取并校验脚本内容。请关闭后刷新请求。")
-                    } else {
-                        review.cacheNotice?.let { notice ->
-                            Text(notice, color = MaterialTheme.colorScheme.error)
-                        }
-                        if (review.script.isCached) {
-                            Text("本机已校验缓存版本", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Text("SHA-256：${review.script.sha256}", style = MaterialTheme.typography.bodySmall)
-                        Text("脚本内容", style = MaterialTheme.typography.titleSmall)
-                        ScriptContent(review.script.source)
-                    }
-                    if (request.status == "pending") {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
-                                checked = preauthorize,
-                                onCheckedChange = { preauthorize = it },
-                            )
-                            Text("为此任务、此设备及后续版本预授权 30 天")
-                        }
-                    }
-                    Text(
-                        if (requiresScreenCapture(request.capabilities)) {
-                            if (ocrStandbyActive) {
-                                "持续 OCR 会话正在运行；确认后会复用当前屏幕捕获授权。会话停止或被系统回收时，任务将无法继续。"
-                            } else {
-                                "确认后还需通过 Android 系统屏幕捕获授权；拒绝系统授权则任务不会运行。也可先开启持续 OCR 待命以复用当前会话。"
-                            }
-                        } else {
-                            "授权后，后续不需要逐次系统授权的远程版本会自动在可见前台服务中运行并可停止。"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        "Python 脚本在应用进程内运行，不是安全沙箱。只运行你信任且已检查的代码。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        selectedRemoteRun = null
-                        scriptReviewAttempt = null
-                        viewModel.clearScriptReview()
-                        if (request.status == "pending") {
-                            onDecideRemoteRun(request, true, preauthorize)
-                        } else if (request.runId != null) {
-                            onRunTask(request.asTask(), request.runId, request.id)
-                        }
-                        onClearRemoteTarget()
-                    },
-                    enabled = request.status != "pending" || review != null,
-                ) {
-                    Text(if (request.status == "pending") "确认并运行" else "继续")
-                }
-            },
-            dismissButton = {
-                if (request.status == "pending") {
-                    TextButton(
-                        onClick = {
-                            selectedRemoteRun = null
-                            scriptReviewAttempt = null
-                            viewModel.clearScriptReview()
-                            onDecideRemoteRun(request, false, false)
-                            onClearRemoteTarget()
-                        },
-                    ) {
-                        Text("拒绝")
-                    }
-                } else {
-                    TextButton(
-                        onClick = {
-                            selectedRemoteRun = null
-                            scriptReviewAttempt = null
-                            viewModel.clearScriptReview()
-                            onClearRemoteTarget()
-                        },
-                    ) {
-                        Text("稍后")
-                    }
-                }
-            },
-        )
-    }
-
     selectedTask?.let { task ->
         val review = state.scriptReview?.takeIf {
             it.task.id == task.id
@@ -1519,32 +1312,6 @@ private fun FlowPilotScreen(
         )
     }
 
-    val authorization = state.runAuthorizations.firstOrNull { it.id == authorizationToRevoke }
-    if (authorization != null) {
-        AlertDialog(
-            onDismissRequest = { authorizationToRevoke = null },
-            title = { Text("撤销运行预授权？") },
-            text = {
-                Text("${authorization.taskName} · ${authorization.version}\n设备：${authorization.deviceName}")
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        authorizationToRevoke = null
-                        viewModel.revokeRunAuthorization(authorization.id)
-                    },
-                    enabled = !state.loading,
-                ) {
-                    Text("确认撤销")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { authorizationToRevoke = null }) {
-                    Text("取消")
-                }
-            },
-        )
-    }
 }
 
 @Composable
