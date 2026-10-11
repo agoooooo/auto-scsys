@@ -158,6 +158,10 @@ export function requiresRemoteSystemAuthorization(capabilities = []) {
     /屏幕|screen|OCR|文字识别|界面识别|读屏/i.test(capability));
 }
 
+export function remoteRunFollowUpView(role) {
+  return role === "admin" ? "admin" : "mobile";
+}
+
 export function createRemoteRun(state, { taskId, deviceId, requestedBy = "林管理员" }) {
   const task = state.tasks.find((item) => item.id === taskId);
   const device = state.devices.find((item) => item.id === deviceId);

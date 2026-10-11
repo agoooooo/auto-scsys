@@ -45,6 +45,13 @@ export async function apiRequest(session, path, { method = "GET", body, formData
   return payload;
 }
 
+export async function createRemoteRunRequest(session, taskId, deviceId, fetchImpl = fetch) {
+  return apiRequest(session, "/remote-runs", {
+    method: "POST",
+    body: { task_id: taskId, device_id: deviceId },
+  }, fetchImpl);
+}
+
 export async function login(baseUrl, email, password) {
   let parsedBaseUrl;
   try {

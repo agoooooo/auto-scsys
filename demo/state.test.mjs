@@ -10,6 +10,7 @@ import {
   publishTaskVersion,
   resolveRemoteRun,
   requiresRemoteSystemAuthorization,
+  remoteRunFollowUpView,
   revokeRunAuthorization,
   setUserDeviceLimit,
   setTaskPaused,
@@ -136,6 +137,12 @@ test("remote runs wait for device confirmation and record completion or refusal"
   const rejected = resolveRemoteRun(refused, refused.remoteRuns[0].id, { approved: false });
   assert.equal(rejected.remoteRuns[0].status, "rejected");
   assert.equal(rejected.runs.length, 0);
+});
+
+test("remote-run follow-up does not show admins a phone preview for another user's device", () => {
+  assert.equal(remoteRunFollowUpView("admin"), "admin");
+  assert.equal(remoteRunFollowUpView("user"), "mobile");
+  assert.equal(remoteRunFollowUpView(undefined), "mobile");
 });
 
 test("preauthorization covers the reviewed and newer versions on one device and can be revoked", () => {

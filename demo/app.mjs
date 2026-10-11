@@ -8,6 +8,7 @@ import {
   resolveRemoteRun,
   revokeRunAuthorization,
   requiresRemoteSystemAuthorization,
+  remoteRunFollowUpView,
   setUserDeviceLimit,
   setTaskPaused,
   startLocalRun,
@@ -17,6 +18,7 @@ import {
 import {
   apiRequest,
   clearSession,
+  createRemoteRunRequest,
   loadSnapshot,
   login,
   readSession,
@@ -1111,31 +1113,51 @@ document.addEventListener("submit", async (event) => {
     } catch (error) { showToast(error.message); }
   } else if (event.target.id === "remote-run-form") {
     event.preventDefault();
+    const form = event.target;
+    const submitButton = form.querySelector('button[type="submit"]');
+    submitButton.disabled = true;
+    submitButton.textContent = "正在发送…";
     try {
-      const deviceId = new FormData(event.target).get("deviceId");
+      const deviceId = new FormData(form).get("deviceId");
+      const taskId = form.dataset.taskId;
       let request;
       if (session) {
-        request = await apiRequest(session, "/remote-runs", {
-          method: "POST",
-          body: { task_id: event.target.dataset.taskId, device_id: deviceId },
-        });
-        await refreshFromApi();
+        request = await createRemoteRunRequest(session, taskId, deviceId);
       } else {
         state = createRemoteRun(state, {
-          taskId: event.target.dataset.taskId,
+          taskId,
           deviceId,
           requestedBy: "林管理员",
         });
         request = state.remoteRuns[0];
       }
-      currentPhoneDeviceId = deviceId;
+      if (remoteRunFollowUpView(session?.user.role) === "mobile") {
+        currentPhoneDeviceId = deviceId;
+        currentView = "mobile";
+        phoneTab = "home";
+      } else {
+        currentPage = "tasks";
+        currentView = "admin";
+      }
       closeModal();
-      currentView = "mobile";
-      phoneTab = "home";
       render();
-      showToast(request.status === "running" ? "已按该设备预授权启动" : "请求已发送，等待手机用户确认");
+      const deviceName = state.devices.find((device) => device.id === deviceId)?.name ?? "目标设备";
+      showToast(request.status === "running"
+        ? `已按 ${deviceName} 的预授权启动`
+        : `已向 ${deviceName} 发送请求，等待设备用户确认`);
+      if (session) {
+        try {
+          await refreshFromApi();
+        } catch (error) {
+          showToast(`请求已发送，但状态刷新失败：${error.message}`);
+        }
+      }
     } catch (error) {
       showToast(error.message);
+      if (submitButton.isConnected) {
+        submitButton.disabled = false;
+        submitButton.textContent = "发送请求";
+      }
     }
   } else if (event.target.id === "local-run-form") {
     event.preventDefault();

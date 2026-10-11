@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   apiRequest,
   clearSession,
+  createRemoteRunRequest,
   loadSnapshot,
   login,
   readSession,
@@ -66,6 +67,24 @@ test("API requests send multipart bodies without setting a JSON content type", a
   });
   assert.equal(request.body, formData);
   assert.equal(request.headers["Content-Type"], undefined);
+});
+
+test("remote-run submission posts the selected task and device", async () => {
+  let request;
+  const response = await createRemoteRunRequest({
+    baseUrl: "http://localhost:8001",
+    token: "access-token",
+  }, "task-1", "device-2", async (url, options) => {
+    request = { url, options };
+    return new Response(JSON.stringify({ id: "request-1", status: "pending" }), { status: 201 });
+  });
+  assert.equal(request.url, "http://localhost:8001/remote-runs");
+  assert.equal(request.options.method, "POST");
+  assert.deepEqual(JSON.parse(request.options.body), {
+    task_id: "task-1",
+    device_id: "device-2",
+  });
+  assert.deepEqual(response, { id: "request-1", status: "pending" });
 });
 
 test("snapshot loading maps API resources and requests only online devices", async () => {
