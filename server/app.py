@@ -851,6 +851,14 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         )
         return {"device_id": device_id, "synced_at": utc_now(), "tasks": [_task_dict(db, row) for row in rows]}
 
+    @app.post("/devices/{device_id}/heartbeat")
+    def device_heartbeat(device_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
+        device = _device_for_user(db, device_id, user)
+        if user["role"] != "user" or device["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="只有设备所属用户可以发送设备心跳")
+        _touch_device(db, device_id)
+        return {"device_id": device_id, "status": "online", "last_active": utc_now()}
+
     @app.get("/devices/{device_id}/tasks/{task_id}/versions/{version}/content")
     def download_script(device_id: str, task_id: str, version: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         device = _device_for_user(db, device_id, user)
@@ -928,8 +936,6 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     @app.get("/devices/{device_id}/remote-runs")
     def pending_remote_runs(device_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         device = _device_for_user(db, device_id, user)
-        if user["role"] == "user" and device["user_id"] == user["id"]:
-            _touch_device(db, device_id)
         _expire_requests(db)
         rows = db.execute(
             """SELECT r.*,t.name AS task_name,t.source,t.capabilities_json,u.name AS requested_by_name,

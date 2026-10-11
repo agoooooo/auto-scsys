@@ -129,6 +129,14 @@ def test_device_liveness_expires_and_device_activity_restores_online_status(clie
     assert next(
         device for device in client.get("/devices", headers=auth(admin)).json()
         if device["id"] == "d-001"
+    )["status"] == "offline"
+
+    heartbeat = client.post("/devices/d-001/heartbeat", headers=auth(user))
+    assert heartbeat.status_code == 200
+    assert heartbeat.json()["status"] == "online"
+    assert next(
+        device for device in client.get("/devices", headers=auth(admin)).json()
+        if device["id"] == "d-001"
     )["status"] == "online"
 
     request = client.post(
@@ -155,6 +163,8 @@ def test_admin_reads_do_not_refresh_device_heartbeat(client):
         ).fetchone()["last_active"]
     assert last_active == stale_activity
     assert client.post("/devices/d-001/sync", headers=auth(admin)).status_code == 403
+    assert client.post("/devices/d-001/heartbeat", headers=auth(admin)).status_code == 403
+    assert client.post("/devices/d-001/heartbeat", headers=auth(admin)).status_code == 403
     with api._connect(client.app.state.db_path) as db:
         assert db.execute(
             "SELECT last_active FROM devices WHERE id='d-001'"

@@ -154,6 +154,10 @@ internal class ApiClient(baseUrl: String) {
         }
     }
 
+    fun heartbeat(token: String, deviceId: String) {
+        request("/devices/${encodePathSegment(deviceId)}/heartbeat", method = "POST", token = token)
+    }
+
     fun downloadScript(token: String, deviceId: String, task: AvailableTask): DownloadedScript {
         if (task.version.isBlank()) throw IOException("任务没有可运行版本")
         val response = exchange(

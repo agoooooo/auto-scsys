@@ -76,7 +76,9 @@ internal class RemoteRunMonitorService : Service() {
                     val deviceId = session.deviceId
                         ?: throw IllegalStateException("当前账号尚未绑定此设备")
                     val requests = withContext(Dispatchers.IO) {
-                        ApiClient(session.apiBaseUrl).pendingRemoteRuns(session.token, deviceId)
+                        ApiClient(session.apiBaseUrl).also { client ->
+                            client.heartbeat(session.token, deviceId)
+                        }.pendingRemoteRuns(session.token, deviceId)
                     }
                     requests.forEach { request ->
                         if (request.status == "pending") {

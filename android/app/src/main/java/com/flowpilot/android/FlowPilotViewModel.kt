@@ -195,7 +195,9 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
             try {
                 val session = withContext(Dispatchers.IO) { freshSession() }
                 val requests = withContext(Dispatchers.IO) {
-                    ApiClient(session.apiBaseUrl).pendingRemoteRuns(session.token, device.id)
+                    ApiClient(session.apiBaseUrl).also { client ->
+                        client.heartbeat(session.token, device.id)
+                    }.pendingRemoteRuns(session.token, device.id)
                 }
                 if (_state.value.user?.id != userId || _state.value.device?.id != device.id) return@launch
                 _state.value = _state.value.copy(
