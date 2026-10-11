@@ -1,6 +1,8 @@
 # FlowPilot API MVP
 
-这是供当前产品原型和后续 Android 客户端验证使用的 FastAPI 服务端。服务在本机使用 SQLite 持久化账号、设备、任务/版本、远程运行请求、运行记录及管理审计；遗留的有限预授权数据和 API 为旧客户端保留，不参与当前 Android 客户端的远程运行判断。脚本上传后只做 `.py` 格式、大小和 SHA-256 校验，不会执行脚本。
+这是供当前产品原型和后续 Android 客户端验证使用的 FastAPI 服务端。默认开发模式在本机使用 SQLite，并预置演示账号、设备和任务；遗留的有限预授权数据和 API 为旧客户端保留，不参与当前 Android 客户端的远程运行判断。脚本上传后只做 `.py` 格式、大小和 SHA-256 校验，不会执行脚本。
+
+**当前服务仍不是生产系统。**`FLOWPILOT_ENV=production` 只启用启动保护（要求明确配置、禁用演示数据和 API 文档），并不代表 SQLite、脚本存储、账号恢复、速率限制、备份、监控或高可用已达到生产标准。此模式仅用于部署配置验证或单实例、持久卷上的受控内部验证；公网部署前仍须完成托管 PostgreSQL/对象存储、HTTPS 反向代理、账户生命周期与恢复、速率限制、备份恢复演练、监控告警和安全评审。Android 客户端必须使用 HTTPS API 地址。
 
 ## 本地启动
 
@@ -22,6 +24,21 @@ FLOWPILOT_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32)
 | 普通用户 | `zhou.ke@example.com` | `user-demo` |
 
 以上凭据只适用于本地演示数据库。token secret 未设置时服务会在每次进程启动生成新的随机密钥（重启后旧 token 失效）。迁移到 PostgreSQL 与对象存储、完善密码重置/refresh-token 生命周期、部署 HTTPS 和速率限制之前，不得把此服务暴露到公网。
+
+## Production-mode startup guard
+
+Production mode fails closed unless it receives an absolute database path, a stable secret of at least 32 bytes, and one or more exact HTTPS browser origins. It disables the demo CORS origins, OpenAPI/Swagger/ReDoc, and demo account seeding; startup also rejects known demo accounts in the database. Use a fresh, persistent database and create the first admin interactively:
+
+```bash
+export FLOWPILOT_ENV=production
+export FLOWPILOT_DB_PATH=/var/lib/flowpilot/flowpilot.sqlite3
+export FLOWPILOT_TOKEN_SECRET='<provide a randomly generated secret from your secret manager>'
+export FLOWPILOT_CORS_ORIGINS='https://console.example.com'
+python -m server.bootstrap_admin
+uvicorn server.app:app --host 127.0.0.1 --port 8001
+```
+
+The bootstrap command prompts for an admin name, email, and 12+ character password without echoing the password. It refuses to run when the database already contains any user, and must be run only once against a fresh database. Keep the API behind a correctly configured HTTPS reverse proxy; do not publish the local SQLite file or secret. The production-mode guard does not make this SQLite-based prototype production-ready.
 
 ## 已实现接口
 

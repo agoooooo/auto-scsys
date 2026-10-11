@@ -1,5 +1,8 @@
 import hashlib
+import os
 import sqlite3
+import subprocess
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -7,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from server.app import create_app
+from server.app import create_app, create_initial_admin
 
 
 @pytest.fixture
@@ -83,6 +86,112 @@ def test_configured_cors_origin_is_allowed_but_unconfigured_origin_is_rejected(t
             },
         )
         assert "access-control-allow-origin" not in rejected.headers
+
+
+def test_production_mode_requires_explicit_persistent_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("FLOWPILOT_ENV", "production")
+    monkeypatch.delenv("FLOWPILOT_DB_PATH", raising=False)
+    monkeypatch.delenv("FLOWPILOT_TOKEN_SECRET", raising=False)
+    monkeypatch.delenv("FLOWPILOT_CORS_ORIGINS", raising=False)
+    with pytest.raises(ValueError, match="FLOWPILOT_DB_PATH"):
+        create_app()
+
+    monkeypatch.setenv("FLOWPILOT_DB_PATH", str(tmp_path / "production.sqlite3"))
+    with pytest.raises(ValueError, match="FLOWPILOT_TOKEN_SECRET"):
+        create_app()
+
+    monkeypatch.setenv("FLOWPILOT_TOKEN_SECRET", "production-secret-that-is-long-enough")
+    with pytest.raises(ValueError, match="FLOWPILOT_CORS_ORIGINS"):
+        create_app()
+
+    monkeypatch.setenv("FLOWPILOT_CORS_ORIGINS", "http://console.example.com")
+    with pytest.raises(ValueError, match="exact HTTPS origins"):
+        create_app()
+    monkeypatch.setenv("FLOWPILOT_CORS_ORIGINS", "https://console.example.com/admin")
+    with pytest.raises(ValueError, match="exact HTTPS origins"):
+        create_app()
+    monkeypatch.setenv("FLOWPILOT_CORS_ORIGINS", "https://console.example.com")
+    with pytest.raises(ValueError, match="absolute persistent path"):
+        create_app("relative.sqlite3")
+
+
+def test_production_mode_disables_demo_seed_and_api_docs(tmp_path, monkeypatch):
+    database = tmp_path / "production.sqlite3"
+    monkeypatch.setenv("FLOWPILOT_ENV", "production")
+    monkeypatch.setenv("FLOWPILOT_DB_PATH", str(database))
+    monkeypatch.setenv("FLOWPILOT_TOKEN_SECRET", "production-secret-that-is-long-enough")
+    monkeypatch.setenv("FLOWPILOT_CORS_ORIGINS", "https://console.example.com")
+    app = create_app()
+    with TestClient(app) as production_client:
+        assert production_client.get("/health").json() == {"status": "ok"}
+        assert production_client.get("/docs").status_code == 404
+        assert production_client.get("/openapi.json").status_code == 404
+        allowed = production_client.options(
+            "/auth/login",
+            headers={
+                "Origin": "https://console.example.com",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert allowed.headers["access-control-allow-origin"] == "https://console.example.com"
+        rejected = production_client.options(
+            "/auth/login",
+            headers={
+                "Origin": "http://localhost:8000",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert "access-control-allow-origin" not in rejected.headers
+        assert production_client.post(
+            "/auth/login",
+            json={"email": "admin@example.com", "password": "admin-demo"},
+        ).status_code == 401
+
+
+def test_production_mode_refuses_database_with_demo_accounts(tmp_path, monkeypatch):
+    database = tmp_path / "seeded.sqlite3"
+    with TestClient(create_app(database, b"test-secret-must-be-at-least-32-bytes")):
+        pass
+    monkeypatch.setenv("FLOWPILOT_ENV", "production")
+    monkeypatch.setenv("FLOWPILOT_DB_PATH", str(database))
+    monkeypatch.setenv("FLOWPILOT_TOKEN_SECRET", "production-secret-that-is-long-enough")
+    monkeypatch.setenv("FLOWPILOT_CORS_ORIGINS", "https://console.example.com")
+    with pytest.raises(RuntimeError, match="contains demo accounts"):
+        with TestClient(create_app()):
+            pass
+
+
+def test_initial_admin_bootstrap_creates_one_admin_without_demo_accounts(tmp_path):
+    database = tmp_path / "fresh.sqlite3"
+    with pytest.raises(ValueError, match="12–256"):
+        create_initial_admin(database, "Admin", "admin@example.com", "short")
+    user_id = create_initial_admin(database, "Initial Admin", "admin@example.com", "a-strong-production-password")
+    assert user_id
+    with TestClient(create_app(database, b"test-secret-must-be-at-least-32-bytes")) as client:
+        token = login(client, "admin@example.com", "a-strong-production-password")
+        assert client.get("/users", headers=auth(token)).status_code == 200
+        assert client.post(
+            "/auth/login",
+            json={"email": "chen.xiao@example.com", "password": "user-demo"},
+        ).status_code == 401
+    with pytest.raises(ValueError, match="already has users|已有用户"):
+        create_initial_admin(database, "Other Admin", "other@example.com", "another-strong-password")
+
+    environment = os.environ.copy()
+    environment["FLOWPILOT_DB_PATH"] = str(tmp_path / "cli.sqlite3")
+    result = subprocess.run(
+        [sys.executable, "-m", "server.bootstrap_admin"],
+        input="CLI Admin\ncli-admin@example.com\na-strong-cli-password\na-strong-cli-password\n",
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "cli-admin@example.com" in result.stdout
+    assert "a-strong-cli-password" not in result.stdout + result.stderr
 
 
 def test_user_devices_and_task_access_are_scoped(client):

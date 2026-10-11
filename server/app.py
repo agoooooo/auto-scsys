@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -111,7 +111,7 @@ def _connect(db_path: Path):
         connection.close()
 
 
-def _initialize_database(db_path: Path) -> None:
+def _initialize_database(db_path: Path, seed_demo: bool = True) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with _connect(db_path) as db:
         db.executescript(
@@ -227,7 +227,7 @@ def _initialize_database(db_path: Path) -> None:
         authorization_columns = {row["name"] for row in db.execute("PRAGMA table_info(run_authorizations)")}
         if "all_versions" not in authorization_columns:
             db.execute("ALTER TABLE run_authorizations ADD COLUMN all_versions INTEGER NOT NULL DEFAULT 0")
-        if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
+        if seed_demo and db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
             _seed_database(db)
         db.execute(
             """UPDATE tasks SET active_version=(
@@ -235,6 +235,33 @@ def _initialize_database(db_path: Path) -> None:
                ) WHERE active_version IS NULL
                  AND EXISTS (SELECT 1 FROM task_versions WHERE task_id=tasks.id)"""
         )
+
+
+def create_initial_admin(db_path: str | Path, name: str, email: str, password: str) -> str:
+    database_path = Path(db_path)
+    if not database_path.is_absolute():
+        raise ValueError("管理员初始化数据库路径必须是绝对路径")
+    normalized_email = email.strip().lower()
+    normalized_name = name.strip()
+    if not normalized_name or len(normalized_name) > 80:
+        raise ValueError("管理员姓名必须为 1–80 个字符")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized_email):
+        raise ValueError("管理员邮箱格式无效")
+    if len(password) < 12 or len(password) > 256:
+        raise ValueError("管理员密码必须为 12–256 个字符")
+
+    _initialize_database(database_path, seed_demo=False)
+    user_id = str(uuid.uuid4())
+    salt = secrets.token_bytes(16)
+    with _connect(database_path) as db:
+        if db.execute("SELECT 1 FROM users LIMIT 1").fetchone():
+            raise ValueError("数据库已有用户；不能通过此命令创建或重置管理员")
+        db.execute(
+            """INSERT INTO users(id,name,email,role,status,device_limit,password_salt,password_hash,joined_at)
+               VALUES(?,?,?,'admin','active',50,?,?,?)""",
+            (user_id, normalized_name, normalized_email, salt, _password_hash(password, salt), utc_now()),
+        )
+    return user_id
 
 
 def _seed_database(db: sqlite3.Connection) -> None:
@@ -377,30 +404,81 @@ class RunUpdate(BaseModel):
 
 
 def create_app(db_path: str | Path | None = None, token_secret: bytes | None = None) -> FastAPI:
-    database_path = Path(db_path or os.environ.get("FLOWPILOT_DB_PATH", DEFAULT_DB_PATH))
+    environment = os.environ.get("FLOWPILOT_ENV", "development").strip().lower()
+    if environment not in {"development", "test", "production"}:
+        raise ValueError("FLOWPILOT_ENV must be development, test, or production")
+
+    configured_db_path = db_path or os.environ.get("FLOWPILOT_DB_PATH")
+    if environment == "production":
+        if not configured_db_path:
+            raise ValueError("Production requires an explicit FLOWPILOT_DB_PATH")
+        database_path = Path(configured_db_path)
+        if not database_path.is_absolute() or database_path == DEFAULT_DB_PATH:
+            raise ValueError("Production FLOWPILOT_DB_PATH must be an explicit absolute persistent path")
+        if not os.environ.get("FLOWPILOT_TOKEN_SECRET"):
+            raise ValueError("Production requires FLOWPILOT_TOKEN_SECRET")
+        if not os.environ.get("FLOWPILOT_CORS_ORIGINS"):
+            raise ValueError("Production requires explicit HTTPS FLOWPILOT_CORS_ORIGINS")
+    else:
+        database_path = Path(configured_db_path or DEFAULT_DB_PATH)
+
     configured_secret = token_secret
     if configured_secret is None and os.environ.get("FLOWPILOT_TOKEN_SECRET"):
         configured_secret = os.environ["FLOWPILOT_TOKEN_SECRET"].encode()
     if configured_secret is not None and len(configured_secret) < 32:
         raise ValueError("FLOWPILOT_TOKEN_SECRET must contain at least 32 bytes")
     secret = configured_secret if configured_secret is not None else secrets.token_bytes(32)
+    if environment == "production" and token_secret is not None:
+        raise ValueError("Production token secret must be configured through FLOWPILOT_TOKEN_SECRET")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        _initialize_database(database_path)
+        _initialize_database(database_path, seed_demo=environment != "production")
+        if environment == "production":
+            with _connect(database_path) as db:
+                demo_accounts = db.execute(
+                    "SELECT email FROM users WHERE email IN ('admin@example.com','chen.xiao@example.com','zhou.ke@example.com','yifan.xu@example.com') LIMIT 1"
+                ).fetchone()
+            if demo_accounts:
+                raise RuntimeError("Production database contains demo accounts; use a fresh database and bootstrap a production administrator")
+            os.chmod(database_path, 0o600)
         yield
 
-    app = FastAPI(title="FlowPilot API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(
+        title="FlowPilot API",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url=None if environment == "production" else "/docs",
+        redoc_url=None if environment == "production" else "/redoc",
+        openapi_url=None if environment == "production" else "/openapi.json",
+    )
     app.state.db_path = database_path
     app.state.token_secret = secret
+    app.state.environment = environment
     configured_origins = [
         origin.strip()
         for origin in os.environ.get("FLOWPILOT_CORS_ORIGINS", "").split(",")
         if origin.strip()
     ]
+    if environment == "production":
+        if not configured_origins:
+            raise ValueError("Production requires at least one exact HTTPS FLOWPILOT_CORS_ORIGINS entry")
+        for origin in configured_origins:
+            parsed = urlsplit(origin)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+                or parsed.username
+                or parsed.password
+                or "*" in origin
+            ):
+                raise ValueError("Production CORS origins must be exact HTTPS origins without paths or wildcards")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=list(dict.fromkeys([
+        allow_origins=list(dict.fromkeys(configured_origins if environment == "production" else [
             "http://localhost:8000",
             "http://127.0.0.1:8000",
             "http://localhost:8765",
