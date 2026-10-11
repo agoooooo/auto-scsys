@@ -693,6 +693,54 @@ def test_device_user_must_confirm_remote_runs_and_can_report_local_runs(client):
     ).status_code == 403
 
 
+def test_device_rejects_concurrent_remote_and_local_runs(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    first = client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).json()
+    queued = client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).json()
+
+    started = client.patch(
+        f"/remote-runs/{first['id']}",
+        headers=auth(user),
+        json={"decision": "approve"},
+    )
+    assert started.status_code == 200
+    assert client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).status_code == 409
+    assert client.post(
+        "/devices/d-001/runs",
+        headers=auth(user),
+        json={"task_id": "t-001", "version": "v1.7.0"},
+    ).status_code == 409
+    assert client.patch(
+        f"/remote-runs/{queued['id']}",
+        headers=auth(user),
+        json={"decision": "approve", "preauthorize": True},
+    ).status_code == 409
+
+    assert client.post(
+        f"/runs/{started.json()['run_id']}",
+        headers=auth(user),
+        json={"status": "success", "result_summary": "完成"},
+    ).status_code == 200
+    assert client.patch(
+        f"/remote-runs/{queued['id']}",
+        headers=auth(user),
+        json={"decision": "approve"},
+    ).status_code == 200
+
+
 def test_preauthorization_covers_current_and_future_versions_on_one_device(client):
     admin = login(client, "admin@example.com", "admin-demo")
     user = login(client)
@@ -707,8 +755,18 @@ def test_preauthorization_covers_current_and_future_versions_on_one_device(clien
     assert grants[0]["device_id"] == "d-001"
     assert grants[0]["version"] == "v1.7.0"
     assert grants[0]["all_versions"] is True
+    assert client.post(
+        f"/runs/{approved['run_id']}",
+        headers=auth(user),
+        json={"status": "success", "result_summary": "完成"},
+    ).status_code == 200
     next_run = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
     assert next_run["status"] == "running"
+    assert client.post(
+        f"/runs/{next_run['run_id']}",
+        headers=auth(user),
+        json={"status": "success", "result_summary": "完成"},
+    ).status_code == 200
     other_device = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-002"}).json()
     assert other_device["status"] == "pending"
 
@@ -726,6 +784,11 @@ def test_preauthorization_covers_current_and_future_versions_on_one_device(clien
     ).json()
     assert future_run["status"] == "running"
 
+    assert client.post(
+        f"/runs/{future_run['run_id']}",
+        headers=auth(user),
+        json={"status": "success", "result_summary": "完成"},
+    ).status_code == 200
     revoked = client.delete(f"/run-authorizations/{grants[0]['id']}", headers=auth(user))
     assert revoked.status_code == 200
     after_revoke = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
@@ -765,6 +828,11 @@ def test_all_version_preauthorization_applies_to_future_versions_and_is_revocabl
     assert remote_run.status_code == 201
     assert remote_run.json()["version"] == "v1.8.0"
     assert remote_run.json()["status"] == "running"
+    assert client.post(
+        f"/runs/{remote_run.json()['run_id']}",
+        headers=auth(user),
+        json={"status": "success", "result_summary": "完成"},
+    ).status_code == 200
 
     assert client.patch(
         "/tasks/t-001/versions/v1.6.0/activate",

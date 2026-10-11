@@ -469,6 +469,14 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             (int(time.time()),),
         )
 
+    def _ensure_device_idle(db: sqlite3.Connection, device_id: str) -> None:
+        active_run = db.execute(
+            "SELECT 1 FROM runs WHERE device_id=? AND status='running' LIMIT 1",
+            (device_id,),
+        ).fetchone()
+        if active_run:
+            raise HTTPException(status_code=409, detail="设备当前有任务运行")
+
     def _start_run(db: sqlite3.Connection, request: sqlite3.Row) -> str:
         run_id = str(uuid.uuid4())
         db.execute(
@@ -896,6 +904,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         device = _device_for_user(db, body.device_id, user)
         if device["status"] != "online":
             raise HTTPException(status_code=409, detail="只能向在线设备发起运行请求")
+        _ensure_device_idle(db, device["id"])
         task = _task_for_user(db, body.task_id, {"id": device["user_id"], "role": "user"})
         if not task["active_version"]:
             raise HTTPException(status_code=409, detail="任务没有可运行版本")
@@ -945,6 +954,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         ).fetchone()
         if not version:
             raise HTTPException(status_code=404, detail="脚本版本不存在")
+        _ensure_device_idle(db, device["id"])
         run_id = str(uuid.uuid4())
         db.execute(
             """INSERT INTO runs(id,task_id,version,device_id,status,started_at)
@@ -1008,6 +1018,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         ).fetchone()
         if not version_exists:
             raise HTTPException(status_code=409, detail="请求脚本版本不可用")
+        _ensure_device_idle(db, device["id"])
         if body.preauthorize:
             grant_id = str(uuid.uuid4())
             db.execute(
