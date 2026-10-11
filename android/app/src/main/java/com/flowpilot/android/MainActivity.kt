@@ -544,7 +544,17 @@ private fun FlowPilotScreen(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text("远程运行待命", style = MaterialTheme.typography.titleMedium)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("远程运行待命", style = MaterialTheme.typography.titleMedium)
+                            StatusBadge(
+                                label = if (remoteMonitoring) "已开启" else "未开启",
+                                status = if (remoteMonitoring) "active" else "stopped",
+                            )
+                        }
                         Text(
                             "待命期间会显示持续通知。预授权只限明确任务和此设备；运行仍需屏幕捕获系统授权，并可随时停止。",
                         )
@@ -563,7 +573,14 @@ private fun FlowPilotScreen(
                             modifier = Modifier.padding(16.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text("需要启用无障碍操作", style = MaterialTheme.typography.titleMedium)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("无障碍操作", style = MaterialTheme.typography.titleMedium)
+                                StatusBadge(label = "未启用", status = "disabled")
+                            }
                             Text(
                                 "FlowPilot 仅在已启动任务时读取抖音或抖音极速版界面文字并点击脚本指定的文字。请在系统设置中手动启用；可随时关闭。",
                             )
@@ -573,11 +590,28 @@ private fun FlowPilotScreen(
                         }
                     }
                 } else {
-                    Text(
-                        "无障碍服务已启用；屏幕捕获仍由 Android 在每次任务启动时单独授权。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text("无障碍操作", style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    "屏幕捕获仍由 Android 在每次任务启动时单独授权。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            StatusBadge(label = "已启用", status = "active")
+                        }
+                    }
                 }
 
                 Text("可用任务（${state.tasks.size}）", style = MaterialTheme.typography.titleLarge)
@@ -1077,11 +1111,57 @@ private fun TaskCard(task: AvailableTask, canInspectScript: Boolean, onRun: () -
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(task.name, style = MaterialTheme.typography.titleMedium)
-            Text("当前版本：${task.version.ifBlank { "未发布" }}")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = FlowPilotPalette.PurpleSoft,
+                ) {
+                    Text(
+                        "⌘",
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        color = FlowPilotPalette.PurpleDark,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Text(
+                        task.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "自动化任务 · ${sourceLabel(task.source)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("当前发布版本", style = MaterialTheme.typography.bodySmall)
+                StatusBadge(
+                    label = task.version.ifBlank { "未发布" },
+                    status = if (task.version.isBlank()) "unknown" else "published",
+                )
+            }
             if (task.description.isNotBlank()) Text(task.description)
             if (task.capabilities.isNotEmpty()) {
-                Text("所需能力：${task.capabilities.joinToString("、")}")
+                Text(
+                    "所需能力 · ${task.capabilities.joinToString(" · ")}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Button(
                 onClick = onRun,
