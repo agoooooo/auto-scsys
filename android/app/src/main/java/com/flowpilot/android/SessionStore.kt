@@ -63,6 +63,10 @@ internal class SessionStore(context: Context) {
         preferences.edit().putString(deviceKey(userId), deviceId).apply()
     }
 
+    fun clearDeviceId(userId: String) {
+        preferences.edit().remove(deviceKey(userId)).apply()
+    }
+
     fun updateToken(token: String, expiresAt: Long) {
         preferences.edit()
             .putString(KEY_TOKEN, token)

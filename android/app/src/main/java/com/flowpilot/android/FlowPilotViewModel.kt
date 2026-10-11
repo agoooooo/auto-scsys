@@ -2,6 +2,7 @@ package com.flowpilot.android
 
 import android.app.Application
 import android.os.Build
+import java.io.IOException
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +28,9 @@ internal data class AppUiState(
     val runHistoryError: String? = null,
     val remoteRunsLoading: Boolean = false,
     val remoteRunsError: String? = null,
+    val runAuthorizations: List<RunAuthorization> = emptyList(),
+    val runAuthorizationsLoading: Boolean = false,
+    val runAuthorizationsError: String? = null,
     val scriptReview: ScriptReview? = null,
     val loading: Boolean = false,
     val error: String? = null,
@@ -43,7 +47,11 @@ private fun isEmulator(): Boolean =
         Build.MANUFACTURER.contains("Genymotion", ignoreCase = true) ||
         (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
 
-internal data class ScriptReview(val task: AvailableTask, val script: DownloadedScript)
+internal data class ScriptReview(
+    val task: AvailableTask,
+    val script: DownloadedScript,
+    val cacheNotice: String? = null,
+)
 
 internal class FlowPilotViewModel(application: Application) : AndroidViewModel(application) {
     private val sessionStore = SessionStore(application)
@@ -140,6 +148,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                     tasks = tasks,
                 )
                 refreshRunHistory()
+                refreshRunAuthorizations()
             } catch (exception: Exception) {
                 _state.value = _state.value.copy(
                     loading = false,
@@ -188,7 +197,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                 val requests = withContext(Dispatchers.IO) {
                     ApiClient(session.apiBaseUrl).pendingRemoteRuns(session.token, device.id)
                 }
-                if (_state.value.user?.id != userId) return@launch
+                if (_state.value.user?.id != userId || _state.value.device?.id != device.id) return@launch
                 _state.value = _state.value.copy(
                     token = session.token,
                     tokenExpiresAt = session.tokenExpiresAt,
@@ -197,7 +206,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                     remoteRunsError = null,
                 )
             } catch (exception: Exception) {
-                if (_state.value.user?.id != userId) return@launch
+                if (_state.value.user?.id != userId || _state.value.device?.id != device.id) return@launch
                 _state.value = _state.value.copy(
                     remoteRunsLoading = false,
                     remoteRunsError = "远程请求同步失败：${exception.message ?: "服务器不可用"}",
@@ -210,22 +219,147 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         _state.value = _state.value.copy(remoteRunsError = null)
     }
 
-    fun inspectScript(task: AvailableTask) {
+    fun refreshRunAuthorizations() {
+        val current = _state.value
+        val userId = current.user?.id ?: return
+        if (current.token == null || current.runAuthorizationsLoading) return
+        val device = current.device ?: return
+        _state.value = current.copy(runAuthorizationsLoading = true, runAuthorizationsError = null)
+        viewModelScope.launch {
+            try {
+                val session = withContext(Dispatchers.IO) { freshSession() }
+                val authorizations = withContext(Dispatchers.IO) {
+                    ApiClient(session.apiBaseUrl).listRunAuthorizations(session.token)
+                }
+                if (_state.value.user?.id != userId || _state.value.device?.id != device.id) return@launch
+                _state.value = _state.value.copy(
+                    token = session.token,
+                    tokenExpiresAt = session.tokenExpiresAt,
+                    runAuthorizations = authorizations,
+                    runAuthorizationsLoading = false,
+                    runAuthorizationsError = null,
+                )
+            } catch (exception: Exception) {
+                if (_state.value.user?.id != userId || _state.value.device?.id != device.id) return@launch
+                _state.value = _state.value.copy(
+                    runAuthorizationsLoading = false,
+                    runAuthorizationsError = "预授权同步失败：${exception.message ?: "服务器不可用"}",
+                )
+            }
+        }
+    }
+
+    fun revokeRunAuthorization(authorizationId: String) {
+        val current = _state.value
+        if (current.token == null || current.loading) return
+        _state.value = current.copy(loading = true, error = null)
+        viewModelScope.launch {
+            try {
+                val session = withContext(Dispatchers.IO) { freshSession() }
+                withContext(Dispatchers.IO) {
+                    ApiClient(session.apiBaseUrl).revokeRunAuthorization(session.token, authorizationId)
+                }
+                _state.value = _state.value.copy(
+                    token = session.token,
+                    tokenExpiresAt = session.tokenExpiresAt,
+                    loading = false,
+                )
+                refreshRunAuthorizations()
+            } catch (exception: Exception) {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = exception.message ?: "撤销预授权失败",
+                )
+            }
+        }
+    }
+
+    fun unbindDevice() {
+        val current = _state.value
+        val user = current.user ?: return
+        val device = current.device ?: return
+        if (current.token == null || current.loading ||
+            !canLogoutDuringRun(current.runStatus?.status)
+        ) return
+        _state.value = current.copy(loading = true, error = null)
+        viewModelScope.launch {
+            try {
+                val session = withContext(Dispatchers.IO) { freshSession() }
+                withContext(Dispatchers.IO) {
+                    ApiClient(session.apiBaseUrl).unbindDevice(session.token, device.id)
+                }
+                sessionStore.clearDeviceId(user.id)
+                RemoteRunMonitorService.stop(getApplication())
+                _state.value = _state.value.copy(
+                    token = session.token,
+                    tokenExpiresAt = session.tokenExpiresAt,
+                    device = null,
+                    tasks = emptyList(),
+                    remoteRuns = emptyList(),
+                    remoteRunsLoading = false,
+                    runAuthorizations = emptyList(),
+                    runAuthorizationsLoading = false,
+                    remoteMonitoring = false,
+                    loading = false,
+                )
+            } catch (exception: Exception) {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = exception.message ?: "设备解绑失败",
+                )
+            }
+        }
+    }
+
+    fun inspectScript(task: AvailableTask, allowOlderCachedVersion: Boolean = true) {
         if (_state.value.loading) return
         _state.value = _state.value.copy(loading = true, error = null, scriptReview = null)
         viewModelScope.launch {
             try {
-                val (session, device) = withContext(Dispatchers.IO) {
-                    freshSession() to requireNotNull(_state.value.device) { "当前账号尚未绑定此设备" }
+                val (session, user, device) = withContext(Dispatchers.IO) {
+                    Triple(
+                        freshSession(),
+                        requireNotNull(_state.value.user) { "登录状态已失效，请重新登录" },
+                        requireNotNull(_state.value.device) { "当前账号尚未绑定此设备" },
+                    )
                 }
-                val script = withContext(Dispatchers.IO) {
-                    ApiClient(session.apiBaseUrl).downloadScript(session.token, device.id, task)
+                val review = withContext(Dispatchers.IO) {
+                    val client = ApiClient(session.apiBaseUrl)
+                    val cache = ScriptCache(getApplication<Application>().filesDir.resolve(SCRIPT_CACHE_DIRECTORY))
+                    val scope = ScriptCacheScope(session.apiBaseUrl, user.id, device.id)
+                    try {
+                        val script = client.downloadScript(session.token, device.id, task)
+                        val cacheNotice = try {
+                            cache.save(scope, task, script)
+                            null
+                        } catch (exception: IOException) {
+                            "脚本已校验，但无法保存本地缓存：${exception.message ?: "存储不可用"}"
+                        }
+                        ScriptReview(task, script, cacheNotice)
+                    } catch (exception: Exception) {
+                        if (exception is ApiException && exception.statusCode in 400..499) throw exception
+                        val cached = cache.load(scope, task)?.let {
+                            ScriptReview(task, it, "无法连接服务器，使用本机保存的已校验版本。运行仍需服务端授权。")
+                        }
+                            ?: if (allowOlderCachedVersion) {
+                                cache.latest(scope, task)?.let {
+                                    ScriptReview(
+                                        it.task,
+                                        it.script,
+                                        "无法下载请求版本 ${task.version}，改用本机最近一次成功校验的版本 ${it.task.version}。运行仍需服务端授权。",
+                                    )
+                                }
+                            } else {
+                                null
+                            }
+                        cached ?: throw exception
+                    }
                 }
                 _state.value = _state.value.copy(
                     loading = false,
                     token = session.token,
                     tokenExpiresAt = session.tokenExpiresAt,
-                    scriptReview = ScriptReview(task, script),
+                    scriptReview = review,
                 )
             } catch (exception: Exception) {
                 _state.value = _state.value.copy(
@@ -371,6 +505,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                 loadExistingDevice(client, token, user)
                 _state.value = _state.value.copy(loading = false)
                 refreshRunHistory()
+                refreshRunAuthorizations()
             } catch (exception: Exception) {
                 sessionStore.clear()
                 val remembered = sessionStore.readRememberedLogin()
@@ -416,5 +551,6 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
 
     private companion object {
         const val TOKEN_REFRESH_LEAD_SECONDS = 5 * 60L
+        const val SCRIPT_CACHE_DIRECTORY = "verified_scripts"
     }
 }

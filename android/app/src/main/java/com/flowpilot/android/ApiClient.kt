@@ -14,6 +14,16 @@ internal data class LoginResult(val token: String, val expiresIn: Long, val user
 
 internal data class BoundDevice(val id: String, val name: String, val model: String, val status: String)
 
+internal data class RunAuthorization(
+    val id: String,
+    val taskId: String,
+    val taskName: String,
+    val version: String,
+    val deviceId: String,
+    val deviceName: String,
+    val expiresAt: Long,
+)
+
 internal data class RemoteRun(
     val id: String,
     val taskId: String,
@@ -38,7 +48,12 @@ internal data class RunRecord(
     val resultSummary: String,
 )
 
-internal data class DownloadedScript(val filename: String, val source: String, val sha256: String)
+internal data class DownloadedScript(
+    val filename: String,
+    val source: String,
+    val sha256: String,
+    val isCached: Boolean = false,
+)
 
 internal data class AvailableTask(
     val id: String,
@@ -121,6 +136,10 @@ internal class ApiClient(baseUrl: String) {
         )
     }
 
+    fun unbindDevice(token: String, deviceId: String) {
+        request("/devices/${encodePathSegment(deviceId)}", method = "DELETE", token = token)
+    }
+
     fun syncTasks(token: String, deviceId: String): List<AvailableTask> {
         val response = JSONObject(request("/devices/$deviceId/sync", method = "POST", token = token))
         return response.optJSONArray("tasks").orEmpty().objects().map { task ->
@@ -196,6 +215,27 @@ internal class ApiClient(baseUrl: String) {
                 .put("preauthorize", approve && preauthorize),
         ))
         return response.optString("run_id").takeIf(String::isNotBlank)
+    }
+
+    fun listRunAuthorizations(token: String): List<RunAuthorization> =
+        requestArray("/run-authorizations", token).map { item ->
+            RunAuthorization(
+                id = item.optString("id"),
+                taskId = item.optString("task_id"),
+                taskName = item.optString("task_name"),
+                version = item.optString("version"),
+                deviceId = item.optString("device_id"),
+                deviceName = item.optString("device_name"),
+                expiresAt = item.optLong("expires_at"),
+            )
+        }
+
+    fun revokeRunAuthorization(token: String, authorizationId: String) {
+        request(
+            "/run-authorizations/${encodePathSegment(authorizationId)}",
+            method = "DELETE",
+            token = token,
+        )
     }
 
     fun listRuns(token: String): List<RunRecord> =

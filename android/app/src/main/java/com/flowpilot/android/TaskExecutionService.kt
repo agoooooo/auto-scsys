@@ -23,6 +23,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class TaskExecutionService : Service() {
@@ -119,7 +120,11 @@ internal class TaskExecutionService : Service() {
             capture = ScreenCaptureSession(this, resultCode, resultData)
 
             val script = withContext(Dispatchers.IO) {
-                api.downloadScript(session.token, deviceId, task)
+                val cache = ScriptCache(File(filesDir, SCRIPT_CACHE_DIRECTORY))
+                val scope = ScriptCacheScope(session.apiBaseUrl, session.user.id, deviceId)
+                cache.load(scope, task) ?: api.downloadScript(session.token, deviceId, task).also {
+                    cache.save(scope, task, it)
+                }
             }
             ensureNotStopped()
             if (!Python.isStarted()) Python.start(AndroidPlatform(applicationContext))
@@ -296,6 +301,7 @@ internal class TaskExecutionService : Service() {
         private const val STOP_PENDING_INTENT = 320
         private const val MAX_LOG_ENTRY_CHARS = 500
         private const val SERVICE_START_GRACE_PERIOD_MILLIS = 1_000L
+        private const val SCRIPT_CACHE_DIRECTORY = "verified_scripts"
 
         fun start(
             context: Context,

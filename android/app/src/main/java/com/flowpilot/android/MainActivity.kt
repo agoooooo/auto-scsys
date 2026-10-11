@@ -271,6 +271,7 @@ class MainActivity : ComponentActivity() {
                     beginExecution(request.asTask(), runId, request.id)
                 }
                 flowPilotViewModel.refreshRemoteRuns()
+                flowPilotViewModel.refreshRunAuthorizations()
             } catch (exception: Exception) {
                 flowPilotViewModel.showError(exception.message ?: "无法处理远程运行请求")
             }
@@ -343,11 +344,18 @@ private fun FlowPilotScreen(
     var rememberLoginInfo by rememberSaveable { mutableStateOf(state.rememberLoginInfo) }
     var selectedRemoteRun by remember { mutableStateOf<RemoteRun?>(null) }
     var selectedTask by remember { mutableStateOf<AvailableTask?>(null) }
+    var authorizationToRevoke by remember { mutableStateOf<String?>(null) }
+    var confirmDeviceUnbind by rememberSaveable { mutableStateOf(false) }
     var scriptReviewAttempt by remember { mutableStateOf<String?>(null) }
     var preauthorize by rememberSaveable { mutableStateOf(true) }
     var confirmScriptRun by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(user?.id, device?.id) {
-        if (user != null && device != null) viewModel.refreshRemoteRuns()
+        if (user != null && device != null) {
+            viewModel.refreshRemoteRuns()
+            viewModel.refreshRunAuthorizations()
+        } else if (user != null) {
+            onSetRemoteMonitoring(false)
+        }
     }
     LaunchedEffect(remoteIntentId, state.remoteRuns) {
         if (remoteIntentId != null) {
@@ -521,6 +529,7 @@ private fun FlowPilotScreen(
                                     viewModel.refreshTasks()
                                     viewModel.refreshRemoteRuns()
                                     viewModel.refreshRunHistory()
+                                    viewModel.refreshRunAuthorizations()
                                 },
                                 enabled = !state.loading,
                             ) {
@@ -532,6 +541,7 @@ private fun FlowPilotScreen(
                                     viewModel.clearRemoteRunsError()
                                     viewModel.refreshRemoteRuns()
                                     viewModel.refreshRunHistory()
+                                    viewModel.refreshRunAuthorizations()
                                 },
                                 enabled = !state.loading && !state.remoteRunsLoading,
                             ) {
@@ -540,6 +550,76 @@ private fun FlowPilotScreen(
                         }
                         state.remoteRunsError?.let { error ->
                             Text(error, color = MaterialTheme.colorScheme.error)
+                        }
+                        TextButton(
+                            onClick = { confirmDeviceUnbind = true },
+                            enabled = !state.loading && canLogout,
+                        ) {
+                            Text("解绑此设备")
+                        }
+                    }
+                }
+
+                FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("远程运行预授权", style = MaterialTheme.typography.titleMedium)
+                            TextButton(
+                                onClick = viewModel::refreshRunAuthorizations,
+                                enabled = !state.runAuthorizationsLoading,
+                            ) {
+                                Text(if (state.runAuthorizationsLoading) "刷新中" else "刷新")
+                            }
+                        }
+                        Text(
+                            "仅列出当前账号仍有效的任务、版本和设备授权；撤销后该版本不能再免逐次确认运行。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        state.runAuthorizationsError?.let { error ->
+                            Text(error, color = MaterialTheme.colorScheme.error)
+                        }
+                        if (state.runAuthorizations.isEmpty() && !state.runAuthorizationsLoading &&
+                            state.runAuthorizationsError == null
+                        ) {
+                            Text("当前没有有效预授权。")
+                        }
+                        state.runAuthorizations.forEach { authorization ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(
+                                        "${authorization.taskName} · ${authorization.version}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Text(
+                                        "${authorization.deviceName} · 有效期至 ${
+                                            formatEpochSeconds(authorization.expiresAt) ?: "时间未知"
+                                        }",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                TextButton(
+                                    onClick = { authorizationToRevoke = authorization.id },
+                                    enabled = !state.loading,
+                                ) {
+                                    Text("撤销")
+                                }
+                            }
                         }
                     }
                 }
@@ -877,6 +957,12 @@ private fun FlowPilotScreen(
                     } else if (review == null) {
                         Text("无法读取并校验脚本内容。请关闭后刷新请求。")
                     } else {
+                        review.cacheNotice?.let { notice ->
+                            Text(notice, color = MaterialTheme.colorScheme.error)
+                        }
+                        if (review.script.isCached) {
+                            Text("本机已校验缓存版本", style = MaterialTheme.typography.bodySmall)
+                        }
                         Text("SHA-256：${review.script.sha256}", style = MaterialTheme.typography.bodySmall)
                         Text("脚本内容", style = MaterialTheme.typography.titleSmall)
                         ScriptContent(review.script.source)
@@ -950,8 +1036,9 @@ private fun FlowPilotScreen(
 
     selectedTask?.let { task ->
         val review = state.scriptReview?.takeIf {
-            it.task.id == task.id && it.task.version == task.version
+            it.task.id == task.id
         }
+        val reviewedTask = review?.task ?: task
         AlertDialog(
             onDismissRequest = {
                 selectedTask = null
@@ -961,11 +1048,11 @@ private fun FlowPilotScreen(
             title = { Text("运行前检查脚本") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("${task.name} · 版本 ${task.version}")
-                    Text("来源：${sourceLabel(task.source)}")
-                    if (task.description.isNotBlank()) Text(task.description)
-                    if (task.capabilities.isNotEmpty()) {
-                        Text("声明能力：${task.capabilities.joinToString("、")}")
+                    Text("${reviewedTask.name} · 版本 ${reviewedTask.version}")
+                    Text("来源：${sourceLabel(reviewedTask.source)}")
+                    if (reviewedTask.description.isNotBlank()) Text(reviewedTask.description)
+                    if (reviewedTask.capabilities.isNotEmpty()) {
+                        Text("声明能力：${reviewedTask.capabilities.joinToString("、")}")
                     }
                     if (!accessibilityEnabled) {
                         Text("查看脚本不需要无障碍权限；运行前请先在 Android 系统设置中手动启用 FlowPilot 无障碍服务。")
@@ -975,6 +1062,12 @@ private fun FlowPilotScreen(
                     } else if (review == null) {
                         Text("无法读取并校验脚本内容。请关闭后重试。")
                     } else {
+                        review.cacheNotice?.let { notice ->
+                            Text(notice, color = MaterialTheme.colorScheme.error)
+                        }
+                        if (review.script.isCached) {
+                            Text("本机已校验缓存版本", style = MaterialTheme.typography.bodySmall)
+                        }
                         Text("SHA-256：${review.script.sha256}", style = MaterialTheme.typography.bodySmall)
                         Text("脚本内容", style = MaterialTheme.typography.titleSmall)
                         ScriptContent(review.script.source)
@@ -999,7 +1092,7 @@ private fun FlowPilotScreen(
                         selectedTask = null
                         scriptReviewAttempt = null
                         viewModel.clearScriptReview()
-                        onRunTask(task, null, null)
+                        onRunTask(reviewedTask, null, null)
                     },
                     enabled = canExecuteTaskScript(review != null, confirmScriptRun, accessibilityEnabled),
                 ) {
@@ -1014,6 +1107,59 @@ private fun FlowPilotScreen(
                         viewModel.clearScriptReview()
                     },
                 ) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+
+    if (confirmDeviceUnbind) {
+        AlertDialog(
+            onDismissRequest = { confirmDeviceUnbind = false },
+            title = { Text("解绑此设备？") },
+            text = {
+                Text("解绑后此手机将停止接收远程请求，并从账号设备列表停用。之后可重新绑定。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmDeviceUnbind = false
+                        viewModel.unbindDevice()
+                    },
+                    enabled = !state.loading,
+                ) {
+                    Text("确认解绑")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeviceUnbind = false }) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+
+    val authorization = state.runAuthorizations.firstOrNull { it.id == authorizationToRevoke }
+    if (authorization != null) {
+        AlertDialog(
+            onDismissRequest = { authorizationToRevoke = null },
+            title = { Text("撤销运行预授权？") },
+            text = {
+                Text("${authorization.taskName} · ${authorization.version}\n设备：${authorization.deviceName}")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        authorizationToRevoke = null
+                        viewModel.revokeRunAuthorization(authorization.id)
+                    },
+                    enabled = !state.loading,
+                ) {
+                    Text("确认撤销")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { authorizationToRevoke = null }) {
                     Text("取消")
                 }
             },
