@@ -9,6 +9,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import org.junit.Assert.assertNull
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
@@ -21,6 +22,28 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class PythonRuntimeInstrumentedTest {
+    @Test
+    fun rememberedLoginIsEncryptedStoredAndCanBeCleared() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val store = SessionStore(context)
+        val previous = store.readRememberedLogin()
+        val expected = RememberedLogin(
+            "http://192.168.0.101:8001",
+            "test@example.com",
+            "test-password",
+        )
+        try {
+            store.saveRememberedLogin(expected)
+            assertEquals(expected, store.readRememberedLogin())
+
+            store.clearRememberedLogin()
+            assertNull(store.readRememberedLogin())
+        } finally {
+            if (previous == null) store.clearRememberedLogin()
+            else store.saveRememberedLogin(previous)
+        }
+    }
+
     @Test
     fun embeddedPythonExecutesOnDevice() {
         ensurePythonStarted()

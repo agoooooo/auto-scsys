@@ -16,6 +16,9 @@ internal data class AppUiState(
     val token: String? = null,
     val tokenExpiresAt: Long = 0L,
     val apiBaseUrl: String = defaultApiBaseUrl(isEmulator()),
+    val loginEmail: String = "",
+    val loginPassword: String = "",
+    val rememberLoginInfo: Boolean = true,
     val device: BoundDevice? = null,
     val tasks: List<AvailableTask> = emptyList(),
     val remoteRuns: List<RemoteRun> = emptyList(),
@@ -43,10 +46,11 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
     val state: StateFlow<AppUiState> = _state.asStateFlow()
 
     init {
+        restoreRememberedLogin()
         restoreSession()
     }
 
-    fun login(baseUrl: String, email: String, password: String) {
+    fun login(baseUrl: String, email: String, password: String, rememberLoginInfo: Boolean) {
         if (_state.value.loading) return
         val normalizedUrl = try {
             normalizeApiBaseUrl(baseUrl)
@@ -65,6 +69,13 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                 val login = withContext(Dispatchers.IO) { client.login(email.trim(), password) }
                 if (login.user.role != "user") {
                     throw IllegalArgumentException("Android 客户端仅支持普通用户账号，请使用后台管理员账号管理任务")
+                }
+                if (rememberLoginInfo) {
+                    sessionStore.saveRememberedLogin(
+                        RememberedLogin(normalizedUrl, email.trim(), password),
+                    )
+                } else {
+                    sessionStore.clearRememberedLogin()
                 }
                 val expiresAt = System.currentTimeMillis() / 1000 + login.expiresIn
                 sessionStore.save(
@@ -215,7 +226,19 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
 
     fun logout() {
         sessionStore.clear()
-        _state.value = AppUiState(apiBaseUrl = _state.value.apiBaseUrl)
+        val current = _state.value
+        val remembered = sessionStore.readRememberedLogin()
+        _state.value = AppUiState(
+            apiBaseUrl = remembered?.apiBaseUrl ?: current.apiBaseUrl,
+            loginEmail = remembered?.email.orEmpty(),
+            loginPassword = remembered?.password.orEmpty(),
+            rememberLoginInfo = remembered != null,
+        )
+    }
+
+    fun setRememberLoginInfo(enabled: Boolean) {
+        if (!enabled) sessionStore.clearRememberedLogin()
+        _state.value = _state.value.copy(rememberLoginInfo = enabled)
     }
 
     fun refreshRunStatus() {
@@ -299,11 +322,33 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                 _state.value = _state.value.copy(loading = false)
             } catch (exception: Exception) {
                 sessionStore.clear()
+                val remembered = sessionStore.readRememberedLogin()
                 _state.value = AppUiState(
-                    apiBaseUrl = stored.apiBaseUrl,
+                    apiBaseUrl = remembered?.apiBaseUrl ?: stored.apiBaseUrl,
+                    loginEmail = remembered?.email.orEmpty(),
+                    loginPassword = remembered?.password.orEmpty(),
+                    rememberLoginInfo = remembered != null,
                     error = "登录状态已过期，请重新登录：${exception.message ?: "服务器不可用"}",
                 )
             }
+        }
+    }
+
+    private fun restoreRememberedLogin() {
+        try {
+            val remembered = sessionStore.readRememberedLogin() ?: return
+            normalizeApiBaseUrl(remembered.apiBaseUrl)
+            _state.value = _state.value.copy(
+                apiBaseUrl = remembered.apiBaseUrl,
+                loginEmail = remembered.email,
+                loginPassword = remembered.password,
+                rememberLoginInfo = true,
+            )
+        } catch (exception: Exception) {
+            sessionStore.clearRememberedLogin()
+            _state.value = _state.value.copy(
+                error = "无法安全读取已记住的登录信息：${exception.message ?: "未知错误"}",
+            )
         }
     }
 

@@ -162,6 +162,7 @@ class MainActivity : ComponentActivity() {
                         onOpenAccessibilitySettings = {
                             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                         },
+                        onRememberLoginInfoChanged = flowPilotViewModel::setRememberLoginInfo,
                         onLogout = {
                             RemoteRunMonitorService.stop(this)
                             flowPilotViewModel.logout()
@@ -300,6 +301,7 @@ private fun FlowPilotScreen(
     onClearRemoteTarget: () -> Unit,
     onSetRemoteMonitoring: (Boolean) -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onRememberLoginInfoChanged: (Boolean) -> Unit,
     onLogout: () -> Unit,
     onStopTask: () -> Unit,
 ) {
@@ -307,8 +309,9 @@ private fun FlowPilotScreen(
     val user = state.user
     val device = state.device
     var apiBaseUrl by rememberSaveable { mutableStateOf(state.apiBaseUrl) }
-    var email by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
+    var email by rememberSaveable { mutableStateOf(state.loginEmail) }
+    var password by rememberSaveable { mutableStateOf(state.loginPassword) }
+    var rememberLoginInfo by rememberSaveable { mutableStateOf(state.rememberLoginInfo) }
     var selectedRemoteRun by remember { mutableStateOf<RemoteRun?>(null) }
     var selectedTask by remember { mutableStateOf<AvailableTask?>(null) }
     var scriptReviewAttempt by remember { mutableStateOf<String?>(null) }
@@ -360,11 +363,17 @@ private fun FlowPilotScreen(
                 value = apiBaseUrl,
                 onValueChange = { apiBaseUrl = it },
                 label = { Text("API 地址") },
-                placeholder = { Text(if (apiBaseUrl.isBlank()) "http://<开发机局域网 IP>:8001" else "http://10.0.2.2:8001") },
+                placeholder = {
+                    Text(
+                        if (apiBaseUrl == defaultApiBaseUrl(isEmulator = true)) {
+                            "http://10.0.2.2:8001"
+                        } else {
+                            "http://192.168.0.101:8001"
+                        },
+                    )
+                },
                 supportingText = {
-                    if (apiBaseUrl.isBlank()) {
-                        Text("真机请输入开发机在同一局域网内的 IP 地址和端口")
-                    }
+                    Text("测试服务地址；真机与开发机连接同一局域网即可测试")
                 },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
@@ -384,8 +393,18 @@ private fun FlowPilotScreen(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = rememberLoginInfo,
+                    onCheckedChange = {
+                        rememberLoginInfo = it
+                        onRememberLoginInfoChanged(it)
+                    },
+                )
+                Text("记住登录信息（加密保存账号和密码）")
+            }
             Button(
-                onClick = { viewModel.login(apiBaseUrl, email, password) },
+                onClick = { viewModel.login(apiBaseUrl, email, password, rememberLoginInfo) },
                 enabled = !state.loading && apiBaseUrl.isNotBlank() &&
                     email.isNotBlank() && password.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),

@@ -12,6 +12,12 @@ internal data class StoredSession(
     val deviceId: String?,
 )
 
+internal data class RememberedLogin(
+    val apiBaseUrl: String,
+    val email: String,
+    val password: String,
+)
+
 @Suppress("DEPRECATION")
 internal class SessionStore(context: Context) {
     private val preferences = EncryptedSharedPreferences.create(
@@ -64,6 +70,29 @@ internal class SessionStore(context: Context) {
             .apply()
     }
 
+    fun readRememberedLogin(): RememberedLogin? {
+        val email = preferences.getString(KEY_LOGIN_EMAIL, null) ?: return null
+        val password = preferences.getString(KEY_LOGIN_PASSWORD, null) ?: return null
+        val apiBaseUrl = preferences.getString(KEY_LOGIN_API_URL, null) ?: return null
+        return RememberedLogin(apiBaseUrl, email, password)
+    }
+
+    fun saveRememberedLogin(login: RememberedLogin) {
+        preferences.edit()
+            .putString(KEY_LOGIN_API_URL, login.apiBaseUrl)
+            .putString(KEY_LOGIN_EMAIL, login.email)
+            .putString(KEY_LOGIN_PASSWORD, login.password)
+            .apply()
+    }
+
+    fun clearRememberedLogin() {
+        preferences.edit()
+            .remove(KEY_LOGIN_API_URL)
+            .remove(KEY_LOGIN_EMAIL)
+            .remove(KEY_LOGIN_PASSWORD)
+            .apply()
+    }
+
     fun clear() {
         preferences.edit()
             .remove(KEY_TOKEN)
@@ -85,5 +114,8 @@ internal class SessionStore(context: Context) {
         const val KEY_USER_NAME = "user_name"
         const val KEY_USER_EMAIL = "user_email"
         const val KEY_USER_ROLE = "user_role"
+        const val KEY_LOGIN_API_URL = "login_api_url"
+        const val KEY_LOGIN_EMAIL = "login_email"
+        const val KEY_LOGIN_PASSWORD = "login_password"
     }
 }
