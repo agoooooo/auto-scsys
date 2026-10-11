@@ -92,7 +92,7 @@ def test_login_throttles_failed_credentials_per_email_and_source_and_recovers(tm
             assert same_email_other_source.status_code == 401
 
         with sqlite3.connect(app.state.db_path) as db:
-            assert db.execute("SELECT COUNT(*) FROM auth_login_attempts").fetchone()[0] == 3
+            assert db.execute("SELECT COUNT(*) FROM auth_login_attempts").fetchone()[0] == 5
             db.execute(
                 "UPDATE auth_login_attempts SET window_started=?",
                 (int(time.time()) - 900,),
@@ -104,7 +104,22 @@ def test_login_throttles_failed_credentials_per_email_and_source_and_recovers(tm
         )
         assert recovered.status_code == 200
         with sqlite3.connect(app.state.db_path) as db:
-            assert db.execute("SELECT COUNT(*) FROM auth_login_attempts").fetchone()[0] == 2
+            assert db.execute("SELECT COUNT(*) FROM auth_login_attempts").fetchone()[0] == 4
+
+
+def test_login_source_limit_cannot_be_evaded_by_rotating_emails(client):
+    for index in range(30):
+        response = client.post(
+            "/auth/login",
+            json={"email": f"unknown-{index}@example.com", "password": "wrong"},
+        )
+        assert response.status_code == 401
+
+    limited = client.post(
+        "/auth/login",
+        json={"email": "another-unknown@example.com", "password": "wrong"},
+    )
+    assert limited.status_code == 429
 
 
 def test_successful_login_clears_prior_failures(client):

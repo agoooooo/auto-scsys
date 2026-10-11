@@ -28,6 +28,7 @@ LOGGER = logging.getLogger(__name__)
 TOKEN_TTL_SECONDS = 60 * 60
 LOGIN_FAILURE_LIMIT = 5
 LOGIN_FAILURE_WINDOW_SECONDS = 15 * 60
+LOGIN_SOURCE_FAILURE_LIMIT = 30
 REMOTE_REQUEST_TTL_SECONDS = 15 * 60
 PREAUTHORIZATION_TTL_SECONDS = 30 * 24 * 60 * 60
 DEVICE_OFFLINE_AFTER_SECONDS = 2 * 60
@@ -631,56 +632,70 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     def login(body: LoginInput, request: Request, db: sqlite3.Connection = Depends(connection)):
         email = body.email.strip().lower()
         source = request.client.host if request.client else "unknown"
-        attempt_key = hmac.new(secret, f"{source}\0{email}".encode(), hashlib.sha256).hexdigest()
+        source_key = hmac.new(secret, f"login-source\0{source}".encode(), hashlib.sha256).hexdigest()
+        account_key = hmac.new(
+            secret,
+            f"login-account\0{source}\0{email}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
         now = int(time.time())
-        db.execute("BEGIN IMMEDIATE")
-        attempt = db.execute(
-            "SELECT window_started,failure_count FROM auth_login_attempts WHERE attempt_key=?",
-            (attempt_key,),
-        ).fetchone()
-        if (
-            attempt
-            and now - attempt["window_started"] < LOGIN_FAILURE_WINDOW_SECONDS
-            and attempt["failure_count"] >= LOGIN_FAILURE_LIMIT
-        ):
-            retry_after = max(1, attempt["window_started"] + LOGIN_FAILURE_WINDOW_SECONDS - now)
-            raise HTTPException(
-                status_code=429,
-                detail="登录尝试过多，请稍后再试",
-                headers={"Retry-After": str(retry_after)},
-            )
+        attempt_keys = (account_key, source_key)
 
-        db.execute(
-            """INSERT INTO auth_login_attempts(attempt_key,window_started,failure_count)
-               VALUES(?,?,1)
-               ON CONFLICT(attempt_key) DO UPDATE SET
-                 window_started=CASE
-                   WHEN auth_login_attempts.window_started<=? THEN excluded.window_started
-                   ELSE auth_login_attempts.window_started
-                 END,
-                 failure_count=CASE
-                   WHEN auth_login_attempts.window_started<=? THEN 1
-                   ELSE auth_login_attempts.failure_count+1
-                 END""",
-            (
-                attempt_key,
-                now,
-                now - LOGIN_FAILURE_WINDOW_SECONDS,
-                now - LOGIN_FAILURE_WINDOW_SECONDS,
-            ),
-        )
-        db.execute(
-            "DELETE FROM auth_login_attempts WHERE window_started<=?",
-            (now - LOGIN_FAILURE_WINDOW_SECONDS * 2,),
-        )
-        db.commit()
+        def enforce_attempt_limits() -> None:
+            for attempt_key, failure_limit in zip(
+                attempt_keys,
+                (LOGIN_FAILURE_LIMIT, LOGIN_SOURCE_FAILURE_LIMIT),
+            ):
+                attempt = db.execute(
+                    "SELECT window_started,failure_count FROM auth_login_attempts WHERE attempt_key=?",
+                    (attempt_key,),
+                ).fetchone()
+                if (
+                    attempt
+                    and now - attempt["window_started"] < LOGIN_FAILURE_WINDOW_SECONDS
+                    and attempt["failure_count"] >= failure_limit
+                ):
+                    retry_after = max(1, attempt["window_started"] + LOGIN_FAILURE_WINDOW_SECONDS - now)
+                    raise HTTPException(
+                        status_code=429,
+                        detail="登录尝试过多，请稍后再试",
+                        headers={"Retry-After": str(retry_after)},
+                    )
 
+        enforce_attempt_limits()
         user = db.execute("SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
         if not user or user["status"] != "active" or not hmac.compare_digest(
             _password_hash(body.password, user["password_salt"]), user["password_hash"]
         ):
+            db.execute("BEGIN IMMEDIATE")
+            enforce_attempt_limits()
+            for attempt_key in attempt_keys:
+                db.execute(
+                    """INSERT INTO auth_login_attempts(attempt_key,window_started,failure_count)
+                       VALUES(?,?,1)
+                       ON CONFLICT(attempt_key) DO UPDATE SET
+                         window_started=CASE
+                           WHEN auth_login_attempts.window_started<=? THEN excluded.window_started
+                           ELSE auth_login_attempts.window_started
+                         END,
+                         failure_count=CASE
+                           WHEN auth_login_attempts.window_started<=? THEN 1
+                           ELSE auth_login_attempts.failure_count+1
+                         END""",
+                    (
+                        attempt_key,
+                        now,
+                        now - LOGIN_FAILURE_WINDOW_SECONDS,
+                        now - LOGIN_FAILURE_WINDOW_SECONDS,
+                    ),
+                )
+            db.execute(
+                "DELETE FROM auth_login_attempts WHERE window_started<=?",
+                (now - LOGIN_FAILURE_WINDOW_SECONDS * 2,),
+            )
+            db.commit()
             raise HTTPException(status_code=401, detail="邮箱或密码错误")
-        db.execute("DELETE FROM auth_login_attempts WHERE attempt_key=?", (attempt_key,))
+        db.execute("DELETE FROM auth_login_attempts WHERE attempt_key=?", (account_key,))
         token = _token_encode({"sub": user["id"], "exp": int(time.time()) + TOKEN_TTL_SECONDS}, secret)
         return {
             "access_token": token,
