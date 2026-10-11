@@ -496,8 +496,7 @@ private fun FlowPilotScreen(
                         state.tasks.forEach { task ->
                             TaskCard(
                                 task = task,
-                                canRun = accessibilityEnabled && device.status != "disabled" &&
-                                    state.runStatus?.status !in setOf("running", "awaiting_permission"),
+                                canInspectScript = canInspectTaskScript(device.status, state.runStatus?.status),
                                 onRun = {
                                     selectedTask = task
                                     confirmScriptRun = false
@@ -699,6 +698,9 @@ private fun FlowPilotScreen(
                     if (task.capabilities.isNotEmpty()) {
                         Text("声明能力：${task.capabilities.joinToString("、")}")
                     }
+                    if (!accessibilityEnabled) {
+                        Text("查看脚本不需要无障碍权限；运行前请先在 Android 系统设置中手动启用 FlowPilot 无障碍服务。")
+                    }
                     if (state.loading && review == null) {
                         CircularProgressIndicator()
                     } else if (review == null) {
@@ -730,7 +732,7 @@ private fun FlowPilotScreen(
                         viewModel.clearScriptReview()
                         onRunTask(task, null, null)
                     },
-                    enabled = review != null && confirmScriptRun && accessibilityEnabled,
+                    enabled = canExecuteTaskScript(review != null, confirmScriptRun, accessibilityEnabled),
                 ) {
                     Text("授权并运行")
                 }
@@ -773,7 +775,7 @@ private fun ScriptContent(source: String) {
 }
 
 @Composable
-private fun TaskCard(task: AvailableTask, canRun: Boolean, onRun: () -> Unit) {
+private fun TaskCard(task: AvailableTask, canInspectScript: Boolean, onRun: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -787,9 +789,9 @@ private fun TaskCard(task: AvailableTask, canRun: Boolean, onRun: () -> Unit) {
             }
             Button(
                 onClick = onRun,
-                enabled = canRun && task.version.isNotBlank(),
+                enabled = canInspectScript && task.version.isNotBlank(),
             ) {
-                Text("查看脚本并运行")
+                Text("查看脚本")
             }
         }
     }
