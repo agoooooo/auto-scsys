@@ -30,6 +30,8 @@ def test_login_roles_and_disabled_accounts(client):
     user = login(client)
     assert client.get("/users", headers=auth(user)).status_code == 403
     assert client.get("/users", headers=auth(admin)).status_code == 200
+    assert client.get("/admin/audit", headers=auth(user)).status_code == 403
+    assert client.get("/admin/audit", headers=auth(admin)).status_code == 200
     assert client.get("/devices").status_code == 401
     refreshed = client.post("/auth/refresh", headers=auth(user))
     assert refreshed.status_code == 200
@@ -37,6 +39,22 @@ def test_login_roles_and_disabled_accounts(client):
 
     client.patch("/users/u-1001", headers=auth(admin), json={"status": "disabled"})
     assert client.get("/me", headers=auth(user)).status_code == 401
+
+
+def test_admin_audit_contains_key_actions_without_sensitive_account_data(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    created = client.post(
+        "/users",
+        headers=auth(admin),
+        json={"name": "审计用户", "email": "audit@example.com", "password": "audit-password"},
+    )
+    assert created.status_code == 201
+    events = client.get("/admin/audit", headers=auth(admin)).json()
+    event = next(item for item in events if item["resource_id"] == created.json()["id"])
+    assert event["action"] == "user.created"
+    assert event["actor"] == "林管理员"
+    assert set(event) == {"id", "actor_id", "actor", "action", "resource_type", "resource_id", "created_at"}
+    assert all("password" not in key for item in events for key in item)
 
 
 def test_user_devices_and_task_access_are_scoped(client):

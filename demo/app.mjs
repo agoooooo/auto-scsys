@@ -29,6 +29,8 @@ let phoneTab = "home";
 let currentPhoneDeviceId = "d-001";
 let userQuery = "";
 let userFilter = "all";
+let auditEvents = [];
+let auditLoading = false;
 
 const workspace = document.querySelector("#workspace");
 const appShell = document.querySelector("#app-shell");
@@ -43,6 +45,38 @@ const pageNames = {
   devices: "设备管理",
   tasks: "自动化任务",
   activity: "运行记录",
+  audit: "操作审计",
+};
+
+const auditActionLabels = {
+  "user.created": "创建用户",
+  "user.active": "启用用户",
+  "user.disabled": "停用用户",
+  "device.bound": "绑定设备",
+  "device.unbound": "解绑设备",
+  "device.status_changed": "修改设备状态",
+  "task.created": "创建任务",
+  "task.granted": "授予任务访问权",
+  "task.grant_revoked": "撤销任务访问权",
+  "task.version_published": "发布任务版本",
+  "task.paused": "暂停任务",
+  "task.published": "恢复任务发布",
+  "remote_run.requested": "请求远程运行",
+  "remote_run.rejected": "拒绝远程运行",
+  "remote_run.approved": "确认远程运行",
+  "run.local_started": "启动本地运行",
+  "run_authorization.created": "创建运行预授权",
+  "run_authorization.revoked": "撤销运行预授权",
+};
+
+const auditResourceLabels = {
+  user: "用户",
+  device: "设备",
+  task: "任务",
+  task_version: "任务版本",
+  remote_run: "远程运行请求",
+  run: "运行记录",
+  run_authorization: "运行预授权",
 };
 
 function escapeHtml(value) {
@@ -225,6 +259,28 @@ function renderActivity() {
       <div class="activity-list">${activityRows(state.activity)}</div></section>`;
 }
 
+function renderAudit() {
+  if (!session || session.user.role !== "admin") {
+    return `${pageHeading("操作审计", "查看需要连接管理员 API 会话的关键操作记录。")}
+      <section class="panel"><div class="empty-state">请以管理员账号登录后查看审计记录。</div></section>`;
+  }
+  const actions = `<button class="secondary-button" data-action="refresh-audit" ${auditLoading ? "disabled" : ""}>↻ 刷新记录</button>`;
+  const rows = auditEvents.length
+    ? auditEvents.map((item) => `<tr>
+      <td>${escapeHtml(new Date(item.created_at).toLocaleString("zh-CN"))}</td>
+      <td>${escapeHtml(item.actor)}</td>
+      <td>${escapeHtml(auditActionLabels[item.action] ?? item.action)}</td>
+      <td>${escapeHtml(auditResourceLabels[item.resource_type] ?? item.resource_type)}</td>
+      <td class="audit-resource-id">${escapeHtml(item.resource_id)}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="5"><div class="empty-state">${auditLoading ? "正在加载审计记录…" : "暂无操作审计记录"}</div></td></tr>`;
+  return `${pageHeading("操作审计", "记录账号、设备、任务和授权等关键管理操作。", actions)}
+    <section class="panel"><div class="table-wrap"><table class="data-table audit-table">
+      <thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>资源类型</th><th>资源 ID</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div><div class="table-footer"><span>最多显示最近 500 条关键操作</span><span>${auditEvents.length} 条记录</span></div></section>`;
+}
+
 function phoneTaskCard(task) {
   const canRun = !session || session.user.role === "user";
   const grants = state.runAuthorizations.filter((item) => item.taskId === task.id && item.deviceId === currentPhoneDeviceId && item.expiresAt > Date.now());
@@ -298,7 +354,9 @@ function render() {
   loginGate.hidden = true;
   state = expireRemoteRuns(state);
   const userNav = document.querySelector('[data-page="users"]');
+  const auditNav = document.querySelector('[data-page="audit"]');
   if (userNav) userNav.hidden = Boolean(session && session.user.role !== "admin");
+  if (auditNav) auditNav.hidden = !session || session.user.role !== "admin";
   const sessionName = document.querySelector(".profile-copy strong");
   const sessionRole = document.querySelector(".profile-copy small");
   if (sessionName) sessionName.textContent = session?.user.name ?? "演示管理员";
@@ -317,6 +375,7 @@ function render() {
       devices: renderDevices,
       tasks: renderTasks,
       activity: renderActivity,
+      audit: renderAudit,
     }[currentPage]());
 }
 
@@ -366,7 +425,30 @@ function signOut() {
   state = structuredClone(initialDemoState);
   currentView = "admin";
   currentPage = "overview";
+  auditEvents = [];
+  auditLoading = false;
   render();
+}
+
+async function refreshAudit() {
+  if (!session || session.user.role !== "admin") {
+    auditEvents = [];
+    auditLoading = false;
+    render();
+    return;
+  }
+  const token = session.token;
+  auditLoading = true;
+  render();
+  try {
+    const events = await apiRequest(session, "/admin/audit");
+    if (session?.token === token) auditEvents = events;
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    auditLoading = false;
+    render();
+  }
 }
 
 function closeModal() {
@@ -546,13 +628,15 @@ document.addEventListener("click", async (event) => {
     currentView = "admin";
     document.querySelector("#sidebar").classList.remove("open");
     render();
+    if (currentPage === "audit") await refreshAudit();
     return;
   }
 
   const actionButton = event.target.closest("[data-action]");
   if (!actionButton) return;
   const { action, id } = actionButton.dataset;
-  if (action === "new-user") showUserModal();
+  if (action === "refresh-audit") await refreshAudit();
+  else if (action === "new-user") showUserModal();
   else if (action === "new-task") showNewTaskModal();
   else if (action === "publish-task") showPublishModal();
   else if (action === "switch-version") showVersionModal(id);
