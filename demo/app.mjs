@@ -1,8 +1,13 @@
 import {
   addUser,
+  createRemoteRun,
+  expireRemoteRuns,
+  finishRun,
   initialDemoState,
   publishTaskVersion,
-  runTask,
+  resolveRemoteRun,
+  revokeRunAuthorization,
+  startLocalRun,
   toggleDevice,
   toggleUser,
 } from "./state.mjs";
@@ -11,6 +16,7 @@ let state = structuredClone(initialDemoState);
 let currentView = "admin";
 let currentPage = "overview";
 let phoneTab = "home";
+let currentPhoneDeviceId = "d-001";
 let userQuery = "";
 let userFilter = "all";
 
@@ -49,6 +55,11 @@ function statusPill(status) {
     warning: "需关注",
     failure: "失败",
     release: "版本发布",
+    running: "运行中",
+    pending: "等待确认",
+    rejected: "已拒绝",
+    expired: "已过期",
+    stopped: "已停止",
   };
   return `<span class="status-pill ${escapeHtml(status)}">${labels[status] ?? escapeHtml(status)}</span>`;
 }
@@ -72,7 +83,7 @@ function taskRows() {
 function activityRows(items = state.activity.slice(0, 4)) {
   if (!items.length) return `<div class="empty-state">暂无运行记录</div>`;
   return items.map((item) => `<div class="activity-row">
-    <div class="activity-icon ${escapeHtml(item.kind)}">${item.kind === "warning" ? "!" : item.kind === "publish" ? "↑" : "✓"}</div>
+    <div class="activity-icon ${escapeHtml(item.kind)}">${item.kind === "warning" ? "!" : item.kind === "publish" ? "↑" : item.kind === "success" ? "✓" : "■"}</div>
     <div class="activity-copy"><strong>${escapeHtml(item.task)} · ${escapeHtml(item.user)}</strong><p>${escapeHtml(item.detail)} · ${escapeHtml(item.device)}</p></div>
     <span class="activity-time">${escapeHtml(item.time)}</span>
   </div>`).join("");
@@ -185,8 +196,8 @@ function renderTasks() {
     <div class="toolbar"><div class="eyebrow" style="margin:0">所有任务 · ${state.tasks.length}</div><div class="toolbar-right"><button class="secondary-button" data-action="task-info">ⓘ 版本说明</button></div></div>
     <div class="task-grid">${state.tasks.map((task, index) => `<article class="task-card">
       <div class="task-card-top"><div class="task-symbol ${index % 2 ? "mint" : ""}">${index % 2 ? "◌" : "⌕"}</div><div class="task-main"><h3>${escapeHtml(task.name)}</h3><small>${escapeHtml(task.category)}</small></div>${statusPill(task.status)}</div>
-      <p>${escapeHtml(task.description)}</p><div class="task-card-meta"><span>当前版本<strong>${escapeHtml(task.activeVersion)}</strong></span><span>已分配设备<strong>${task.devices} 台设备</strong></span><span>最近运行<strong>${escapeHtml(task.lastRun)}</strong></span><span>成功率<strong>${task.successRate ? `${task.successRate}%` : "—"}</strong></span></div>
-      <div class="task-card-footer"><button class="text-button" data-action="switch-version" data-id="${escapeHtml(task.id)}">版本管理 ⌄</button><button class="run-button" data-action="run-task" data-id="${escapeHtml(task.id)}" ${task.status !== "published" ? "disabled" : ""}>▶　模拟运行</button></div>
+      <p>${escapeHtml(task.description)}</p>${task.scriptFile ? `<div class="file-meta">${escapeHtml(task.scriptFile.name)} · ${Math.ceil(task.scriptFile.size / 1024)} KB · SHA-256 ${escapeHtml(task.scriptFile.sha256.slice(0, 12))}…</div>` : ""}<div class="task-card-meta"><span>当前版本<strong>${escapeHtml(task.activeVersion)}</strong></span><span>已分配设备<strong>${task.devices} 台设备</strong></span><span>最近运行<strong>${escapeHtml(task.lastRun)}</strong></span><span>成功率<strong>${task.successRate ? `${task.successRate}%` : "—"}</strong></span></div>
+      <div class="task-card-footer"><button class="text-button" data-action="switch-version" data-id="${escapeHtml(task.id)}">版本管理 ⌄</button><button class="run-button" data-action="remote-run" data-id="${escapeHtml(task.id)}" ${task.status !== "published" ? "disabled" : ""}>▶　请求远程运行</button></div>
     </article>`).join("")}</div>`;
 }
 
@@ -203,16 +214,20 @@ function renderActivity() {
 }
 
 function phoneTaskCard(task) {
-  const result = state.activity.find((item) => item.task === task.name && item.kind === "success" && item.time === "刚刚");
+  const grants = state.runAuthorizations.filter((item) => item.taskId === task.id && item.deviceId === currentPhoneDeviceId && item.expiresAt > Date.now());
+  const activeRun = state.runs.find((item) => item.taskId === task.id && item.deviceId === currentPhoneDeviceId && item.status === "running");
   return `<article class="phone-task"><div class="phone-task-top"><div class="task-symbol">⌕</div><div style="flex:1"><strong>${escapeHtml(task.name)}</strong><small>${escapeHtml(task.category)} · ${escapeHtml(task.activeVersion)}</small></div>${statusPill(task.status)}</div>
-    <p>${escapeHtml(task.description)}</p><button class="phone-run" data-action="run-task" data-id="${escapeHtml(task.id)}" ${task.status !== "published" ? "disabled" : ""}>▶　运行任务</button>
-    ${result ? `<div class="phone-result">✓ ${escapeHtml(result.detail)}</div>` : ""}</article>`;
+    <p>${escapeHtml(task.description)}</p>
+    ${activeRun ? `<div class="run-live"><span class="status-pill running">设备上运行中 · ${escapeHtml(activeRun.version)}</span><button class="phone-run" data-action="finish-run" data-id="${escapeHtml(activeRun.id)}">模拟完成 OCR</button><button class="secondary-button" data-action="stop-run" data-id="${escapeHtml(activeRun.id)}">停止任务</button></div>` : `<button class="phone-run" data-action="local-run" data-id="${escapeHtml(task.id)}" ${task.status !== "published" ? "disabled" : ""}>▶　查看说明并运行</button>`}
+    ${grants.map((grant) => `<div class="phone-result">已预授权此设备运行 ${escapeHtml(grant.version)} · ${new Date(grant.expiresAt).toLocaleDateString("zh-CN")} 到期</div>`).join("")}</article>`;
 }
 
 function renderPhoneContent() {
   if (phoneTab === "devices") {
     const myDevices = state.devices.filter((device) => device.userId === "u-1001");
+    const grants = state.runAuthorizations.filter((item) => myDevices.some((device) => device.id === item.deviceId) && item.expiresAt > Date.now());
     return `<div class="phone-section-title">我的设备 <small>${myDevices.length} 台已绑定</small></div><div class="phone-devices">${myDevices.map((device) => `<div class="phone-device"><div class="device-avatar ${escapeHtml(device.color)}">${escapeHtml(device.initial)}</div><span><strong>${escapeHtml(device.name)}</strong><small>${escapeHtml(device.model)}</small></span>${statusPill(device.status)}</div>`).join("")}</div>
+      ${grants.length ? `<div class="phone-section-title">远程运行预授权 <small>仅限指定设备和版本</small></div><div class="phone-devices">${grants.map((grant) => `<div class="phone-device"><span><strong>${escapeHtml(state.tasks.find((task) => task.id === grant.taskId)?.name ?? "已删除任务")} · ${escapeHtml(grant.version)}</strong><small>${escapeHtml(state.devices.find((device) => device.id === grant.deviceId)?.name ?? "")} · 30 天内有效</small></span><button class="text-button" data-action="revoke-grant" data-id="${escapeHtml(grant.id)}">撤销</button></div>`).join("")}</div>` : ""}
       <button class="secondary-button" style="width:100%;margin-top:12px" data-action="phone-bind-device">＋ 绑定新设备</button>`;
   }
   if (phoneTab === "activity") {
@@ -220,9 +235,18 @@ function renderPhoneContent() {
     return `<div class="phone-section-title">最近运行 <small>查看全部</small></div><div class="phone-devices">${recent.length ? recent.map((item) => `<div class="phone-device"><div class="activity-icon ${escapeHtml(item.kind)}">${item.kind === "warning" ? "!" : "✓"}</div><span><strong>${escapeHtml(item.task)}</strong><small>${escapeHtml(item.detail)}</small></span><small style="margin-left:auto;color:#a0a7b4;font-size:7px">${escapeHtml(item.time)}</small></div>`).join("") : `<div class="empty-state">暂无运行记录</div>`}</div>`;
   }
   const tasks = state.tasks.filter((task) => task.status === "published");
-  return `<div class="phone-section-title">可用任务 <small>${tasks.length} 个</small></div>${tasks.length ? tasks.map(phoneTaskCard).join("") : `<div class="empty-state">暂时没有可用任务</div>`}
-    <div class="phone-section-title">最近运行 <small data-tab="activity">全部记录 →</small></div>
-    <div class="phone-device"><div class="activity-icon">✓</div><span><strong>订单状态检查</strong><small>今天 09:42 · 运行成功</small></span></div>`;
+  const myDevices = state.devices.filter((device) => device.userId === "u-1001");
+  const pending = state.remoteRuns.filter((request) => request.deviceId === currentPhoneDeviceId && ["pending", "expired"].includes(request.status));
+  const running = state.runs.filter((run) => run.deviceId === currentPhoneDeviceId && run.status === "running");
+  return `<div class="phone-device-picker"><label for="phone-device-select">当前设备</label><select id="phone-device-select">${myDevices.map((device) => `<option value="${escapeHtml(device.id)}" ${device.id === currentPhoneDeviceId ? "selected" : ""}>${escapeHtml(device.name)} · ${device.status === "online" ? "在线" : "离线"}</option>`).join("")}</select></div>
+    ${pending.length ? `<div class="phone-section-title">远程运行请求 <small>需要你的确认</small></div>${pending.map((request) => {
+    const task = state.tasks.find((item) => item.id === request.taskId);
+    return `<article class="request-card"><strong>${escapeHtml(request.task)} ${request.status === "expired" ? statusPill("expired") : ""}</strong><small>${escapeHtml(request.version)} · ${escapeHtml(request.requestedBy)} 发起 · ${escapeHtml(request.device)}</small><p>脚本来源：${escapeHtml(task?.source ?? "未知")}<br>能力：${(task?.capabilities ?? []).map(escapeHtml).join("、")}</p>${request.status === "pending" ? `<label class="grant-choice"><input type="checkbox" data-grant-request="${escapeHtml(request.id)}" /> 预授权此脚本版本与设备 30 天</label><div class="request-actions"><button class="secondary-button" data-action="reject-request" data-id="${escapeHtml(request.id)}">拒绝</button><button class="primary-button" data-action="approve-request" data-id="${escapeHtml(request.id)}">确认并运行</button></div>` : `<small>请求已超过有效时间，未启动。</small>`}</article>`;
+  }).join("")}` : ""}
+    ${running.length ? `<div class="phone-section-title">前台运行 <small>可随时停止</small></div>${running.map((run) => `<div class="phone-device"><div class="activity-icon">▶</div><span><strong>${escapeHtml(run.task)} · ${escapeHtml(run.version)}</strong><small>${escapeHtml(run.device)} · 持续运行中</small></span><button class="text-button" data-action="stop-run" data-id="${escapeHtml(run.id)}">停止</button></div>`).join("")}` : ""}
+    <div class="phone-section-title">可用任务 <small>${tasks.length} 个</small></div>${tasks.length ? tasks.map(phoneTaskCard).join("") : `<div class="empty-state">暂时没有可用任务</div>`}
+    <div class="phone-section-title">最近运行 <small data-phone-tab="activity">全部记录 →</small></div>
+    ${state.runs.filter((run) => run.deviceId === currentPhoneDeviceId && run.status !== "running").slice(0, 2).map((run) => `<div class="phone-device"><div class="activity-icon ${run.status === "success" ? "" : "warning"}">${run.status === "success" ? "✓" : "!"}</div><span><strong>${escapeHtml(run.task)} · ${statusPill(run.status)}</strong><small>${escapeHtml(run.result ?? "")}</small></span></div>`).join("") || `<div class="empty-state">暂无运行记录</div>`}`;
 }
 
 function renderPhone() {
@@ -248,6 +272,7 @@ function renderPhone() {
 }
 
 function render() {
+  state = expireRemoteRuns(state);
   document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.page === currentPage));
   document.querySelectorAll(".view-option").forEach((item) => item.classList.toggle("selected", item.dataset.view === currentView));
   breadcrumb.textContent = currentView === "mobile" ? "手机 App 预览" : pageNames[currentPage];
@@ -291,14 +316,50 @@ function showUserModal() {
   modalRoot.querySelector("#user-name").focus();
 }
 
+function showRemoteRunModal(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  const devices = state.devices.filter((device) => device.userId === "u-1001" && device.status === "online");
+  if (!devices.length) {
+    showToast("当前没有在线设备可接收请求");
+    return;
+  }
+  modalRoot.innerHTML = `<div class="modal-root-inner"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-header"><div><h2 id="modal-title">请求远程运行</h2><p>${escapeHtml(task.name)} · ${escapeHtml(task.activeVersion)}</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
+    <form id="remote-run-form" data-task-id="${escapeHtml(task.id)}"><div class="modal-body">
+      <div class="form-field"><label for="target-device">目标设备</label><select id="target-device" name="deviceId">${devices.map((device) => `<option value="${escapeHtml(device.id)}">${escapeHtml(device.userName)} · ${escapeHtml(device.name)}</option>`).join("")}</select></div>
+      <div class="permission-summary"><strong>脚本来源：${escapeHtml(task.source ?? "用户脚本")}</strong><span>运行请求将在设备端等待用户确认，不会静默执行。</span><span>所需能力：${(task.capabilities ?? []).map(escapeHtml).join("、")}</span></div>
+      <div class="form-hint">请求 15 分钟后过期。发布或请求不会自动运行脚本。</div>
+    </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit">发送请求</button></div></form>
+  </section></div>`;
+  modalRoot.querySelector(".modal-root-inner").addEventListener("click", (event) => {
+    if (event.target.classList.contains("modal-root-inner")) closeModal();
+  });
+}
+
+function showConsentModal(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  modalRoot.innerHTML = `<div class="modal-root-inner"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-header"><div><h2 id="modal-title">运行前确认</h2><p>${escapeHtml(task.name)} · ${escapeHtml(task.activeVersion)}</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
+    <form id="local-run-form" data-task-id="${escapeHtml(task.id)}"><div class="modal-body">
+      <div class="permission-summary"><strong>来源：${escapeHtml(task.source ?? "用户脚本")}</strong><span>版本：${escapeHtml(task.activeVersion)}</span><span>能力说明：${(task.capabilities ?? []).map(escapeHtml).join("、")}</span><span>演示 OCR 场景会读取屏幕内容；真实 App 必须另行取得 Android 系统授权。</span></div>
+      <label class="grant-choice"><input type="checkbox" name="preauthorize" /> 在此设备上预授权此明确版本 30 天（可撤销；不会授权新版本）</label>
+      <div class="form-hint">脚本在 App 进程内运行并非安全沙箱。确认运行不代表脚本已被隔离或证明安全。</div>
+    </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit">同意并运行</button></div></form>
+  </section></div>`;
+  modalRoot.querySelector(".modal-root-inner").addEventListener("click", (event) => {
+    if (event.target.classList.contains("modal-root-inner")) closeModal();
+  });
+}
+
 function showPublishModal(taskId = state.tasks[0]?.id) {
   const task = state.tasks.find((item) => item.id === taskId) ?? state.tasks[0];
   modalRoot.innerHTML = `<div class="modal-root-inner"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-header"><div><h2 id="modal-title">发布任务版本</h2><p>${escapeHtml(task.name)} · 当前版本 ${escapeHtml(task.activeVersion)}</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
     <form id="publish-form" data-task-id="${escapeHtml(task.id)}"><div class="modal-body">
       <div class="form-field"><label for="task-version">新版本号</label><input id="task-version" name="version" required pattern="v\\d+\\.\\d+\\.\\d+" value="${suggestVersion(task.activeVersion)}" /><span class="form-hint">使用语义化版本格式，例如 v1.5.0。</span></div>
+      <div class="form-field"><label for="task-script">Python 脚本文件</label><input id="task-script" name="script" type="file" accept=".py,text/x-python" required /><span class="form-hint">单个 .py 文件，最大 2 MB；仅在浏览器中校验 SHA-256。</span></div>
       <div class="form-field"><label for="release-notes">更新说明</label><input id="release-notes" name="notes" placeholder="简要说明本次更新内容" /></div>
-      <div class="form-hint">演示模式下不会上传或执行真实 Python 代码包。</div>
+      <div class="form-hint">此 Demo 不会将文件上传或执行；发布结果仅保留文件名、大小和哈希元数据。</div>
     </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit">确认发布</button></div></form>
   </section></div>`;
   modalRoot.querySelector(".modal-root-inner").addEventListener("click", (event) => {
@@ -365,6 +426,8 @@ document.addEventListener("click", (event) => {
   if (action === "new-user") showUserModal();
   else if (action === "publish-task") showPublishModal();
   else if (action === "switch-version") showVersionModal(id);
+  else if (action === "remote-run") showRemoteRunModal(id);
+  else if (action === "local-run") showConsentModal(id);
   else if (action === "close-modal") closeModal();
   else if (action === "go-tasks") { currentPage = "tasks"; currentView = "admin"; render(); }
   else if (action === "toggle-user") {
@@ -375,21 +438,37 @@ document.addEventListener("click", (event) => {
     state = toggleDevice(state, id);
     render();
     showToast("设备状态已更新");
-  } else if (action === "run-task") {
+  } else if (action === "approve-request" || action === "reject-request") {
     try {
-      state = runTask(state, id);
+      const checkbox = workspace.querySelector(`[data-grant-request="${CSS.escape(id)}"]`);
+      state = resolveRemoteRun(state, id, {
+        approved: action === "approve-request",
+        preauthorize: checkbox?.checked ?? false,
+      });
       render();
-      showToast("任务演示运行成功");
+      showToast(action === "approve-request" ? "已确认；任务正在设备上可见运行" : "已拒绝远程运行请求");
     } catch (error) {
       showToast(error.message);
     }
+  } else if (action === "finish-run" || action === "stop-run") {
+    try {
+      state = finishRun(state, id, action === "finish-run" ? "success" : "stopped");
+      render();
+      showToast(action === "finish-run" ? "演示运行完成，结果已记录" : "任务已停止");
+    } catch (error) {
+      showToast(error.message);
+    }
+  } else if (action === "revoke-grant") {
+    state = revokeRunAuthorization(state, id);
+    render();
+    showToast("预授权已撤销");
   } else if (action === "sync-devices") showToast("设备状态已同步（演示）");
   else if (action === "phone-bind-device") showToast("请在真实 App 中扫描绑定码（演示）");
   else if (action === "task-info") showToast("任务版本会经过校验后下发至授权设备（演示）");
   else if (action === "export-users" || action === "export-activity") showToast("演示数据暂不支持下载");
 });
 
-document.addEventListener("submit", (event) => {
+document.addEventListener("submit", async (event) => {
   if (event.target.id === "user-form") {
     event.preventDefault();
     const formData = new FormData(event.target);
@@ -409,14 +488,55 @@ document.addEventListener("submit", (event) => {
     } catch (error) {
       showToast(error.message);
     }
+  } else if (event.target.id === "remote-run-form") {
+    event.preventDefault();
+    try {
+      state = createRemoteRun(state, {
+        taskId: event.target.dataset.taskId,
+        deviceId: new FormData(event.target).get("deviceId"),
+        requestedBy: "林管理员",
+      });
+      const request = state.remoteRuns[0];
+      currentPhoneDeviceId = request.deviceId;
+      closeModal();
+      currentView = "mobile";
+      phoneTab = "home";
+      render();
+      showToast(request.status === "running" ? "已按该设备预授权启动" : "请求已发送，等待手机用户确认");
+    } catch (error) {
+      showToast(error.message);
+    }
+  } else if (event.target.id === "local-run-form") {
+    event.preventDefault();
+    try {
+      const formData = new FormData(event.target);
+      state = startLocalRun(state, {
+        taskId: event.target.dataset.taskId,
+        deviceId: currentPhoneDeviceId,
+        preauthorize: formData.get("preauthorize") === "on",
+      });
+      closeModal();
+      render();
+      showToast("任务已在设备上可见运行");
+    } catch (error) {
+      showToast(error.message);
+    }
   } else if (event.target.id === "publish-form") {
     event.preventDefault();
     const formData = new FormData(event.target);
     try {
+      const file = formData.get("script");
+      if (!(file instanceof File) || !file.name.toLowerCase().endsWith(".py") || file.size < 1 || file.size > 2 * 1024 * 1024) {
+        throw new Error("请选择 2 MB 以内的非空 .py 文件");
+      }
+      if (!globalThis.crypto?.subtle) throw new Error("当前浏览器不支持安全的 SHA-256 校验");
+      const digest = await globalThis.crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+      const sha256 = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
       state = publishTaskVersion(state, {
         taskId: event.target.dataset.taskId,
         version: formData.get("version"),
         notes: formData.get("notes"),
+        scriptFile: { name: file.name, size: file.size, sha256 },
       });
       closeModal();
       currentPage = "tasks";
@@ -433,6 +553,10 @@ document.addEventListener("submit", (event) => {
     closeModal();
     render();
     showToast("已切换至选中版本（演示）");
+  }
+  if (event.target.id === "phone-device-select") {
+    currentPhoneDeviceId = event.target.value;
+    render();
   }
 });
 
