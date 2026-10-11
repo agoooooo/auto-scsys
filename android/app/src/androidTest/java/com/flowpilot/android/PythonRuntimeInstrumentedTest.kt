@@ -15,9 +15,7 @@ import org.junit.runner.RunWith
 class PythonRuntimeInstrumentedTest {
     @Test
     fun embeddedPythonExecutesOnDevice() {
-        val context: Context = InstrumentationRegistry.getInstrumentation().targetContext
-        if (!Python.isStarted()) Python.start(AndroidPlatform(context))
-
+        ensurePythonStarted()
         val bridge = InstrumentedNativeBridge()
         val result = PythonTaskRuntime.execute(
             """
@@ -37,6 +35,20 @@ class PythonRuntimeInstrumentedTest {
         assertEquals("继续", bridge.clickedText)
         assertEquals("bridge-called", bridge.loggedMessage)
         assertFalse(bridge.stopped)
+    }
+
+    @Test
+    fun scriptWithoutResultUsesCompletionSummary() {
+        ensurePythonStarted()
+
+        val result = PythonTaskRuntime.execute("pass", InstrumentedNativeBridge())
+
+        assertEquals("脚本已执行完成", result)
+    }
+
+    private fun ensurePythonStarted() {
+        val context: Context = InstrumentationRegistry.getInstrumentation().targetContext
+        if (!Python.isStarted()) Python.start(AndroidPlatform(context))
     }
 }
 

@@ -24,7 +24,9 @@ internal object PythonTaskRuntime {
         globals.callAttr("__setitem__", "nativeBridge", nativeBridge)
         builtins.callAttr("exec", bridgeSource, globals)
         builtins.callAttr("exec", source, globals)
-        return globals.callAttr("__getitem__", "result")?.toString()?.takeIf(String::isNotBlank)
+        return globals.callAttr("get", "result")?.toString()?.takeIf {
+            it.isNotBlank() && it != "None"
+        }
             ?: "脚本已执行完成"
     }
 }
