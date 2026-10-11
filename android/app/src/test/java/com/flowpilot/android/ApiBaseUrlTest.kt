@@ -22,6 +22,25 @@ class ApiBaseUrlTest {
     }
 
     @Test
+    fun releaseConfigurationRejectsHttpBeforeApiRequests() {
+        assertEquals(
+            "https://api.example.com",
+            normalizeApiBaseUrl("https://api.example.com", allowCleartext = false),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            normalizeApiBaseUrl("http://192.168.0.101:8001", allowCleartext = false)
+        }
+    }
+
+    @Test
+    fun debugConfigurationAllowsHttpForTrustedLanDevelopment() {
+        assertEquals(
+            "http://192.168.0.101:8001",
+            normalizeApiBaseUrl("http://192.168.0.101:8001", allowCleartext = true),
+        )
+    }
+
+    @Test
     fun rejectsNonHttpAndNonRootAddresses() {
         listOf(
             "ftp://api.example.com",

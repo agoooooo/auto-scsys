@@ -1,6 +1,7 @@
 package com.flowpilot.android
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -22,6 +23,14 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class PythonRuntimeInstrumentedTest {
+    @Test
+    fun debugBuildAllowsLanHttpForLocalDevelopment() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val allowsCleartext = context.applicationInfo.flags and ApplicationInfo.FLAG_USES_CLEARTEXT_TRAFFIC != 0
+
+        assertTrue(allowsCleartext)
+    }
+
     @Test
     fun rememberedLoginIsEncryptedStoredAndCanBeCleared() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext

@@ -14,6 +14,8 @@
 - JDK 17 或更新版本
 - Android SDK Platform 35 和 Build Tools 35
 
+Debug 构建为了可信局域网内的演示服务显式允许 HTTP；Release 构建默认禁止明文流量，应配置 HTTPS API 地址。不要把 Debug APK 用于正式分发或连接不可信网络。
+
 在 Android Studio 中打开 `android/`，或执行：
 
 ```bash
