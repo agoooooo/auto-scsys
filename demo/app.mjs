@@ -62,6 +62,7 @@ const auditActionLabels = {
   "task.granted": "授予任务访问权",
   "task.grant_revoked": "撤销任务访问权",
   "task.version_published": "发布任务版本",
+  "task.version_activated": "切换当前任务版本",
   "task.paused": "暂停任务",
   "task.published": "恢复任务发布",
   "remote_run.requested": "请求远程运行",
@@ -652,9 +653,10 @@ function showNewTaskModal() {
 function showVersionModal(taskId) {
   const task = state.tasks.find((item) => item.id === taskId);
   if (session) {
+    const canActivateVersion = session.user.role === "admin" || task.owner_id === session.user.id;
     modalRoot.innerHTML = `<div class="modal-root-inner"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <div class="modal-header"><div><h2 id="modal-title">版本管理</h2><p>${escapeHtml(task.name)} · 服务器保存的不可变版本</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
-      <div class="modal-body">${(task.apiVersions ?? []).map((item) => `<div class="version-item"><strong>${escapeHtml(item.version)}${item.version === task.activeVersion ? " · 当前版本" : ""}</strong><span>${escapeHtml(item.filename)} · ${escapeHtml(item.sha256)}</span><small>${escapeHtml(item.notes || "无更新说明")}</small></div>`).join("") || `<div class="empty-state">暂无版本</div>`}<div class="form-hint">发布新版本会保留历史版本；当前 API 尚未提供回滚操作。</div></div>
+      <div class="modal-body">${(task.apiVersions ?? []).map((item) => `<div class="version-item"><strong>${escapeHtml(item.version)}${item.version === task.activeVersion ? " · 当前版本" : ""}</strong><span>${escapeHtml(item.filename)} · ${escapeHtml(item.sha256)}</span><small>${escapeHtml(item.notes || "无更新说明")}</small>${canActivateVersion && item.version !== task.activeVersion ? `<button class="text-button" data-action="activate-version" data-task-id="${escapeHtml(taskId)}" data-version="${escapeHtml(item.version)}">设为当前版本</button>` : ""}</div>`).join("") || `<div class="empty-state">暂无版本</div>`}<div class="form-hint">切换当前版本不会修改历史脚本内容；暂停中的任务仍保持暂停。</div></div>
       <div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">关闭</button></div>
     </section></div>`;
     return;
@@ -739,6 +741,17 @@ document.addEventListener("click", async (event) => {
   else if (action === "new-task") showNewTaskModal();
   else if (action === "publish-task") showPublishModal();
   else if (action === "switch-version") showVersionModal(id);
+  else if (action === "activate-version") {
+    const { taskId, version } = actionButton.dataset;
+    try {
+      await apiRequest(session, `/tasks/${encodeURIComponent(taskId)}/versions/${encodeURIComponent(version)}/activate`, {
+        method: "PATCH",
+      });
+      await refreshFromApi();
+      showVersionModal(taskId);
+      showToast(`已将 ${version} 设为当前版本`);
+    } catch (error) { showToast(error.message); }
+  }
   else if (action === "remote-run") showRemoteRunModal(id);
   else if (action === "local-run") showConsentModal(id);
   else if (action === "manage-task-access") {

@@ -1,4 +1,5 @@
 import hashlib
+import sqlite3
 import time
 
 import pytest
@@ -144,6 +145,7 @@ def test_user_can_create_and_publish_owned_task_but_not_another_users_task(clien
     )
     assert published.status_code == 201
     assert next(task for task in client.get("/tasks", headers=auth(user)).json() if task["id"] == task_id)["status"] == "published"
+    assert next(task for task in client.get("/tasks", headers=auth(user)).json() if task["id"] == task_id)["active_version"] == "v1.0.0"
 
     other_user = login(client, "zhou.ke@example.com", "user-demo")
     forbidden_upload = client.post(
@@ -349,6 +351,81 @@ def test_publishing_new_version_does_not_resume_paused_task(client):
     task = next(task for task in client.get("/tasks", headers=auth(admin)).json() if task["id"] == "t-001")
     assert task["active_version"] == "v1.5.0"
     assert task["status"] == "paused"
+
+
+def test_task_version_can_be_activated_without_changing_immutable_content(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    owner = login(client)
+    another_user = login(client, "zhou.ke@example.com", "user-demo")
+
+    current_script = client.get(
+        "/devices/d-001/tasks/t-001/versions/v1.4.0/content",
+        headers=auth(owner),
+    )
+    assert client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).json()["version"] == "v1.4.0"
+    assert client.patch(
+        "/tasks/t-001",
+        headers=auth(admin),
+        json={"status": "paused"},
+    ).status_code == 200
+
+    assert client.patch(
+        "/tasks/t-001/versions/v1.3.0/activate",
+        headers=auth(another_user),
+    ).status_code == 404
+    activated = client.patch(
+        "/tasks/t-001/versions/v1.3.0/activate",
+        headers=auth(owner),
+    )
+    assert activated.status_code == 200
+    assert activated.json()["active_version"] == "v1.3.0"
+    task = next(task for task in client.get("/tasks", headers=auth(admin)).json() if task["id"] == "t-001")
+    assert task["active_version"] == "v1.3.0"
+    assert task["status"] == "paused"
+    assert client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).status_code == 409
+    assert client.patch(
+        "/tasks/t-001",
+        headers=auth(admin),
+        json={"status": "published"},
+    ).status_code == 200
+    assert client.get(
+        "/devices/d-001/tasks/t-001/versions/v1.4.0/content",
+        headers=auth(owner),
+    ).content == current_script.content
+    assert client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).json()["version"] == "v1.3.0"
+    assert client.patch(
+        "/tasks/t-001/versions/v9.9.9/activate",
+        headers=auth(admin),
+    ).status_code == 404
+    assert any(
+        event["action"] == "task.version_activated" and event["actor"] == "陈晓"
+        for event in client.get("/admin/audit", headers=auth(admin)).json()
+    )
+
+
+def test_existing_database_migrates_active_task_version(client):
+    db_path = client.app.state.db_path
+    with sqlite3.connect(db_path) as db:
+        db.execute("ALTER TABLE tasks DROP COLUMN active_version")
+
+    app = create_app(db_path, b"test-secret-must-be-at-least-32-bytes")
+    with TestClient(app) as migrated_client:
+        admin = login(migrated_client, "admin@example.com", "admin-demo")
+        tasks = migrated_client.get("/tasks", headers=auth(admin)).json()
+        task = next(task for task in tasks if task["id"] == "t-001")
+        assert task["active_version"] == "v1.4.0"
 
 
 def test_remote_run_confirmation_rejection_and_run_record(client):

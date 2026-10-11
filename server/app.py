@@ -111,7 +111,8 @@ def _initialize_database(db_path: Path) -> None:
                 status TEXT NOT NULL CHECK(status IN ('draft', 'published', 'paused')),
                 owner_id TEXT NOT NULL REFERENCES users(id),
                 source TEXT NOT NULL,
-                capabilities_json TEXT NOT NULL
+                capabilities_json TEXT NOT NULL,
+                active_version TEXT
             );
             CREATE TABLE IF NOT EXISTS task_versions (
                 id TEXT PRIMARY KEY,
@@ -175,8 +176,17 @@ def _initialize_database(db_path: Path) -> None:
             CREATE INDEX IF NOT EXISTS idx_remote_device ON remote_runs(device_id, status, expires_at);
             """
         )
+        task_columns = {row["name"] for row in db.execute("PRAGMA table_info(tasks)")}
+        if "active_version" not in task_columns:
+            db.execute("ALTER TABLE tasks ADD COLUMN active_version TEXT")
         if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
             _seed_database(db)
+        db.execute(
+            """UPDATE tasks SET active_version=(
+                   SELECT version FROM task_versions WHERE task_id=tasks.id ORDER BY rowid DESC LIMIT 1
+               ) WHERE active_version IS NULL
+                 AND EXISTS (SELECT 1 FROM task_versions WHERE task_id=tasks.id)"""
+        )
 
 
 def _seed_database(db: sqlite3.Connection) -> None:
@@ -539,10 +549,6 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         return {"id": device_id, "status": body.status}
 
     def _task_dict(db: sqlite3.Connection, row: sqlite3.Row) -> dict:
-        version = db.execute(
-            "SELECT version,filename,sha256,notes,created_at FROM task_versions WHERE task_id=? ORDER BY rowid DESC LIMIT 1",
-            (row["id"],),
-        ).fetchone()
         versions = db.execute(
             "SELECT version,filename,sha256,notes,created_at FROM task_versions WHERE task_id=? ORDER BY rowid DESC",
             (row["id"],),
@@ -556,7 +562,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             "owner_id": row["owner_id"],
             "source": row["source"],
             "capabilities": json.loads(row["capabilities_json"]),
-            "active_version": version["version"] if version else None,
+            "active_version": row["active_version"],
             "versions": [dict(item) for item in versions],
         }
 
@@ -627,6 +633,27 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             )
         audit(db, user["id"], f"task.{body.status}", "task", task_id)
         return {"id": task_id, "status": body.status}
+
+    @app.patch("/tasks/{task_id}/versions/{version}/activate")
+    def activate_task_version(
+        task_id: str,
+        version: str,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        task = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task or (user["role"] != "admin" and task["owner_id"] != user["id"]):
+            raise HTTPException(status_code=404, detail="任务不存在")
+        version_row = db.execute(
+            "SELECT id FROM task_versions WHERE task_id=? AND version=?",
+            (task_id, version),
+        ).fetchone()
+        if not version_row:
+            raise HTTPException(status_code=404, detail="脚本版本不存在")
+        if task["active_version"] != version:
+            db.execute("UPDATE tasks SET active_version=? WHERE id=?", (version, task_id))
+            audit(db, user["id"], "task.version_activated", "task_version", version_row["id"])
+        return {"id": task_id, "active_version": version, "status": task["status"]}
 
     @app.post("/tasks/{task_id}/grants/{user_id}", status_code=201)
     def grant_task(task_id: str, user_id: str, user: dict = Depends(require_admin), db: sqlite3.Connection = Depends(connection)):
@@ -725,7 +752,12 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="该任务版本号已存在") from exc
         if task["status"] != "paused":
-            db.execute("UPDATE tasks SET status='published' WHERE id=?", (task_id,))
+            db.execute(
+                "UPDATE tasks SET status='published',active_version=? WHERE id=?",
+                (version, task_id),
+            )
+        else:
+            db.execute("UPDATE tasks SET active_version=? WHERE id=?", (version, task_id))
         db.execute(
             "INSERT OR IGNORE INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?)",
             (task_id, task["owner_id"], utc_now()),
@@ -772,11 +804,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if device["status"] != "online":
             raise HTTPException(status_code=409, detail="只能向在线设备发起运行请求")
         task = _task_for_user(db, body.task_id, {"id": device["user_id"], "role": "user"})
-        version = db.execute(
-            "SELECT version FROM task_versions WHERE task_id=? ORDER BY rowid DESC LIMIT 1",
-            (task["id"],),
-        ).fetchone()
-        if not version:
+        if not task["active_version"]:
             raise HTTPException(status_code=409, detail="任务没有可运行版本")
         request_id = str(uuid.uuid4())
         now = int(time.time())
@@ -784,13 +812,13 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         db.execute(
             """INSERT INTO remote_runs(id,task_id,version,device_id,requested_by,status,created_at,expires_at)
                VALUES(?,?,?,?,?,'pending',?,?)""",
-            (request_id, task["id"], version["version"], body.device_id, user["id"], utc_now(), expires_at),
+            (request_id, task["id"], task["active_version"], body.device_id, user["id"], utc_now(), expires_at),
         )
         _expire_requests(db)
         grant = db.execute(
             """SELECT id FROM run_authorizations WHERE task_id=? AND version=? AND device_id=?
                AND user_id=? AND revoked_at IS NULL AND expires_at>?""",
-            (task["id"], version["version"], body.device_id, device["user_id"], now),
+            (task["id"], task["active_version"], body.device_id, device["user_id"], now),
         ).fetchone()
         run_id = None
         status = "pending"
@@ -799,7 +827,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             run_id = _start_run(db, pending)
             status = "running"
         audit(db, user["id"], "remote_run.requested", "remote_run", request_id)
-        return {"id": request_id, "task_id": task["id"], "version": version["version"], "device_id": body.device_id, "status": status, "created_at": utc_now(), "expires_at": expires_at, "run_id": run_id}
+        return {"id": request_id, "task_id": task["id"], "version": task["active_version"], "device_id": body.device_id, "status": status, "created_at": utc_now(), "expires_at": expires_at, "run_id": run_id}
 
     @app.post("/devices/{device_id}/runs", status_code=201)
     def start_local_run(device_id: str, body: LocalRunInput, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
