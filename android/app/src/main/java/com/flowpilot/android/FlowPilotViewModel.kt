@@ -25,6 +25,8 @@ internal data class AppUiState(
     val runHistory: List<RunRecord> = emptyList(),
     val runHistoryLoading: Boolean = false,
     val runHistoryError: String? = null,
+    val remoteRunsLoading: Boolean = false,
+    val remoteRunsError: String? = null,
     val scriptReview: ScriptReview? = null,
     val loading: Boolean = false,
     val error: String? = null,
@@ -176,26 +178,36 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
 
     fun refreshRemoteRuns() {
         val current = _state.value
-        if (current.token == null) return
+        val userId = current.user?.id ?: return
+        if (current.token == null || current.remoteRunsLoading) return
         val device = current.device ?: return
-        if (current.loading) return
-        _state.value = current.copy(loading = true, error = null)
+        _state.value = current.copy(remoteRunsLoading = true, remoteRunsError = null)
         viewModelScope.launch {
             try {
                 val session = withContext(Dispatchers.IO) { freshSession() }
                 val requests = withContext(Dispatchers.IO) {
                     ApiClient(session.apiBaseUrl).pendingRemoteRuns(session.token, device.id)
                 }
+                if (_state.value.user?.id != userId) return@launch
                 _state.value = _state.value.copy(
-                    loading = false,
                     token = session.token,
                     tokenExpiresAt = session.tokenExpiresAt,
                     remoteRuns = requests,
+                    remoteRunsLoading = false,
+                    remoteRunsError = null,
                 )
             } catch (exception: Exception) {
-                _state.value = _state.value.copy(loading = false, error = exception.message ?: "远程任务查询失败")
+                if (_state.value.user?.id != userId) return@launch
+                _state.value = _state.value.copy(
+                    remoteRunsLoading = false,
+                    remoteRunsError = "远程请求同步失败：${exception.message ?: "服务器不可用"}",
+                )
             }
         }
+    }
+
+    fun clearRemoteRunsError() {
+        _state.value = _state.value.copy(remoteRunsError = null)
     }
 
     fun inspectScript(task: AvailableTask) {

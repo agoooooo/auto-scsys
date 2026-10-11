@@ -12,3 +12,9 @@ internal fun runStatusLabel(status: String): String = when (status) {
 
 internal fun runVersionLabel(version: String?): String? =
     version?.takeIf(String::isNotBlank)?.let { "版本：$it" }
+
+internal fun remoteRunStatusLabel(status: String): String = when (status) {
+    "pending" -> "待确认"
+    "running" -> "已授权"
+    else -> runStatusLabel(status)
+}

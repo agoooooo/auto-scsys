@@ -26,4 +26,14 @@ class RunStatusTimeTest {
         assertEquals("unknown-time", formatServerRunTime("unknown-time", ZoneId.of("UTC")))
         assertEquals("时间未知", formatServerRunTime("", ZoneId.of("UTC")))
     }
+
+    @Test
+    fun formatsRemoteRequestExpiryAndHidesMissingExpiry() {
+        assertEquals(
+            "2026-10-11 14:25:27",
+            formatEpochSeconds(1_791_699_927L, ZoneId.of("Asia/Shanghai")),
+        )
+        assertEquals(null, formatEpochSeconds(0L, ZoneId.of("UTC")))
+        assertEquals(null, formatEpochSeconds(Long.MAX_VALUE, ZoneId.of("UTC")))
+    }
 }

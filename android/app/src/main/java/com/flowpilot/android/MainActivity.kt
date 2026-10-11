@@ -517,6 +517,7 @@ private fun FlowPilotScreen(
                             Button(
                                 onClick = {
                                     viewModel.clearRunHistoryError()
+                                    viewModel.clearRemoteRunsError()
                                     viewModel.refreshTasks()
                                     viewModel.refreshRemoteRuns()
                                     viewModel.refreshRunHistory()
@@ -528,13 +529,17 @@ private fun FlowPilotScreen(
                             TextButton(
                                 onClick = {
                                     viewModel.clearRunHistoryError()
+                                    viewModel.clearRemoteRunsError()
                                     viewModel.refreshRemoteRuns()
                                     viewModel.refreshRunHistory()
                                 },
-                                enabled = !state.loading,
+                                enabled = !state.loading && !state.remoteRunsLoading,
                             ) {
-                                Text("刷新远程请求和记录")
+                                Text(if (state.remoteRunsLoading) "刷新中" else "刷新远程请求和记录")
                             }
+                        }
+                        state.remoteRunsError?.let { error ->
+                            Text(error, color = MaterialTheme.colorScheme.error)
                         }
                     }
                 }
@@ -655,7 +660,7 @@ private fun FlowPilotScreen(
                                             overflow = TextOverflow.Ellipsis,
                                         )
                                         StatusBadge(
-                                            label = runStatusLabel(request.status),
+                                            label = remoteRunStatusLabel(request.status),
                                             status = request.status,
                                         )
                                     }
@@ -664,6 +669,13 @@ private fun FlowPilotScreen(
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
+                                    formatEpochSeconds(request.expiresAt)?.let { expiry ->
+                                        Text(
+                                            "请求有效期至 $expiry",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                     Text(
                                         "请求人：${request.requestedBy}",
                                         style = MaterialTheme.typography.bodySmall,
@@ -850,7 +862,12 @@ private fun FlowPilotScreen(
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("任务：${request.taskName}\n版本：${request.version}\n发起人：${request.requestedBy}")
+                    Text(
+                        buildString {
+                            append("任务：${request.taskName}\n版本：${request.version}\n发起人：${request.requestedBy}")
+                            formatEpochSeconds(request.expiresAt)?.let { append("\n请求有效期至：$it") }
+                        },
+                    )
                     Text("来源：${sourceLabel(request.source)}")
                     if (request.capabilities.isNotEmpty()) {
                         Text("声明能力：${request.capabilities.joinToString("、")}")
