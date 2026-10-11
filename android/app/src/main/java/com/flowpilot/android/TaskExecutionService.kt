@@ -14,7 +14,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
-import com.chaquo.python.PyObject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -124,9 +123,11 @@ internal class TaskExecutionService : Service() {
             ensureNotStopped()
             if (!Python.isStarted()) Python.start(AndroidPlatform(applicationContext))
             val python = Python.getInstance()
-            val globals = PyObject.fromJava(mapOf("nativeBridge" to NativeTaskBridge(this, capture, stopRequested)))
-            python.getBuiltins().callAttr("exec", PYTHON_BRIDGE, globals)
-            python.getBuiltins().callAttr("exec", script.source, globals)
+            val builtins = python.getBuiltins()
+            val globals = builtins.callAttr("dict")
+            globals.put("nativeBridge", NativeTaskBridge(this, capture, stopRequested))
+            builtins.callAttr("exec", PYTHON_BRIDGE, globals)
+            builtins.callAttr("exec", script.source, globals)
             ensureNotStopped()
             val result = globals.get("result")?.toString()?.takeIf(String::isNotBlank)
                 ?: "脚本已执行完成"

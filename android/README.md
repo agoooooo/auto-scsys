@@ -17,6 +17,7 @@ cd android
 ```
 
 APK 位于 `android/app/build/outputs/apk/debug/app-debug.apk`。当前配置为私有 APK，支持 `arm64-v8a` 真机和 `x86_64` 模拟器。
+连接已启用 USB 或无线调试的设备后，可运行 `./gradlew :app:connectedDebugAndroidTest` 验证设备内嵌 Python 运行时；该测试不需要开启无障碍或屏幕捕获权限。
 
 ## 首次使用
 
