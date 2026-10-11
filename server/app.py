@@ -26,6 +26,7 @@ DEFAULT_DB_PATH = Path(__file__).with_name("flowpilot.sqlite3")
 TOKEN_TTL_SECONDS = 60 * 60
 REMOTE_REQUEST_TTL_SECONDS = 15 * 60
 PREAUTHORIZATION_TTL_SECONDS = 30 * 24 * 60 * 60
+DEVICE_OFFLINE_AFTER_SECONDS = 2 * 60
 MAX_SCRIPT_BYTES = 2 * 1024 * 1024
 VERSION_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
 DEMO_OCR_SCRIPT_PATH = Path(__file__).with_name("demo_scripts") / "order_status_ocr.py"
@@ -33,6 +34,31 @@ DEMO_OCR_SCRIPT_PATH = Path(__file__).with_name("demo_scripts") / "order_status_
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _device_is_recent(device: sqlite3.Row, now: datetime | None = None) -> bool:
+    try:
+        last_active = datetime.fromisoformat(device["last_active"])
+        if last_active.tzinfo is None:
+            last_active = last_active.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return False
+    current = now or datetime.now(timezone.utc)
+    return (current - last_active.astimezone(timezone.utc)).total_seconds() <= DEVICE_OFFLINE_AFTER_SECONDS
+
+
+def _refresh_device_statuses(db: sqlite3.Connection) -> None:
+    now = datetime.now(timezone.utc)
+    for device in db.execute("SELECT id,last_active FROM devices WHERE status='online'").fetchall():
+        if not _device_is_recent(device, now):
+            db.execute("UPDATE devices SET status='offline' WHERE id=?", (device["id"],))
+
+
+def _touch_device(db: sqlite3.Connection, device_id: str) -> None:
+    db.execute(
+        "UPDATE devices SET status='online',last_active=? WHERE id=?",
+        (utc_now(), device_id),
+    )
 
 
 def _password_hash(password: str, salt: bytes) -> str:
@@ -542,6 +568,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
 
     @app.get("/devices")
     def list_devices(user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
+        _refresh_device_statuses(db)
         query = """SELECT d.id,d.user_id,d.name,d.model,d.status,d.app_version,d.last_active,
                           u.name AS user_name,u.status AS account_status
                    FROM devices d JOIN users u ON u.id=d.user_id"""
@@ -814,9 +841,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     @app.post("/devices/{device_id}/sync")
     def sync_device(device_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         device = _device_for_user(db, device_id, user)
-        if device["status"] != "online":
-            raise HTTPException(status_code=409, detail="设备离线，无法同步")
-        db.execute("UPDATE devices SET last_active=? WHERE id=?", (utc_now(), device_id))
+        _touch_device(db, device_id)
         rows = db.execute(
             """SELECT t.* FROM tasks t JOIN task_grants g ON g.task_id=t.id
                WHERE g.user_id=? AND t.status='published' ORDER BY t.name""",
@@ -846,6 +871,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
 
     @app.post("/remote-runs", status_code=201)
     def create_remote_run(body: RemoteRunInput, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
+        _refresh_device_statuses(db)
         device = _device_for_user(db, body.device_id, user)
         if device["status"] != "online":
             raise HTTPException(status_code=409, detail="只能向在线设备发起运行请求")
@@ -880,6 +906,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         device = _device_for_user(db, device_id, user)
         if user["role"] != "user" or device["user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="只能在自己的设备上确认本地运行")
+        _touch_device(db, device_id)
         task = _task_for_user(db, body.task_id, user)
         version = db.execute(
             "SELECT 1 FROM task_versions WHERE task_id=? AND version=?",
@@ -899,6 +926,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     @app.get("/devices/{device_id}/remote-runs")
     def pending_remote_runs(device_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         device = _device_for_user(db, device_id, user)
+        _touch_device(db, device_id)
         _expire_requests(db)
         rows = db.execute(
             """SELECT r.*,t.name AS task_name,t.source,t.capabilities_json,u.name AS requested_by_name,
@@ -926,6 +954,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         device = _device_for_user(db, request["device_id"], user)
         if user["role"] != "user" or device["user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="只有目标设备所属用户可以处理运行请求")
+        _touch_device(db, device["id"])
         if request["status"] == "expired":
             raise HTTPException(status_code=410, detail="运行请求已过期")
         if request["status"] != "pending":
@@ -934,8 +963,6 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             db.execute("UPDATE remote_runs SET status='rejected' WHERE id=?", (request_id,))
             audit(db, user["id"], "remote_run.rejected", "remote_run", request_id)
             return {"id": request_id, "status": "rejected", "run_id": None}
-        if device["status"] != "online":
-            raise HTTPException(status_code=409, detail="设备当前不可用")
         task = _task_for_user(db, request["task_id"], {"id": device["user_id"], "role": "user"})
         version_exists = db.execute(
             "SELECT 1 FROM task_versions WHERE task_id=? AND version=?",
@@ -964,6 +991,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         device = _device_for_user(db, run["device_id"], user)
         if user["role"] != "user" or device["user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="只有目标设备所属用户可以更新运行状态")
+        _touch_device(db, device["id"])
         if run["status"] != "running":
             raise HTTPException(status_code=409, detail="运行记录已结束")
         db.execute(

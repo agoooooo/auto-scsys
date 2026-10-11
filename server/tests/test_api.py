@@ -1,6 +1,7 @@
 import hashlib
 import sqlite3
 import time
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -94,6 +95,48 @@ def test_user_devices_and_task_access_are_scoped(client):
     assert client.post("/devices/d-002/sync", headers=auth(user)).status_code == 200
     assert client.post("/devices/d-003/sync", headers=auth(user)).status_code == 404
     assert client.get("/devices/d-001/tasks/t-002/versions/v0.2.0/content", headers=auth(user)).status_code == 404
+
+
+def test_device_liveness_expires_and_device_activity_restores_online_status(client):
+    import server.app as api
+
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    stale_activity = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    with api._connect(client.app.state.db_path) as db:
+        db.execute("UPDATE devices SET last_active=? WHERE id='d-001'", (stale_activity,))
+
+    devices = client.get("/devices", headers=auth(admin))
+    assert devices.status_code == 200
+    assert next(device for device in devices.json() if device["id"] == "d-001")["status"] == "offline"
+    assert client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).status_code == 409
+
+    synced = client.post("/devices/d-001/sync", headers=auth(user))
+    assert synced.status_code == 200
+    assert next(
+        device for device in client.get("/devices", headers=auth(admin)).json()
+        if device["id"] == "d-001"
+    )["status"] == "online"
+
+    with api._connect(client.app.state.db_path) as db:
+        db.execute("UPDATE devices SET last_active=? WHERE id='d-001'", (stale_activity,))
+    polled = client.get("/devices/d-001/remote-runs", headers=auth(user))
+    assert polled.status_code == 200
+    assert next(
+        device for device in client.get("/devices", headers=auth(admin)).json()
+        if device["id"] == "d-001"
+    )["status"] == "online"
+
+    request = client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    )
+    assert request.status_code == 201
 
 
 def test_seeded_ocr_demo_script_is_versioned_hashed_and_does_not_click(client):
