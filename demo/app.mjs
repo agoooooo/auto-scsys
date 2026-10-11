@@ -9,6 +9,7 @@ import {
   revokeRunAuthorization,
   requiresRemoteSystemAuthorization,
   remoteRunFollowUpView,
+  remoteRunRestriction,
   setUserDeviceLimit,
   setTaskPaused,
   startLocalRun,
@@ -651,7 +652,7 @@ function showDeviceLimitModal(userId) {
 
 function showRemoteRunModal(taskId) {
   const task = state.tasks.find((item) => item.id === taskId);
-  const blockedBySystemAuthorization = requiresRemoteSystemAuthorization(task.capabilities);
+  const restriction = remoteRunRestriction(task.capabilities);
   const devices = state.devices.filter((device) =>
     device.status === "online" &&
     (!session || session.user.role === "admin" || device.userId === session.user.id));
@@ -663,9 +664,9 @@ function showRemoteRunModal(taskId) {
     <div class="modal-header"><div><h2 id="modal-title">请求远程运行</h2><p>${escapeHtml(task.name)} · ${escapeHtml(task.activeVersion)}</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
     <form id="remote-run-form" data-task-id="${escapeHtml(task.id)}"><div class="modal-body">
       <div class="form-field"><label for="target-device">目标设备</label><select id="target-device" name="deviceId">${devices.map((device) => `<option value="${escapeHtml(device.id)}">${escapeHtml(device.userName)} · ${escapeHtml(device.name)}</option>`).join("")}</select></div>
-      <div class="permission-summary"><strong>脚本来源：${escapeHtml(task.source ?? "用户脚本")}</strong><span>已预授权的设备会自动运行；否则设备用户需先审阅并确认。</span><span>所需能力：${(task.capabilities ?? []).map(escapeHtml).join("、")}</span>${blockedBySystemAuthorization ? `<span class="form-hint">该任务需要 Android 屏幕捕获/OCR 系统授权，远程请求不会执行。</span>` : ""}</div>
+      <div class="permission-summary"><strong>脚本来源：${escapeHtml(task.source ?? "用户脚本")}</strong><span>已预授权的设备会自动运行；否则设备用户需先审阅并确认。</span><span>所需能力：${(task.capabilities ?? []).map(escapeHtml).join("、")}</span>${restriction ? `<span id="remote-run-restriction" class="form-hint">${escapeHtml(restriction)}</span>` : ""}</div>
       <div class="form-hint">请求 15 分钟后过期。发布或请求不会自动运行脚本。</div>
-    </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit" ${blockedBySystemAuthorization ? "disabled" : ""}>发送请求</button></div></form>
+    </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit" ${restriction ? 'aria-describedby="remote-run-restriction"' : ""}>${restriction ? "查看限制" : "发送请求"}</button></div></form>
   </section></div>`;
   modalRoot.querySelector(".modal-root-inner").addEventListener("click", (event) => {
     if (event.target.classList.contains("modal-root-inner")) closeModal();
@@ -1114,12 +1115,18 @@ document.addEventListener("submit", async (event) => {
   } else if (event.target.id === "remote-run-form") {
     event.preventDefault();
     const form = event.target;
+    const taskId = form.dataset.taskId;
+    const task = state.tasks.find((item) => item.id === taskId);
+    const restriction = remoteRunRestriction(task?.capabilities);
+    if (restriction) {
+      showToast(restriction);
+      return;
+    }
     const submitButton = form.querySelector('button[type="submit"]');
     submitButton.disabled = true;
     submitButton.textContent = "正在发送…";
     try {
       const deviceId = new FormData(form).get("deviceId");
-      const taskId = form.dataset.taskId;
       let request;
       if (session) {
         request = await createRemoteRunRequest(session, taskId, deviceId);

@@ -158,6 +158,12 @@ export function requiresRemoteSystemAuthorization(capabilities = []) {
     /屏幕|screen|OCR|文字识别|界面识别|读屏/i.test(capability));
 }
 
+export function remoteRunRestriction(capabilities = []) {
+  return requiresRemoteSystemAuthorization(capabilities)
+    ? "此任务需要 Android 屏幕捕获/OCR 系统授权，不能通过 Web 远程运行。"
+    : null;
+}
+
 export function remoteRunFollowUpView(role) {
   return role === "admin" ? "admin" : "mobile";
 }
