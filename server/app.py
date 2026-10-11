@@ -193,6 +193,25 @@ def _initialize_database(db_path: Path) -> None:
 def _seed_database(db: sqlite3.Connection) -> None:
     now = utc_now()
     demo_ocr_script = DEMO_OCR_SCRIPT_PATH.read_bytes()
+    demo_ocr_v1_6_script = '''ORDER_STATUS_LABELS = ("待支付", "待发货", "待收货", "已完成", "退款")
+
+if not bridge.open_douyin():
+    raise RuntimeError("无法打开抖音")
+
+if not bridge.wait_for_douyin(20):
+    raise RuntimeError("等待抖音界面启动超时")
+
+screen_text = bridge.ocr()
+if not screen_text.strip():
+    raise RuntimeError("当前抖音界面未识别到文字")
+
+matched_statuses = [label for label in ORDER_STATUS_LABELS if label in screen_text]
+bridge.log(
+    f"OCR completed; chars={len(screen_text)}; "
+    f"order_status_matches={len(matched_statuses)}"
+)
+result = f"界面 OCR 完成；匹配到 {len(matched_statuses)} 项订单状态"
+'''.encode("utf-8")
     users = [
         ("u-admin", "林管理员", "admin@example.com", "admin", "active", 50, "admin-demo"),
         ("u-1001", "陈晓", "chen.xiao@example.com", "user", "active", 5, "user-demo"),
@@ -221,7 +240,7 @@ def _seed_database(db: sqlite3.Connection) -> None:
         """INSERT INTO tasks(id,name,description,category,status,owner_id,source,capabilities_json)
            VALUES(?,?,?,?,?,?,?,?)""",
         [
-            ("t-001", "抖音订单状态 OCR 演示", "仅在设备本地 OCR 当前抖音界面并统计常见订单状态关键词；不点击、不上传识别内容", "OCR 识别", "published", "u-1001", "陈晓上传", json.dumps(["屏幕捕获（需系统授权）", "OCR 文字识别"], ensure_ascii=False)),
+            ("t-001", "抖音订单状态 OCR 演示", "仅在设备本地 OCR 当前抖音界面并显示常见订单状态；不点击、不上传识别内容", "OCR 识别", "published", "u-1001", "陈晓上传", json.dumps(["屏幕捕获（需系统授权）", "OCR 文字识别"], ensure_ascii=False)),
             ("t-002", "每日签到提醒", "检查签到状态并发送提醒", "页面识别", "draft", "u-admin", "林管理员发布", json.dumps(["屏幕捕获（需系统授权）", "OCR 文字识别"], ensure_ascii=False)),
         ],
     )
@@ -232,7 +251,8 @@ def _seed_database(db: sqlite3.Connection) -> None:
             ("tv-002", "t-001", "v1.3.0", "orders.py", b"# Previous demo script placeholder; not executed.\n", hashlib.sha256(b"# Previous demo script placeholder; not executed.\n").hexdigest(), "历史演示版本", now),
             ("tv-001", "t-001", "v1.4.0", "orders.py", b"# Previous demo script placeholder; not executed.\n", hashlib.sha256(b"# Previous demo script placeholder; not executed.\n").hexdigest(), "历史演示版本", now),
             ("tv-004", "t-001", "v1.5.0", "order_status_ocr.py", b"# Previous demo version; waits for app launch are added in v1.6.0.\n", hashlib.sha256(b"# Previous demo version; waits for app launch are added in v1.6.0.\n").hexdigest(), "历史演示版本", now),
-            ("tv-005", "t-001", "v1.6.0", "order_status_ocr.py", demo_ocr_script, hashlib.sha256(demo_ocr_script).hexdigest(), "等待目标应用进入前台后在设备端 OCR；不点击且不上传 OCR 内容", now),
+            ("tv-005", "t-001", "v1.6.0", "order_status_ocr.py", demo_ocr_v1_6_script, hashlib.sha256(demo_ocr_v1_6_script).hexdigest(), "等待目标应用进入前台后在设备端 OCR；不点击且不上传 OCR 内容", now),
+            ("tv-006", "t-001", "v1.7.0", "order_status_ocr.py", demo_ocr_script, hashlib.sha256(demo_ocr_script).hexdigest(), "等待目标应用进入前台后本地 OCR 并显示识别状态；不点击且不上传 OCR 内容", now),
             ("tv-003", "t-002", "v0.2.0", "checkin.py", b"# Draft demo script placeholder; not executed.\n", hashlib.sha256(b"# Draft demo script placeholder; not executed.\n").hexdigest(), "草稿", now),
         ],
     )

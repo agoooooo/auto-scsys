@@ -15,4 +15,7 @@ bridge.log(
     f"OCR completed; chars={len(screen_text)}; "
     f"order_status_matches={len(matched_statuses)}"
 )
-result = f"界面 OCR 完成；匹配到 {len(matched_statuses)} 项订单状态"
+if matched_statuses:
+    result = f"界面 OCR 完成；识别到订单状态：{'、'.join(matched_statuses)}"
+else:
+    result = "界面 OCR 完成；未匹配到常见订单状态"
