@@ -277,6 +277,9 @@ a { color: inherit; text-decoration: none; }
 .task-grant-row strong { color: #3c465a; font-size: 9px; }
 .task-grant-row small { margin-top: 4px; color: #9aa2af; font-size: 8px; }
 #task-access-form { display: grid; gap: 9px; }
+.activity-table { min-width: 850px; }
+.activity-table .table-secondary { display: block; margin-top: 3px; color: #9aa2af; font-size: 8px; }
+.activity-result { max-width: 320px; color: #697487; white-space: normal; }
 .modal-footer { display: flex; justify-content: end; gap: 8px; padding: 0 20px 19px; }
 .modal-footer button { min-height: 34px; }
 .toast-region { position: fixed; z-index: 30; right: 22px; bottom: 22px; display: grid; gap: 8px; }

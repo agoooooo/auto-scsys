@@ -19,6 +19,7 @@ import {
   login,
   readSession,
 } from "./api-client.mjs";
+import { toCsv } from "./csv.mjs";
 
 let state = structuredClone(initialDemoState);
 let session = readSession();
@@ -29,6 +30,8 @@ let phoneTab = "home";
 let currentPhoneDeviceId = "d-001";
 let userQuery = "";
 let userFilter = "all";
+let activityQuery = "";
+let activityFilter = "all";
 let auditEvents = [];
 let auditLoading = false;
 
@@ -248,15 +251,110 @@ function renderTasks() {
 }
 
 function renderActivity() {
-  return `${pageHeading("运行记录", "追踪任务、用户和设备的执行情况。", `<button class="secondary-button" data-action="export-activity">↓ 导出记录</button>`)}
+  const records = activityRecords();
+  const successful = records.filter((item) => item.status === "success").length;
+  const failed = records.filter((item) => item.status === "failure").length;
+  const running = records.filter((item) => item.status === "running").length;
+  const filtered = filteredActivityRecords(records);
+  return `${pageHeading("运行记录", "追踪任务、用户和设备的执行情况。", `<button class="secondary-button" data-action="export-activity">↓ 导出 CSV</button>`)}
     <div class="stats-grid">
-      <article class="stat-card"><div class="stat-top">最近运行<span class="stat-icon">◷</span></div><div class="stat-value">${state.activity.filter((item) => item.kind !== "publish").length}</div><div class="stat-foot">当前演示记录</div></article>
-      <article class="stat-card"><div class="stat-top">成功<span class="stat-icon">✓</span></div><div class="stat-value">${state.activity.filter((item) => item.kind === "success").length}</div><div class="stat-foot"><span class="positive">运行正常</span></div></article>
-      <article class="stat-card"><div class="stat-top">需关注<span class="stat-icon">!</span></div><div class="stat-value">${state.activity.filter((item) => item.kind === "warning").length}</div><div class="stat-foot">设备离线或任务异常</div></article>
-      <article class="stat-card"><div class="stat-top">任务发布<span class="stat-icon">↑</span></div><div class="stat-value">${state.activity.filter((item) => item.kind === "publish").length}</div><div class="stat-foot">版本变更记录</div></article>
+      <article class="stat-card"><div class="stat-top">运行总数<span class="stat-icon">◷</span></div><div class="stat-value">${records.length}</div><div class="stat-foot">当前账号可见记录</div></article>
+      <article class="stat-card"><div class="stat-top">成功<span class="stat-icon">✓</span></div><div class="stat-value">${successful}</div><div class="stat-foot"><span class="positive">正常完成</span></div></article>
+      <article class="stat-card"><div class="stat-top">失败<span class="stat-icon">!</span></div><div class="stat-value">${failed}</div><div class="stat-foot">异常结束记录</div></article>
+      <article class="stat-card"><div class="stat-top">运行中<span class="stat-icon">▶</span></div><div class="stat-value">${running}</div><div class="stat-foot">设备报告正在运行</div></article>
     </div>
-    <section class="panel"><div class="panel-header"><div><div class="panel-title">最近活动</div><div class="panel-subtitle">任务运行与版本发布记录</div></div><span class="demo-indicator"><i></i>实时模拟</span></div>
-      <div class="activity-list">${activityRows(state.activity)}</div></section>`;
+    <div class="toolbar">
+      <label class="search-box"><span>⌕</span><input id="activity-search" type="search" placeholder="搜索任务、设备、用户或结果…" value="${escapeHtml(activityQuery)}" /></label>
+      <div class="toolbar-right"><select class="filter-select" id="activity-filter" aria-label="按运行状态筛选">
+        <option value="all" ${activityFilter === "all" ? "selected" : ""}>所有状态</option>
+        <option value="running" ${activityFilter === "running" ? "selected" : ""}>运行中</option>
+        <option value="success" ${activityFilter === "success" ? "selected" : ""}>成功</option>
+        <option value="failure" ${activityFilter === "failure" ? "selected" : ""}>失败</option>
+        <option value="stopped" ${activityFilter === "stopped" ? "selected" : ""}>已停止</option>
+      </select></div>
+    </div>
+    <section class="panel"><div class="table-wrap"><table class="data-table activity-table">
+      <thead><tr><th>开始时间</th><th>任务 / 版本</th><th>用户</th><th>设备</th><th>状态</th><th>结果摘要</th></tr></thead>
+      <tbody>${renderActivityTableBody(filtered, records.length)}</tbody>
+    </table></div><div class="table-footer"><span>显示 ${filtered.length} / ${records.length} 条运行记录</span></div></section>`;
+}
+
+const runStatusLabels = { running: "运行中", success: "成功", failure: "失败", stopped: "已停止" };
+const activityCsvColumns = [
+  { key: "time", label: "开始时间" },
+  { key: "task", label: "任务" },
+  { key: "version", label: "版本" },
+  { key: "user", label: "用户" },
+  { key: "device", label: "设备" },
+  { key: "statusLabel", label: "状态" },
+  { key: "detail", label: "结果摘要" },
+];
+
+function activityRecords() {
+  if (session) {
+    return state.runs.map((run) => ({
+      id: run.id,
+      time: run.started_at,
+      task: run.task,
+      version: run.version,
+      user: run.user,
+      device: run.device,
+      status: run.status,
+      detail: run.result || run.status,
+    }));
+  }
+  return state.activity.filter((item) => item.kind !== "publish").map((item) => ({
+    id: item.id,
+    time: item.time,
+    task: item.task,
+    version: item.version ?? "—",
+    user: item.user,
+    device: item.device,
+    status: item.status ?? (item.kind === "success" ? "success" : "failure"),
+    detail: item.detail,
+  }));
+}
+
+function filteredActivityRecords(records = activityRecords()) {
+  const query = activityQuery.trim().toLocaleLowerCase();
+  return records.filter((item) => {
+    const matchesStatus = activityFilter === "all" || item.status === activityFilter;
+    const matchesQuery = !query || [item.task, item.version, item.user, item.device, item.detail]
+      .some((value) => String(value ?? "").toLocaleLowerCase().includes(query));
+    return matchesStatus && matchesQuery;
+  });
+}
+
+function renderActivityTableBody(records = filteredActivityRecords(), total = activityRecords().length) {
+  return records.length ? records.map((item) => `<tr>
+    <td>${escapeHtml(formatActivityTime(item.time))}</td>
+    <td><strong>${escapeHtml(item.task)}</strong><small class="table-secondary">${escapeHtml(item.version)}</small></td>
+    <td>${escapeHtml(item.user)}</td>
+    <td>${escapeHtml(item.device)}</td>
+    <td>${statusPill(item.status)}</td>
+    <td class="activity-result">${escapeHtml(item.detail)}</td>
+  </tr>`).join("") : `<tr><td colspan="6"><div class="empty-state">${total ? "没有匹配的运行记录" : "暂无运行记录"}</div></td></tr>`;
+}
+
+function formatActivityTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value ?? "—") : date.toLocaleString("zh-CN");
+}
+
+function downloadActivityCsv() {
+  const rows = filteredActivityRecords().map((item) => ({
+    ...item,
+    time: formatActivityTime(item.time),
+    statusLabel: runStatusLabels[item.status] ?? item.status,
+  }));
+  const blob = new Blob([toCsv(rows, activityCsvColumns)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "flowpilot-run-records.csv";
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast(`已导出 ${rows.length} 条运行记录`);
 }
 
 function renderAudit() {
@@ -774,7 +872,8 @@ document.addEventListener("click", async (event) => {
     else showToast("请在真实 App 中扫描绑定码（演示）");
   }
   else if (action === "task-info") showToast("任务版本会经过校验后下发至授权设备（演示）");
-  else if (action === "export-users" || action === "export-activity") showToast("演示数据暂不支持下载");
+  else if (action === "export-activity") downloadActivityCsv();
+  else if (action === "export-users") showToast("用户数据导出暂不可用");
 });
 
 document.addEventListener("submit", async (event) => {
@@ -1002,6 +1101,13 @@ document.addEventListener("input", (event) => {
     replacement?.focus();
     replacement?.setSelectionRange(selectionStart, selectionStart);
   }
+  if (event.target.id === "activity-search") {
+    activityQuery = event.target.value;
+    const body = workspace.querySelector(".activity-table tbody");
+    if (body) body.innerHTML = renderActivityTableBody();
+    const footer = workspace.querySelector(".table-footer span");
+    if (footer) footer.textContent = `显示 ${filteredActivityRecords().length} / ${activityRecords().length} 条运行记录`;
+  }
 });
 
 document.addEventListener("change", (event) => {
@@ -1017,6 +1123,13 @@ document.addEventListener("change", (event) => {
     workspace.querySelectorAll("[data-device-status]").forEach((card) => {
       card.hidden = event.target.value !== "all" && card.dataset.deviceStatus !== event.target.value;
     });
+  }
+  if (event.target.id === "activity-filter") {
+    activityFilter = event.target.value;
+    const body = workspace.querySelector(".activity-table tbody");
+    if (body) body.innerHTML = renderActivityTableBody();
+    const footer = workspace.querySelector(".table-footer span");
+    if (footer) footer.textContent = `显示 ${filteredActivityRecords().length} / ${activityRecords().length} 条运行记录`;
   }
 });
 
