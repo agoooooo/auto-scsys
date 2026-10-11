@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterUsers, paginateUsers } from "./user-list.mjs";
+import { filterDevices, filterUsers, paginateItems } from "./user-list.mjs";
 
 const users = Array.from({ length: 23 }, (_, index) => ({
   id: `user-${index + 1}`,
@@ -17,9 +17,9 @@ test("user filtering matches name or email and status together", () => {
   assert.deepEqual(filterUsers(users, "not-found", "all"), []);
 });
 
-test("user pagination returns the requested slice and clamps invalid pages", () => {
+test("pagination returns the requested slice and clamps invalid pages", () => {
   const filtered = filterUsers(users, "", "all");
-  const secondPage = paginateUsers(filtered, 2, 10);
+  const secondPage = paginateItems(filtered, 2, 10);
   assert.equal(secondPage.page, 2);
   assert.equal(secondPage.pageCount, 3);
   assert.equal(secondPage.start, 10);
@@ -27,8 +27,20 @@ test("user pagination returns the requested slice and clamps invalid pages", () 
     { length: 10 },
     (_, index) => `user-${index + 11}`,
   ));
-  const lastPage = paginateUsers(filtered, 99, 10);
+  const lastPage = paginateItems(filtered, 99, 10);
   assert.equal(lastPage.page, 3);
   assert.deepEqual(lastPage.items.map((user) => user.id), ["user-21", "user-22", "user-23"]);
-  assert.deepEqual(paginateUsers([], 3, 10), { page: 1, pageCount: 1, start: 0, items: [] });
+  assert.deepEqual(paginateItems([], 3, 10), { page: 1, pageCount: 1, start: 0, items: [] });
+  assert.throws(() => paginateItems(filtered, 1, 0), /positive integer/);
+});
+
+test("device status filters show all devices or only the requested state", () => {
+  const devices = [
+    { id: "online", status: "online" },
+    { id: "offline", status: "offline" },
+    { id: "disabled", status: "disabled" },
+  ];
+  assert.deepEqual(filterDevices(devices, "all"), devices);
+  assert.deepEqual(filterDevices(devices, "offline"), [devices[1]]);
+  assert.deepEqual(filterDevices(devices, "unknown"), []);
 });

@@ -21,7 +21,7 @@ import {
   readSession,
 } from "./api-client.mjs";
 import { mapUsersForCsv, toCsv, userCsvColumns } from "./csv.mjs";
-import { filterUsers, paginateUsers } from "./user-list.mjs";
+import { filterDevices, filterUsers, paginateItems } from "./user-list.mjs";
 
 let state = structuredClone(initialDemoState);
 let session = readSession();
@@ -33,6 +33,8 @@ let currentPhoneDeviceId = "d-001";
 let userQuery = "";
 let userFilter = "all";
 let userListPage = 1;
+let deviceFilter = "all";
+let deviceListPage = 1;
 let activityQuery = "";
 let activityFilter = "all";
 let auditEvents = [];
@@ -190,7 +192,7 @@ function renderOverview() {
     </div>`;
 }
 
-function userRows(users = paginateUsers(filteredUsers(), userListPage, 10).items) {
+function userRows(users = paginateItems(filteredUsers(), userListPage, 10).items) {
   if (!users.length) return `<tr><td colspan="6"><div class="empty-state">没有找到匹配的用户</div></td></tr>`;
   return users.map((user, index) => {
     const count = state.devices.filter((device) => device.userId === user.id && device.status !== "disabled").length;
@@ -210,7 +212,7 @@ function filteredUsers() {
 function renderUsers() {
   const actions = `<button class="primary-button" data-action="new-user"><span class="button-icon">＋</span>添加用户</button>`;
   const filtered = filteredUsers();
-  const pagination = paginateUsers(filtered, userListPage, 10);
+  const pagination = paginateItems(filtered, userListPage, 10);
   userListPage = pagination.page;
   const firstShown = filtered.length ? pagination.start + 1 : 0;
   const lastShown = pagination.start + pagination.items.length;
@@ -231,6 +233,11 @@ function renderUsers() {
 
 function renderDevices() {
   const devices = state.devices;
+  const filtered = filterDevices(devices, deviceFilter);
+  const pagination = paginateItems(filtered, deviceListPage, 10);
+  deviceListPage = pagination.page;
+  const firstShown = filtered.length ? pagination.start + 1 : 0;
+  const lastShown = pagination.start + pagination.items.length;
   const actions = `<button class="secondary-button" data-action="sync-devices">↻ 同步状态</button>`;
   return `${pageHeading("设备管理", "查看用户绑定的手机及其在线状态。", actions)}
     <div class="stats-grid">
@@ -239,12 +246,19 @@ function renderDevices() {
       <article class="stat-card"><div class="stat-top">离线<span class="stat-icon">◌</span></div><div class="stat-value">${devices.filter((device) => device.status === "offline").length}</div><div class="stat-foot">等待设备重新连接</div></article>
       <article class="stat-card"><div class="stat-top">已停用<span class="stat-icon">⊘</span></div><div class="stat-value">${devices.filter((device) => device.status === "disabled").length}</div><div class="stat-foot">不会接收任务</div></article>
     </div>
-    <div class="toolbar"><div class="eyebrow" style="margin:0">已绑定设备 · ${devices.length}</div><div class="toolbar-right"><select class="filter-select" id="device-filter" aria-label="筛选设备"><option value="all">所有状态</option><option value="online">在线</option><option value="offline">离线</option><option value="disabled">已停用</option></select></div></div>
-    <div class="device-grid">${devices.map((device) => `<article class="device-card" data-device-status="${escapeHtml(device.status)}">
+    <div class="toolbar"><div class="eyebrow" style="margin:0">显示 ${firstShown}–${lastShown} / ${filtered.length} 台设备（共 ${devices.length} 台）</div><div class="toolbar-right"><select class="filter-select" id="device-filter" aria-label="筛选设备">
+      <option value="all" ${deviceFilter === "all" ? "selected" : ""}>所有状态</option><option value="online" ${deviceFilter === "online" ? "selected" : ""}>在线</option><option value="offline" ${deviceFilter === "offline" ? "selected" : ""}>离线</option><option value="disabled" ${deviceFilter === "disabled" ? "selected" : ""}>已停用</option>
+    </select></div></div>
+    <div class="device-grid">${pagination.items.map((device) => `<article class="device-card">
       <div class="device-top"><div class="device-avatar ${escapeHtml(device.color)}">${escapeHtml(device.initial)}</div><div class="device-title"><strong>${escapeHtml(device.name)}</strong><small>${escapeHtml(device.model)}</small></div>${statusPill(device.status)}</div>
       <div class="device-info"><span>所属用户<strong>${escapeHtml(device.userName)}</strong></span><span>App 版本<strong>${escapeHtml(device.appVersion)}</strong></span><span>最近活跃<strong>${escapeHtml(device.lastActive)}</strong></span><span>设备 ID<strong>${escapeHtml(device.id)}</strong></span></div>
       <div class="device-footer"><small style="color:#9aa2b1;font-size:9px">任务：订单状态检查</small><button class="text-button" data-action="toggle-device" data-id="${escapeHtml(device.id)}">${device.status === "disabled" ? "重新启用" : "停用设备"}</button></div>
-    </article>`).join("")}</div>`;
+    </article>`).join("") || `<div class="empty-state">没有符合状态筛选的设备</div>`}</div>
+    <div class="table-footer"><span>显示 ${firstShown}–${lastShown} / ${filtered.length} 台设备</span><div class="pagination">
+      <button data-device-page="${pagination.page - 1}" aria-label="上一页" ${pagination.page <= 1 ? "disabled" : ""}>←</button>
+      <span>${pagination.page} / ${pagination.pageCount}</span>
+      <button data-device-page="${pagination.page + 1}" aria-label="下一页" ${pagination.page >= pagination.pageCount ? "disabled" : ""}>→</button>
+    </div></div>`;
 }
 
 function renderTasks() {
@@ -779,6 +793,13 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const devicePageButton = event.target.closest("[data-device-page]");
+  if (devicePageButton) {
+    deviceListPage = Number(devicePageButton.dataset.devicePage);
+    render();
+    return;
+  }
+
   const actionButton = event.target.closest("[data-action]");
   if (!actionButton) return;
   const { action, id } = actionButton.dataset;
@@ -1200,9 +1221,9 @@ document.addEventListener("change", (event) => {
     render();
   }
   if (event.target.id === "device-filter") {
-    workspace.querySelectorAll("[data-device-status]").forEach((card) => {
-      card.hidden = event.target.value !== "all" && card.dataset.deviceStatus !== event.target.value;
-    });
+    deviceFilter = event.target.value;
+    deviceListPage = 1;
+    render();
   }
   if (event.target.id === "activity-filter") {
     activityFilter = event.target.value;
