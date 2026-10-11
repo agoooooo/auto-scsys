@@ -9,6 +9,10 @@ android {
     namespace = "com.flowpilot.android"
     compileSdk = 35
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
         applicationId = "com.flowpilot.android"
         minSdk = 26

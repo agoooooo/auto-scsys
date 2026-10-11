@@ -13,7 +13,10 @@ class ApiBaseUrlTest {
 
     @Test
     fun normalizesLanHttpAddressAndTrailingSlash() {
-        assertEquals("http://192.168.0.101:8001", normalizeApiBaseUrl(" http://192.168.0.101:8001/ "))
+        assertEquals(
+            "http://192.168.0.101:8001",
+            normalizeApiBaseUrl(" http://192.168.0.101:8001/ ", allowCleartext = true),
+        )
     }
 
     @Test
@@ -38,6 +41,15 @@ class ApiBaseUrlTest {
             "http://192.168.0.101:8001",
             normalizeApiBaseUrl("http://192.168.0.101:8001", allowCleartext = true),
         )
+    }
+
+    @Test
+    fun defaultCleartextPolicyFollowsBuildVariant() {
+        val acceptsHttp = runCatching {
+            normalizeApiBaseUrl("http://192.168.0.101:8001")
+        }.isSuccess
+
+        assertEquals(BuildConfig.DEBUG, acceptsHttp)
     }
 
     @Test
