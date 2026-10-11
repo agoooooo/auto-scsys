@@ -1,10 +1,18 @@
 package com.flowpilot.android
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import com.google.android.gms.tasks.Tasks
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -44,6 +52,31 @@ class PythonRuntimeInstrumentedTest {
         val result = PythonTaskRuntime.execute("pass", InstrumentedNativeBridge())
 
         assertEquals("脚本已执行完成", result)
+    }
+
+    @Test
+    fun bundledChineseRecognizerReadsTextFromLocalImage() {
+        val bitmap = Bitmap.createBitmap(900, 220, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(Color.WHITE)
+        canvas.drawText(
+            "FlowPilot 123",
+            40f,
+            150f,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                textSize = 96f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+            },
+        )
+        val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+        try {
+            val result = Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0)), 30, java.util.concurrent.TimeUnit.SECONDS)
+            assertTrue("OCR result was: ${result.text}", result.text.contains("FlowPilot", ignoreCase = true))
+        } finally {
+            recognizer.close()
+            bitmap.recycle()
+        }
     }
 
     private fun ensurePythonStarted() {
