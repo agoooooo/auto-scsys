@@ -64,6 +64,12 @@ internal data class AvailableTask(
     val source: String = "user",
 )
 
+internal fun shouldRefreshAccessToken(
+    expiresAtSeconds: Long,
+    nowSeconds: Long,
+    refreshLeadSeconds: Long,
+): Boolean = expiresAtSeconds <= nowSeconds + refreshLeadSeconds
+
 internal class ApiClient(baseUrl: String) {
     private val baseUrl = normalizeApiBaseUrl(baseUrl)
 

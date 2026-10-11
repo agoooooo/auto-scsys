@@ -117,7 +117,12 @@ internal class RemoteRunMonitorService : Service() {
     private suspend fun freshSession(): StoredSession = withContext(Dispatchers.IO) {
         val store = SessionStore(this@RemoteRunMonitorService)
         val session = store.read() ?: throw IllegalStateException("登录状态已失效，请重新登录")
-        if (session.tokenExpiresAt > System.currentTimeMillis() / 1000 + REFRESH_LEAD_SECONDS) {
+        if (!shouldRefreshAccessToken(
+                session.tokenExpiresAt,
+                System.currentTimeMillis() / 1000,
+                REFRESH_LEAD_SECONDS,
+            )
+        ) {
             return@withContext session
         }
         val refreshed = ApiClient(session.apiBaseUrl).refreshToken(session.token)

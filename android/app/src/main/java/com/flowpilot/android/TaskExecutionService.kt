@@ -19,8 +19,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -86,8 +88,8 @@ internal class TaskExecutionService : Service() {
         var summary = "任务未能完成"
         var capture: ScreenCaptureSession? = null
         var api: ApiClient? = null
-        var token: String? = null
         var activeSession: StoredSession? = null
+        var heartbeatJob: Job? = null
 
         store.update(runId, taskName, taskVersion, "running", "正在执行")
         notifyRunStatusChanged()
@@ -98,11 +100,25 @@ internal class TaskExecutionService : Service() {
             val session = SessionStore(this).read()
                 ?: throw IllegalStateException("登录状态已失效，请重新登录")
             activeSession = session
-            token = session.token
             api = ApiClient(session.apiBaseUrl)
             val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID)
                 ?: session.deviceId
                 ?: throw IllegalStateException("当前账号尚未绑定此设备")
+            heartbeatJob = serviceScope.launch {
+                while (isActive) {
+                    delay(HEARTBEAT_INTERVAL_MILLIS)
+                    try {
+                        val heartbeatSession = freshSession()
+                        ApiClient(heartbeatSession.apiBaseUrl).heartbeat(heartbeatSession.token, deviceId)
+                    } catch (exception: CancellationException) {
+                        throw exception
+                    } catch (exception: Exception) {
+                        RunStatusStore(this@TaskExecutionService).appendLog(
+                            "设备心跳失败：${exception.message ?: "服务器不可用"}",
+                        )
+                    }
+                }
+            }
             val task = AvailableTask(
                 id = intent.getStringExtra(EXTRA_TASK_ID).orEmpty(),
                 name = taskName,
@@ -142,6 +158,7 @@ internal class TaskExecutionService : Service() {
             status = if (stopRequested.get()) "stopped" else "failure"
             summary = if (stopRequested.get()) "用户停止了任务" else exception.message ?: "任务执行失败"
         } finally {
+            heartbeatJob?.cancelAndJoin()
             try {
                 capture?.close()
             } catch (exception: Exception) {
@@ -151,16 +168,16 @@ internal class TaskExecutionService : Service() {
                 }
             }
             val reporter = api ?: activeSession?.let { ApiClient(it.apiBaseUrl) }
-            val reportToken = token ?: activeSession?.token
-            if (reporter != null && reportToken != null && runId.isNotBlank()) {
+            if (reporter != null && activeSession != null && runId.isNotBlank()) {
                 try {
                     val serverSummary = when (status) {
                         "success" -> "任务完成"
                         "stopped" -> "任务已停止"
                         else -> "任务执行失败"
                     }
+                    val reportSession = freshSession()
                     withContext(Dispatchers.IO) {
-                        reporter.updateRun(reportToken, runId, status, serverSummary)
+                        reporter.updateRun(reportSession.token, runId, status, serverSummary)
                     }
                 } catch (exception: Exception) {
                     summary = "$summary；运行结果同步失败：${exception.message ?: "服务器不可用"}"
@@ -177,6 +194,23 @@ internal class TaskExecutionService : Service() {
 
     private fun ensureNotStopped() {
         if (stopRequested.get()) throw CancellationException("任务已停止")
+    }
+
+    private suspend fun freshSession(): StoredSession = withContext(Dispatchers.IO) {
+        val store = SessionStore(this@TaskExecutionService)
+        val session = store.read() ?: throw IllegalStateException("登录状态已失效，请重新登录")
+        if (!shouldRefreshAccessToken(
+                session.tokenExpiresAt,
+                System.currentTimeMillis() / 1000,
+                TOKEN_REFRESH_LEAD_SECONDS,
+            )
+        ) {
+            return@withContext session
+        }
+        val refreshed = ApiClient(session.apiBaseUrl).refreshToken(session.token)
+        val expiresAt = System.currentTimeMillis() / 1000 + refreshed.second
+        store.updateToken(refreshed.first, expiresAt)
+        session.copy(token = refreshed.first, tokenExpiresAt = expiresAt)
     }
 
     private fun rejectConcurrentRun(intent: Intent) {
@@ -301,6 +335,8 @@ internal class TaskExecutionService : Service() {
         private const val STOP_PENDING_INTENT = 320
         private const val MAX_LOG_ENTRY_CHARS = 500
         private const val SERVICE_START_GRACE_PERIOD_MILLIS = 1_000L
+        private const val HEARTBEAT_INTERVAL_MILLIS = 60_000L
+        private const val TOKEN_REFRESH_LEAD_SECONDS = 5 * 60L
         private const val SCRIPT_CACHE_DIRECTORY = "verified_scripts"
 
         fun start(

@@ -495,7 +495,12 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                 val client = ApiClient(stored.apiBaseUrl)
                 var token = stored.token
                 var expiresAt = stored.tokenExpiresAt
-                if (expiresAt <= System.currentTimeMillis() / 1000 + TOKEN_REFRESH_LEAD_SECONDS) {
+                if (shouldRefreshAccessToken(
+                        expiresAt,
+                        System.currentTimeMillis() / 1000,
+                        TOKEN_REFRESH_LEAD_SECONDS,
+                    )
+                ) {
                     val refreshed = withContext(Dispatchers.IO) { client.refreshToken(token) }
                     token = refreshed.first
                     expiresAt = System.currentTimeMillis() / 1000 + refreshed.second
@@ -542,7 +547,12 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
 
     private fun freshSession(): StoredSession {
         val store = requireNotNull(sessionStore.read()) { "登录状态已失效，请重新登录" }
-        if (store.tokenExpiresAt > System.currentTimeMillis() / 1000 + TOKEN_REFRESH_LEAD_SECONDS) {
+        if (!shouldRefreshAccessToken(
+                store.tokenExpiresAt,
+                System.currentTimeMillis() / 1000,
+                TOKEN_REFRESH_LEAD_SECONDS,
+            )
+        ) {
             return store
         }
         val refreshed = ApiClient(store.apiBaseUrl).refreshToken(store.token)
