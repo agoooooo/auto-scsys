@@ -85,10 +85,12 @@ internal class RemoteRunMonitorService : Service() {
                                 "需要确认：${request.taskName}",
                                 "由${request.requestedBy}发起的运行请求",
                             )
-                        } else if (request.status == "running" && request.runId != null &&
-                            !hasHandled(request.id)
+                        } else if (shouldNotifyPreauthorizedRun(
+                                request.status,
+                                request.runId,
+                                hasHandled(request.id),
+                            )
                         ) {
-                            markHandled(request.id)
                             showRemoteNotification(
                                 request,
                                 "已预授权：${request.taskName}",
