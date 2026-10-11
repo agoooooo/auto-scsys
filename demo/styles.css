@@ -117,13 +117,13 @@ a { color: inherit; text-decoration: none; }
 .task-meta { display: grid; justify-items: end; gap: 6px; color: #8b94a5; font-size: 9px; }
 .status-pill { display: inline-flex; align-items: center; gap: 5px; border-radius: 20px; padding: 5px 8px; font-size: 9px; font-weight: 600; white-space: nowrap; }
 .status-pill::before { width: 5px; height: 5px; content: ""; border-radius: 50%; background: currentColor; }
-.status-pill.success, .status-pill.online, .status-pill.active, .status-pill.published { color: #238d6b; background: #eaf8f2; }
+.status-pill.success, .status-pill.online, .status-pill.active, .status-pill.published, .status-pill.accepted { color: #238d6b; background: #eaf8f2; }
 .status-pill.offline { color: #b78034; background: #fff6e9; }
 .status-pill.disabled, .status-pill.draft, .status-pill.failure { color: #929aaa; background: #f1f2f5; }
 .status-pill.warning { color: #b78034; background: #fff6e9; }
 .status-pill.release { color: #6354d3; background: #f0edff; }
 .status-pill.running, .status-pill.pending { color: #6354d3; background: #f0edff; }
-.status-pill.stopped, .status-pill.rejected, .status-pill.expired { color: #929aaa; background: #f1f2f5; }
+.status-pill.stopped, .status-pill.rejected, .status-pill.expired, .status-pill.revoked { color: #929aaa; background: #f1f2f5; }
 .activity-row { display: flex; align-items: start; gap: 10px; padding: 13px 0; border-bottom: 1px solid #f1f2f6; }
 .activity-icon { width: 25px; height: 25px; display: grid; flex: 0 0 auto; place-items: center; border-radius: 50%; color: var(--green); background: #eaf8f2; font-size: 11px; }
 .activity-icon.warning { color: #bd852e; background: #fff5e6; }
@@ -276,7 +276,11 @@ a { color: inherit; text-decoration: none; }
 .task-grant-row strong, .task-grant-row small { display: block; }
 .task-grant-row strong { color: #3c465a; font-size: 9px; }
 .task-grant-row small { margin-top: 4px; color: #9aa2af; font-size: 8px; }
-#task-access-form { display: grid; gap: 9px; }
+.version-list { display: grid; gap: 7px; max-height: 220px; overflow-y: auto; }
+.version-item { display: grid; gap: 5px; padding: 9px 10px; border: 1px solid #eceef4; border-radius: 8px; }
+.version-item strong { color: #3c465a; font-size: 9px; }
+.version-item span, .version-item small { color: #929bab; font-size: 8px; overflow-wrap: anywhere; }
+#task-access-form, #task-publication-form { display: grid; gap: 9px; }
 .activity-table { min-width: 850px; }
 .activity-table .table-secondary { display: block; margin-top: 3px; color: #9aa2af; font-size: 8px; }
 .activity-result { max-width: 320px; color: #697487; white-space: normal; }

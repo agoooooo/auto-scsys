@@ -345,7 +345,16 @@ def test_publish_script_validates_and_checks_content_hash(client):
     assert published.status_code == 201
     assert published.json()["sha256"] == hashlib.sha256(content).hexdigest()
     assert client.post("/tasks/t-002/grants/u-1001", headers=auth(admin)).status_code == 201
+    assigned = client.post(
+        "/tasks/t-002/publications",
+        headers=auth(admin),
+        json={"device_id": "d-001", "version": "v1.0.0"},
+    )
     user = login(client)
+    assert client.post(
+        f"/devices/d-001/publications/{assigned.json()['id']}/accept",
+        headers=auth(user),
+    ).status_code == 200
     downloaded = client.get(
         "/devices/d-001/tasks/t-002/versions/v1.0.0/content",
         headers=auth(user),
@@ -370,6 +379,12 @@ def test_admin_can_list_grant_and_revoke_task_access(client):
 
     granted = client.post("/tasks/t-002/grants/u-1001", headers=auth(admin))
     assert granted.status_code == 201
+    publication = client.post(
+        "/tasks/t-002/publications",
+        headers=auth(admin),
+        json={"device_id": "d-001", "version": "v1.0.0"},
+    )
+    assert publication.status_code == 201
     grant_list = client.get("/tasks/t-002/grants", headers=auth(admin))
     assert grant_list.status_code == 200
     assert {grant["id"]: grant["is_owner"] for grant in grant_list.json()} == {
@@ -377,6 +392,25 @@ def test_admin_can_list_grant_and_revoke_task_access(client):
         "u-1001": False,
     }
     assert {task["id"] for task in client.get("/tasks", headers=auth(chen)).json()} == {"t-001", "t-002"}
+    pending_sync = client.post("/devices/d-001/sync", headers=auth(chen)).json()
+    assert [item["id"] for item in pending_sync["tasks"]] == ["t-001"]
+    assert pending_sync["pending_publications"][0]["version"] == "v1.0.0"
+    assert client.post(
+        "/devices/d-001/publications/not-this-device/accept",
+        headers=auth(chen),
+    ).status_code == 404
+    assert client.post(
+        f"/devices/d-001/publications/{publication.json()['id']}/accept",
+        headers=auth(chen),
+    ).status_code == 200
+    assert any(
+        item["id"] == "t-002" and item["active_version"] == "v1.0.0"
+        for item in client.post("/devices/d-001/sync", headers=auth(chen)).json()["tasks"]
+    )
+    assert all(
+        item["id"] != "t-002"
+        for item in client.post("/devices/d-002/sync", headers=auth(chen)).json()["tasks"]
+    )
     assert client.get(
         "/devices/d-001/tasks/t-002/versions/v1.0.0/content",
         headers=auth(chen),
@@ -421,6 +455,111 @@ def test_admin_can_list_grant_and_revoke_task_access(client):
     assert any(task["id"] == "t-002" for task in client.get("/tasks", headers=auth(zhou)).json())
     inactive_grant = client.post("/tasks/t-002/grants/u-1003", headers=auth(admin))
     assert inactive_grant.status_code == 409
+
+
+def test_admin_publication_requires_device_confirmation_and_can_be_revoked(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    zhou = login(client, "zhou.ke@example.com", "user-demo")
+    content = b"result = 'published to one device'\n"
+    assert client.post(
+        "/tasks/t-002/versions",
+        headers=auth(admin),
+        data={"version": "v1.0.0", "notes": "首发版本"},
+        files={"script": ("shared.py", content)},
+    ).status_code == 201
+
+    publication = client.post(
+        "/tasks/t-002/publications",
+        headers=auth(admin),
+        json={"device_id": "d-003", "version": "v1.0.0"},
+    )
+    assert publication.status_code == 201
+    publication_id = publication.json()["id"]
+    assert publication.json()["status"] == "pending"
+    assert client.get("/tasks/t-002/publications", headers=auth(admin)).json()[0]["user_name"] == "周可"
+
+    pending = client.post("/devices/d-003/sync", headers=auth(zhou)).json()
+    assert pending["tasks"] == []
+    assert pending["pending_publications"][0]["id"] == publication_id
+    assert pending["pending_publications"][0]["publisher"] == "林管理员"
+    assert client.get(
+        "/tasks/t-002/publications",
+        headers=auth(zhou),
+    ).status_code == 403
+    assert client.get(
+        "/devices/d-003/tasks/t-002/versions/v1.0.0/content",
+        headers=auth(zhou),
+    ).status_code == 403
+    assert client.post(
+        "/devices/d-003/runs",
+        headers=auth(zhou),
+        json={"task_id": "t-002", "version": "v1.0.0"},
+    ).status_code == 403
+    assert client.post(
+        "/devices/d-003/publications/not-this-device/accept",
+        headers=auth(zhou),
+    ).status_code == 404
+
+    accepted = client.post(
+        f"/devices/d-003/publications/{publication_id}/accept",
+        headers=auth(zhou),
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["status"] == "accepted"
+    synced = client.post("/devices/d-003/sync", headers=auth(zhou)).json()
+    assert [(item["id"], item["active_version"]) for item in synced["tasks"]] == [("t-002", "v1.0.0")]
+    assert client.get(
+        "/devices/d-003/tasks/t-002/versions/v1.0.0/content",
+        headers=auth(zhou),
+    ).content == content
+    local_run = client.post(
+        "/devices/d-003/runs",
+        headers=auth(zhou),
+        json={"task_id": "t-002", "version": "v1.0.0"},
+    )
+    assert local_run.status_code == 201
+    assert client.post(
+        f"/runs/{local_run.json()['id']}",
+        headers=auth(zhou),
+        json={"status": "success", "result_summary": "ok"},
+    ).status_code == 200
+
+    remote = client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-002", "device_id": "d-003"},
+    )
+    assert remote.status_code == 201
+    assert remote.json()["status"] == "pending"
+    assert client.post(
+        "/tasks/t-002/publications",
+        headers=auth(admin),
+        json={"device_id": "d-001", "version": "v1.0.0"},
+    ).status_code == 201
+    assert client.get(
+        "/devices/d-001/tasks/t-002/versions/v1.0.0/content",
+        headers=auth(login(client)),
+    ).status_code == 403
+
+    revoked = client.delete(
+        f"/tasks/t-002/publications/{publication_id}",
+        headers=auth(admin),
+    )
+    assert revoked.status_code == 200
+    assert next(
+        item for item in client.get("/devices/d-003/remote-runs", headers=auth(zhou)).json()
+        if item["id"] == remote.json()["id"]
+    )["status"] == "expired"
+    assert client.get(
+        "/devices/d-003/tasks/t-002/versions/v1.0.0/content",
+        headers=auth(zhou),
+    ).status_code == 403
+    assert client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-002", "device_id": "d-003"},
+    ).status_code == 403
+    assert client.get("/admin/audit", headers=auth(admin)).json()
 
 
 def test_admin_can_pause_and_resume_tasks_with_access_and_run_controls(client):

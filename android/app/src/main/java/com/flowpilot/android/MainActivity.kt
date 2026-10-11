@@ -265,6 +265,7 @@ class MainActivity : ComponentActivity() {
         OcrStandbyService.consumeLastError(this)?.let(flowPilotViewModel::showError)
         flowPilotViewModel.refreshRunStatus()
         flowPilotViewModel.refreshRunHistory()
+        flowPilotViewModel.refreshTasks()
         flowPilotViewModel.refreshRemoteRuns()
     }
 
@@ -906,6 +907,46 @@ private fun FlowPilotScreen(
                                 )
                             }
                             StatusBadge(label = "已启用", status = "active")
+                        }
+                    }
+                }
+
+                if (state.pendingPublications.isNotEmpty()) {
+                    Text("待确认的脚本发布（${state.pendingPublications.size}）", style = MaterialTheme.typography.titleLarge)
+                    state.pendingPublications.forEach { publication ->
+                        FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(publication.taskName, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "版本 ${publication.version} · 来源 ${sourceLabel(publication.source)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    "分发者：${publication.publisher}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                if (publication.description.isNotBlank()) Text(publication.description)
+                                if (publication.notes.isNotBlank()) {
+                                    Text("版本说明：${publication.notes}", style = MaterialTheme.typography.bodySmall)
+                                }
+                                Text(
+                                    "能力：${publication.capabilities.joinToString("、")}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                Text("确认接收后，设备才能下载并运行此版本。")
+                                Button(
+                                    onClick = { viewModel.acceptPublication(publication) },
+                                    enabled = !state.loading,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("确认接收脚本")
+                                }
+                            }
                         }
                     }
                 }

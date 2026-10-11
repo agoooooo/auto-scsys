@@ -45,6 +45,23 @@ internal data class DownloadedScript(
     val isCached: Boolean = false,
 )
 
+internal data class PendingPublication(
+    val id: String,
+    val taskId: String,
+    val taskName: String,
+    val description: String,
+    val version: String,
+    val source: String,
+    val publisher: String,
+    val capabilities: List<String>,
+    val notes: String,
+)
+
+internal data class TaskSync(
+    val tasks: List<AvailableTask>,
+    val pendingPublications: List<PendingPublication>,
+)
+
 internal data class AvailableTask(
     val id: String,
     val name: String,
@@ -136,9 +153,9 @@ internal class ApiClient(baseUrl: String) {
         request("/devices/${encodePathSegment(deviceId)}", method = "DELETE", token = token)
     }
 
-    fun syncTasks(token: String, deviceId: String): List<AvailableTask> {
+    fun syncTasks(token: String, deviceId: String): TaskSync {
         val response = JSONObject(request("/devices/$deviceId/sync", method = "POST", token = token))
-        return response.optJSONArray("tasks").orEmpty().objects().map { task ->
+        val tasks = response.optJSONArray("tasks").orEmpty().objects().map { task ->
             AvailableTask(
                 id = task.optString("id"),
                 name = task.optString("name"),
@@ -148,6 +165,28 @@ internal class ApiClient(baseUrl: String) {
                 source = task.optString("source", "user"),
             )
         }
+        val pending = response.optJSONArray("pending_publications").orEmpty().objects().map { item ->
+            PendingPublication(
+                id = item.optString("id"),
+                taskId = item.optString("task_id"),
+                taskName = item.optString("task_name"),
+                description = item.optString("description"),
+                version = item.optString("version"),
+                source = item.optString("source"),
+                publisher = item.optString("publisher"),
+                capabilities = item.optJSONArray("capabilities").orEmpty().strings(),
+                notes = item.optString("notes"),
+            )
+        }
+        return TaskSync(tasks, pending)
+    }
+
+    fun acceptPublication(token: String, deviceId: String, publicationId: String) {
+        request(
+            "/devices/${encodePathSegment(deviceId)}/publications/${encodePathSegment(publicationId)}/accept",
+            method = "POST",
+            token = token,
+        )
     }
 
     fun heartbeat(token: String, deviceId: String) {

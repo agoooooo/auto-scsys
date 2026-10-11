@@ -164,6 +164,17 @@ def _initialize_database(db_path: Path) -> None:
                 created_at TEXT NOT NULL,
                 PRIMARY KEY(task_id, user_id)
             );
+            CREATE TABLE IF NOT EXISTS task_publications (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL REFERENCES tasks(id),
+                version TEXT NOT NULL,
+                device_id TEXT NOT NULL REFERENCES devices(id),
+                published_by TEXT NOT NULL REFERENCES users(id),
+                status TEXT NOT NULL CHECK(status IN ('pending', 'accepted', 'revoked')),
+                created_at TEXT NOT NULL,
+                accepted_at TEXT,
+                UNIQUE(task_id, version, device_id)
+            );
             CREATE TABLE IF NOT EXISTS remote_runs (
                 id TEXT PRIMARY KEY,
                 task_id TEXT NOT NULL REFERENCES tasks(id),
@@ -355,6 +366,11 @@ class RunAuthorizationInput(BaseModel):
     all_versions: bool = False
 
 
+class TaskPublicationInput(BaseModel):
+    device_id: str
+    version: str
+
+
 class RunUpdate(BaseModel):
     status: Literal["success", "failure", "stopped"]
     result_summary: str = Field(default="", max_length=500)
@@ -434,6 +450,10 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             "UPDATE remote_runs SET status='expired' WHERE device_id=? AND status='pending'",
             (device_id,),
         )
+        db.execute(
+            "UPDATE task_publications SET status='revoked' WHERE device_id=? AND status!='revoked'",
+            (device_id,),
+        )
 
     def _device_for_user(db: sqlite3.Connection, device_id: str, user: dict) -> sqlite3.Row:
         device = db.execute(
@@ -462,6 +482,22 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if require_published and task["status"] != "published":
             raise HTTPException(status_code=409, detail="任务当前不可运行")
         return task
+
+    def _ensure_device_has_task_version(
+        db: sqlite3.Connection,
+        task: sqlite3.Row,
+        device: sqlite3.Row,
+        version: str,
+    ) -> None:
+        if task["owner_id"] == device["user_id"]:
+            return
+        publication = db.execute(
+            """SELECT 1 FROM task_publications
+               WHERE task_id=? AND version=? AND device_id=? AND status='accepted'""",
+            (task["id"], version, device["id"]),
+        ).fetchone()
+        if not publication:
+            raise HTTPException(status_code=403, detail="设备尚未确认接收此脚本版本")
 
     def _expire_requests(db: sqlite3.Connection) -> None:
         db.execute(
@@ -565,6 +601,11 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if body.status == "disabled" and target["status"] != "disabled":
             now = utc_now()
             db.execute("UPDATE run_authorizations SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (now, user_id))
+            db.execute(
+                """UPDATE task_publications SET status='revoked'
+                   WHERE device_id IN (SELECT id FROM devices WHERE user_id=?) AND status!='revoked'""",
+                (user_id,),
+            )
             db.execute("UPDATE remote_runs SET status='expired' WHERE status='pending' AND device_id IN (SELECT id FROM devices WHERE user_id=?)", (user_id,))
             db.execute(
                 """UPDATE runs SET status='stopped',finished_at=?,result_summary='账号已停用'
@@ -761,6 +802,114 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         audit(db, user["id"], "task.granted", "task", task_id)
         return {"task_id": task_id, "user_id": user_id}
 
+    @app.get("/tasks/{task_id}/publications")
+    def list_task_publications(
+        task_id: str,
+        user: dict = Depends(require_admin),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        if not db.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="任务不存在")
+        rows = db.execute(
+            """SELECT p.id,p.task_id,p.version,p.device_id,p.status,p.created_at,p.accepted_at,
+                      d.name AS device_name,d.user_id,u.name AS user_name,u.email AS user_email
+               FROM task_publications p JOIN devices d ON d.id=p.device_id
+               JOIN users u ON u.id=d.user_id
+               WHERE p.task_id=? ORDER BY p.created_at DESC""",
+            (task_id,),
+        )
+        return [dict(row) for row in rows]
+
+    @app.post("/tasks/{task_id}/publications", status_code=201)
+    def publish_to_device(
+        task_id: str,
+        body: TaskPublicationInput,
+        user: dict = Depends(require_admin),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        task = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        if task["status"] != "published":
+            raise HTTPException(status_code=409, detail="只能分发已发布的任务")
+        device = db.execute(
+            """SELECT d.id,d.user_id,d.status,u.status AS account_status
+               FROM devices d JOIN users u ON u.id=d.user_id WHERE d.id=?""",
+            (body.device_id,),
+        ).fetchone()
+        if not device or device["status"] == "disabled":
+            raise HTTPException(status_code=404, detail="可用设备不存在")
+        if device["account_status"] != "active":
+            raise HTTPException(status_code=409, detail="不能向已停用账号分发任务")
+        version_exists = db.execute(
+            "SELECT 1 FROM task_versions WHERE task_id=? AND version=?",
+            (task_id, body.version),
+        ).fetchone()
+        if not version_exists:
+            raise HTTPException(status_code=404, detail="脚本版本不存在")
+
+        existing = db.execute(
+            "SELECT id,status FROM task_publications WHERE task_id=? AND version=? AND device_id=?",
+            (task_id, body.version, device["id"]),
+        ).fetchone()
+        now = utc_now()
+        if existing and existing["status"] == "accepted":
+            return {
+                "id": existing["id"], "task_id": task_id, "version": body.version,
+                "device_id": device["id"], "status": "accepted",
+            }
+        publication_id = existing["id"] if existing else str(uuid.uuid4())
+        if existing:
+            db.execute(
+                """UPDATE task_publications SET status='pending',published_by=?,created_at=?,accepted_at=NULL
+                   WHERE id=?""",
+                (user["id"], now, publication_id),
+            )
+        else:
+            db.execute(
+                """INSERT INTO task_publications
+                   (id,task_id,version,device_id,published_by,status,created_at)
+                   VALUES(?,?,?,?,?,'pending',?)""",
+                (publication_id, task_id, body.version, device["id"], user["id"], now),
+            )
+        db.execute(
+            "INSERT OR IGNORE INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?)",
+            (task_id, device["user_id"], now),
+        )
+        audit(db, user["id"], "task.publication_created", "task_publication", publication_id)
+        return {
+            "id": publication_id, "task_id": task_id, "version": body.version,
+            "device_id": device["id"], "status": "pending",
+        }
+
+    @app.delete("/tasks/{task_id}/publications/{publication_id}")
+    def revoke_task_publication(
+        task_id: str,
+        publication_id: str,
+        user: dict = Depends(require_admin),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        publication = db.execute(
+            "SELECT * FROM task_publications WHERE id=? AND task_id=?",
+            (publication_id, task_id),
+        ).fetchone()
+        if not publication:
+            raise HTTPException(status_code=404, detail="任务分发记录不存在")
+        if publication["status"] != "revoked":
+            db.execute("UPDATE task_publications SET status='revoked' WHERE id=?", (publication_id,))
+            db.execute(
+                """UPDATE run_authorizations SET revoked_at=?
+                   WHERE task_id=? AND version=? AND device_id=? AND revoked_at IS NULL""",
+                (utc_now(), task_id, publication["version"], publication["device_id"]),
+            )
+            db.execute(
+                """UPDATE remote_runs SET status='expired'
+                   WHERE task_id=? AND version=? AND device_id=? AND status='pending'""",
+                (task_id, publication["version"], publication["device_id"]),
+            )
+            audit(db, user["id"], "task.publication_revoked", "task_publication", publication_id)
+        return {"id": publication_id, "status": "revoked"}
+
     @app.get("/tasks/{task_id}/grants")
     def list_task_grants(
         task_id: str,
@@ -807,6 +956,12 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             """UPDATE run_authorizations SET revoked_at=?
                WHERE task_id=? AND user_id=? AND revoked_at IS NULL""",
             (now, task_id, user_id),
+        )
+        db.execute(
+            """UPDATE task_publications SET status='revoked'
+               WHERE task_id=? AND device_id IN (SELECT id FROM devices WHERE user_id=?)
+                 AND status!='revoked'""",
+            (task_id, user_id),
         )
         audit(db, user["id"], "task.grant_revoked", "task", task_id)
         return {"task_id": task_id, "user_id": user_id}
@@ -863,12 +1018,74 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if user["role"] != "user" or device["user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="只有设备所属用户可以同步设备")
         _touch_device(db, device_id)
-        rows = db.execute(
-            """SELECT t.* FROM tasks t JOIN task_grants g ON g.task_id=t.id
-               WHERE g.user_id=? AND t.status='published' ORDER BY t.name""",
+        own_tasks = db.execute(
+            """SELECT t.*,t.active_version AS device_version FROM tasks t
+               WHERE t.owner_id=? AND t.status='published' AND t.active_version IS NOT NULL""",
             (device["user_id"],),
-        )
-        return {"device_id": device_id, "synced_at": utc_now(), "tasks": [_task_dict(db, row) for row in rows]}
+        ).fetchall()
+        accepted = db.execute(
+            """SELECT t.*,p.version AS device_version FROM task_publications p
+               JOIN tasks t ON t.id=p.task_id JOIN task_grants g ON g.task_id=t.id AND g.user_id=?
+               WHERE p.device_id=? AND p.status='accepted' AND t.status='published'
+               ORDER BY p.accepted_at DESC""",
+            (device["user_id"], device["id"]),
+        ).fetchall()
+        versions = {}
+        for row in [*own_tasks, *accepted]:
+            versions.setdefault((row["id"], row["device_version"]), _task_dict(db, row) | {
+                "active_version": row["device_version"],
+            })
+        pending = db.execute(
+            """SELECT p.id,p.task_id,p.version,p.created_at,t.name,t.description,t.source,
+                      t.capabilities_json,v.notes,publisher.name AS publisher_name
+               FROM task_publications p JOIN tasks t ON t.id=p.task_id
+               JOIN task_versions v ON v.task_id=p.task_id AND v.version=p.version
+               JOIN users publisher ON publisher.id=p.published_by
+               WHERE p.device_id=? AND p.status='pending' AND t.status='published'
+               ORDER BY p.created_at""",
+            (device["id"],),
+        ).fetchall()
+        return {
+            "device_id": device_id,
+            "synced_at": utc_now(),
+            "tasks": list(versions.values()),
+            "pending_publications": [{
+                "id": row["id"], "task_id": row["task_id"], "version": row["version"],
+                "created_at": row["created_at"], "task_name": row["name"],
+                "description": row["description"], "source": row["source"],
+                "capabilities": json.loads(row["capabilities_json"]), "notes": row["notes"],
+                "publisher": row["publisher_name"],
+            } for row in pending],
+        }
+
+    @app.post("/devices/{device_id}/publications/{publication_id}/accept")
+    def accept_task_publication(
+        device_id: str,
+        publication_id: str,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        device = _device_for_user(db, device_id, user)
+        if user["role"] != "user" or device["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="只有设备所属用户可以确认任务分发")
+        publication = db.execute(
+            """SELECT p.*,t.status AS task_status FROM task_publications p
+               JOIN tasks t ON t.id=p.task_id
+               WHERE p.id=? AND p.device_id=?""",
+            (publication_id, device_id),
+        ).fetchone()
+        if not publication:
+            raise HTTPException(status_code=404, detail="任务分发记录不存在")
+        if publication["status"] == "revoked" or publication["task_status"] != "published":
+            raise HTTPException(status_code=409, detail="此任务分发已撤销或暂停")
+        if publication["status"] != "accepted":
+            db.execute(
+                "UPDATE task_publications SET status='accepted',accepted_at=? WHERE id=?",
+                (utc_now(), publication_id),
+            )
+            audit(db, user["id"], "task.publication_accepted", "task_publication", publication_id)
+        _touch_device(db, device_id)
+        return {"id": publication_id, "task_id": publication["task_id"], "version": publication["version"], "status": "accepted"}
 
     @app.post("/devices/{device_id}/heartbeat")
     def device_heartbeat(device_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
@@ -881,7 +1098,8 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     @app.get("/devices/{device_id}/tasks/{task_id}/versions/{version}/content")
     def download_script(device_id: str, task_id: str, version: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         device = _device_for_user(db, device_id, user)
-        _task_for_user(db, task_id, {"id": device["user_id"], "role": "user"})
+        task = _task_for_user(db, task_id, {"id": device["user_id"], "role": "user"})
+        _ensure_device_has_task_version(db, task, device, version)
         row = db.execute(
             "SELECT filename,content,sha256 FROM task_versions WHERE task_id=? AND version=?",
             (task_id, version),
@@ -908,6 +1126,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         task = _task_for_user(db, body.task_id, {"id": device["user_id"], "role": "user"})
         if not task["active_version"]:
             raise HTTPException(status_code=409, detail="任务没有可运行版本")
+        _ensure_device_has_task_version(db, task, device, task["active_version"])
         request_id = str(uuid.uuid4())
         now = int(time.time())
         expires_at = now + REMOTE_REQUEST_TTL_SECONDS
@@ -954,6 +1173,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         ).fetchone()
         if not version:
             raise HTTPException(status_code=404, detail="脚本版本不存在")
+        _ensure_device_has_task_version(db, task, device, body.version)
         _ensure_device_idle(db, device["id"])
         run_id = str(uuid.uuid4())
         db.execute(

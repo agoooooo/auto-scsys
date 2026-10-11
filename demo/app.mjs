@@ -75,6 +75,9 @@ const auditActionLabels = {
   "task.created": "创建任务",
   "task.granted": "授予任务访问权",
   "task.grant_revoked": "撤销任务访问权",
+  "task.publication_created": "分发脚本到设备",
+  "task.publication_accepted": "设备确认接收脚本",
+  "task.publication_revoked": "撤销设备脚本分发",
   "task.version_published": "发布任务版本",
   "task.version_activated": "切换当前任务版本",
   "task.paused": "暂停任务",
@@ -92,6 +95,7 @@ const auditResourceLabels = {
   device: "设备",
   task: "任务",
   task_version: "任务版本",
+  task_publication: "设备脚本分发",
   remote_run: "远程运行请求",
   run: "运行记录",
   run_authorization: "运行预授权",
@@ -121,6 +125,8 @@ function statusPill(status) {
     release: "版本发布",
     running: "运行中",
     pending: "等待确认",
+    accepted: "已接收",
+    revoked: "已撤销",
     rejected: "已拒绝",
     expired: "已过期",
     stopped: "已停止",
@@ -758,16 +764,22 @@ function suggestVersion(version) {
 
 async function showTaskAccessModal(taskId) {
   const task = state.tasks.find((item) => item.id === taskId);
-  const grants = await apiRequest(session, `/tasks/${encodeURIComponent(taskId)}/grants`);
+  const [grants, publications] = await Promise.all([
+    apiRequest(session, `/tasks/${encodeURIComponent(taskId)}/grants`),
+    apiRequest(session, `/tasks/${encodeURIComponent(taskId)}/publications`),
+  ]);
   const grantedIds = new Set(grants.map((grant) => grant.id));
   const eligibleUsers = state.users.filter((user) =>
     user.role === "user" && user.status === "active" && !grantedIds.has(user.id));
+  const assignableDevices = state.devices.filter((device) => device.status !== "disabled");
   modalRoot.innerHTML = `<div class="modal-root-inner"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-    <div class="modal-header"><div><h2 id="modal-title">访问授权</h2><p>${escapeHtml(task?.name ?? "任务")} · 管理可以查看和运行此任务的用户</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
+    <div class="modal-header"><div><h2 id="modal-title">访问授权与设备发布</h2><p>${escapeHtml(task?.name ?? "任务")} · 设备用户确认接收后才能下载和运行脚本</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
     <div class="modal-body">
       <div class="task-grant-list">${grants.length ? grants.map((grant) => `<div class="task-grant-row"><span><strong>${escapeHtml(grant.name)}</strong><small>${escapeHtml(grant.email)} · ${grant.status === "active" ? "正常" : "已停用"}${grant.is_owner ? " · 所有者" : ""}</small></span>${grant.is_owner ? `<span class="form-hint">所有者</span>` : `<button class="text-button" data-action="revoke-task-grant" data-task-id="${escapeHtml(taskId)}" data-user-id="${escapeHtml(grant.id)}">撤销</button>`}</div>`).join("") : `<div class="empty-state">尚未授权其他用户</div>`}</div>
       ${eligibleUsers.length ? `<form id="task-access-form" data-task-id="${escapeHtml(taskId)}"><div class="form-field"><label for="task-access-user">授权用户</label><select id="task-access-user" name="userId" required>${eligibleUsers.map((user) => `<option value="${escapeHtml(user.id)}">${escapeHtml(user.name)} · ${escapeHtml(user.email)}</option>`).join("")}</select></div><button class="primary-button" type="submit">添加授权</button></form>` : `<div class="form-hint">没有可添加的正常用户。</div>`}
-      <div class="form-hint">撤销后用户将无法同步或下载任务；未处理的远程请求和此任务的预授权会失效，已开始的运行不受影响。</div>
+      <div class="version-list">${publications.length ? publications.map((item) => `<div class="version-item"><strong>${escapeHtml(item.device_name)} · ${escapeHtml(item.user_name)}</strong><span>${escapeHtml(item.version)} · ${statusPill(item.status)}</span><small>设备 ID：${escapeHtml(item.device_id)}</small>${item.status !== "revoked" ? `<button class="text-button" data-action="revoke-publication" data-task-id="${escapeHtml(taskId)}" data-publication-id="${escapeHtml(item.id)}">撤销设备发布</button>` : ""}</div>`).join("") : `<div class="empty-state">还没有发布到具体设备</div>`}</div>
+      ${assignableDevices.length ? `<form id="task-publication-form" data-task-id="${escapeHtml(taskId)}"><div class="form-field"><label for="publication-device">发布到设备</label><select id="publication-device" name="deviceId" required>${assignableDevices.map((device) => `<option value="${escapeHtml(device.id)}">${escapeHtml(device.userName)} · ${escapeHtml(device.name)} (${escapeHtml(device.status === "online" ? "在线" : "离线")})</option>`).join("")}</select></div><div class="form-field"><label for="publication-version">脚本版本</label><select id="publication-version" name="version" required>${(task?.apiVersions ?? []).map((item) => `<option value="${escapeHtml(item.version)}" ${item.version === task.activeVersion ? "selected" : ""}>${escapeHtml(item.version)}${item.version === task.activeVersion ? " · 当前版本" : ""}</option>`).join("")}</select></div><button class="primary-button" type="submit">发布并请求设备确认</button></form>` : `<div class="form-hint">没有可发布的设备。</div>`}
+      <div class="form-hint">设备用户确认后才能同步脚本。撤销发布会阻止该设备下载和新运行，已开始的运行不受影响。</div>
     </div>
     <div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">完成</button></div>
   </section></div>`;
@@ -867,6 +879,16 @@ document.addEventListener("click", async (event) => {
       await refreshFromApi();
       await showTaskAccessModal(taskId);
       showToast("任务访问权限已撤销");
+    } catch (error) { showToast(error.message); }
+  } else if (action === "revoke-publication") {
+    const { taskId, publicationId } = actionButton.dataset;
+    try {
+      await apiRequest(session, `/tasks/${encodeURIComponent(taskId)}/publications/${encodeURIComponent(publicationId)}`, {
+        method: "DELETE",
+      });
+      await refreshFromApi();
+      await showTaskAccessModal(taskId);
+      showToast("设备脚本发布已撤销");
     } catch (error) { showToast(error.message); }
   }
   else if (action === "toggle-task-status") {
@@ -1004,6 +1026,22 @@ document.addEventListener("submit", async (event) => {
       await refreshFromApi();
       await showTaskAccessModal(taskId);
       showToast("任务访问权限已添加");
+    } catch (error) { showToast(error.message); }
+  } else if (event.target.id === "task-publication-form") {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const taskId = event.target.dataset.taskId;
+    try {
+      await apiRequest(session, `/tasks/${encodeURIComponent(taskId)}/publications`, {
+        method: "POST",
+        body: {
+          device_id: formData.get("deviceId"),
+          version: formData.get("version"),
+        },
+      });
+      await refreshFromApi();
+      await showTaskAccessModal(taskId);
+      showToast("脚本已发布，等待设备用户确认");
     } catch (error) { showToast(error.message); }
   } else if (event.target.id === "login-form") {
     event.preventDefault();
