@@ -28,7 +28,7 @@ Set `FLOWPILOT_API_HOST`, `FLOWPILOT_WEB_HOST`, `FLOWPILOT_API_PORT`, or `FLOWPI
 
 **Network safety:** LAN binding does not make this suitable for the public internet. The local database has known demo accounts, the service has no TLS, and this is not a production deployment. Only use it on a trusted network; do not configure router port forwarding or expose it to the internet. Allow inbound TCP ports 8000 and 8001 in the machine's firewall only for the trusted LAN if necessary. The app issues a fresh random token secret on each start unless one is configured, so existing tokens expire after a restart.
 
-The API has a fail-closed `FLOWPILOT_ENV=production` startup guard and interactive first-admin bootstrap (`python -m server.bootstrap_admin`). This is only deployment hardening: the prototype still uses SQLite/local script storage and lacks production account recovery, rate limiting, managed object storage, backup/restore, monitoring, and a production security review. It is not ready for public production deployment.
+The API has a fail-closed `FLOWPILOT_ENV=production` startup guard, interactive first-admin bootstrap (`python -m server.bootstrap_admin`), and SQLite backup/verify/restore commands (`python -m server.database_backup`). These are deployment safeguards, not production readiness: the prototype still uses local SQLite/script storage and lacks production account recovery, full API rate limiting, scheduled encrypted off-host backups, monitoring, and a production security review. It is not ready for public production deployment.
 
 ## Tests
 

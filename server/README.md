@@ -2,7 +2,7 @@
 
 这是供当前产品原型和后续 Android 客户端验证使用的 FastAPI 服务端。默认开发模式在本机使用 SQLite，并预置演示账号、设备和任务；遗留的有限预授权数据和 API 为旧客户端保留，不参与当前 Android 客户端的远程运行判断。脚本上传后只做 `.py` 格式、大小和 SHA-256 校验，不会执行脚本。
 
-**当前服务仍不是生产系统。**`FLOWPILOT_ENV=production` 只启用启动保护（要求明确配置、禁用演示数据和 API 文档），并不代表 SQLite、脚本存储、账号恢复、全 API 速率限制、备份、监控或高可用已达到生产标准。登录接口会按来源地址和邮箱组合限制连续失败尝试（15 分钟内最多 5 次），但这不替代边缘/API 网关层的分布式限流与防拒绝服务措施。此模式仅用于部署配置验证或单实例、持久卷上的受控内部验证；公网部署前仍须完成托管 PostgreSQL/对象存储、HTTPS 反向代理、账户生命周期与恢复、全 API 速率限制、备份恢复演练、监控告警和安全评审。Android 客户端必须使用 HTTPS API 地址。
+**当前服务仍不是生产系统。**`FLOWPILOT_ENV=production` 只启用启动保护（要求明确配置、禁用演示数据和 API 文档），并不代表 SQLite、脚本存储、账号恢复、全 API 速率限制、自动化备份策略、监控或高可用已达到生产标准。登录接口会按来源地址和邮箱组合限制连续失败尝试（15 分钟内最多 5 次），但这不替代边缘/API 网关层的分布式限流与防拒绝服务措施。此模式仅用于部署配置验证或单实例、持久卷上的受控内部验证；公网部署前仍须完成托管 PostgreSQL/对象存储、HTTPS 反向代理、账户生命周期与恢复、全 API 速率限制、定期加密异地备份及恢复演练、监控告警和安全评审。Android 客户端必须使用 HTTPS API 地址。
 
 ## 本地启动
 
@@ -39,6 +39,18 @@ uvicorn server.app:app --host 127.0.0.1 --port 8001
 ```
 
 The bootstrap command prompts for an admin name, email, and 12+ character password without echoing the password. It refuses to run when the database already contains any user, and must be run only once against a fresh database. Keep the API behind a correctly configured HTTPS reverse proxy; do not publish the local SQLite file or secret. The production-mode guard does not make this SQLite-based prototype production-ready.
+
+## SQLite backup and restore
+
+The maintenance CLI makes a consistent online SQLite backup, verifies it with `PRAGMA integrity_check`, and publishes it with owner-only permissions. It never overwrites an existing file; restore must target a new path:
+
+```bash
+python -m server.database_backup backup --database "$FLOWPILOT_DB_PATH" --output /secure-backups/flowpilot-$(date +%Y%m%d-%H%M%S).sqlite3
+python -m server.database_backup verify --backup /secure-backups/flowpilot-20261012-001500.sqlite3
+python -m server.database_backup restore --backup /secure-backups/flowpilot-20261012-001500.sqlite3 --database /var/lib/flowpilot/restore-check.sqlite3
+```
+
+Keep backup destinations on protected storage; this database contains account data and uploaded script contents. This CLI does not schedule, encrypt, upload, rotate, or monitor backups. Put backups in an encrypted off-host system and periodically rehearse restores before relying on them.
 
 ## 已实现接口
 
