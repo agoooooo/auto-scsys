@@ -1,0 +1,382 @@
+package com.flowpilot.android
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.IBinder
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.chaquo.python.Python
+import com.chaquo.python.android.AndroidPlatform
+import com.chaquo.python.PyObject
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
+
+internal class TaskExecutionService : Service() {
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val stopRequested = AtomicBoolean(false)
+    private var executionJob: Job? = null
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            stopRequested.set(true)
+            if (executionJob?.isActive != true) {
+                stopSelf(startId)
+            } else {
+                setTaskNotification("停止请求已发送，将在脚本下一个检查点停止", ongoing = true)
+            }
+            return START_NOT_STICKY
+        }
+        if (intent?.action != ACTION_EXECUTE) return START_NOT_STICKY
+        if (executionJob?.isActive == true) {
+            rejectConcurrentRun(intent)
+            return START_NOT_STICKY
+        }
+
+        stopRequested.set(false)
+        startForegroundTask()
+        executionJob = serviceScope.launch {
+            executeTask(intent, startId)
+        }
+        return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        stopRequested.set(true)
+        serviceScope.cancel()
+        super.onDestroy()
+    }
+
+    private fun startForegroundTask() {
+        ensureNotificationChannel()
+        val notification = taskNotification("正在准备任务…", ongoing = true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private suspend fun executeTask(intent: Intent, startId: Int) {
+        val runId = intent.getStringExtra(EXTRA_RUN_ID).orEmpty()
+        val taskName = intent.getStringExtra(EXTRA_TASK_NAME).orEmpty().ifBlank { "自动化任务" }
+        val store = RunStatusStore(this)
+        var status = "failure"
+        var summary = "任务未能完成"
+        var capture: ScreenCaptureSession? = null
+        var api: ApiClient? = null
+        var token: String? = null
+        var activeSession: StoredSession? = null
+
+        store.update(runId, taskName, "running", "正在执行")
+        notifyRunStatusChanged()
+        setTaskNotification("正在运行：$taskName", ongoing = true)
+
+        try {
+            delay(SERVICE_START_GRACE_PERIOD_MILLIS)
+            val session = SessionStore(this).read()
+                ?: throw IllegalStateException("登录状态已失效，请重新登录")
+            activeSession = session
+            token = session.token
+            api = ApiClient(session.apiBaseUrl)
+            val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID)
+                ?: session.deviceId
+                ?: throw IllegalStateException("当前账号尚未绑定此设备")
+            val task = AvailableTask(
+                id = intent.getStringExtra(EXTRA_TASK_ID).orEmpty(),
+                name = taskName,
+                description = "",
+                version = intent.getStringExtra(EXTRA_TASK_VERSION).orEmpty(),
+                capabilities = emptyList(),
+            )
+            require(task.id.isNotBlank() && task.version.isNotBlank()) { "任务或版本信息不完整" }
+            if (!DouyinAccessibilityService.isEnabled(this)) {
+                throw IllegalStateException("请先在系统设置中启用 FlowPilot 自动化操作服务")
+            }
+            val resultCode = intent.getIntExtra(EXTRA_CAPTURE_RESULT_CODE, 0)
+            val resultData = intent.parcelableExtra<Intent>(EXTRA_CAPTURE_RESULT_DATA)
+                ?: throw IllegalStateException("缺少 Android 屏幕捕获授权")
+            capture = ScreenCaptureSession(this, resultCode, resultData)
+
+            val script = withContext(Dispatchers.IO) {
+                api.downloadScript(session.token, deviceId, task)
+            }
+            ensureNotStopped()
+            if (!Python.isStarted()) Python.start(AndroidPlatform(applicationContext))
+            val python = Python.getInstance()
+            val globals = PyObject.fromJava(mapOf("nativeBridge" to NativeTaskBridge(this, capture, stopRequested)))
+            python.getBuiltins().callAttr("exec", PYTHON_BRIDGE, globals)
+            python.getBuiltins().callAttr("exec", script.source, globals)
+            ensureNotStopped()
+            val result = globals.get("result")?.toString()?.takeIf(String::isNotBlank)
+                ?: "脚本已执行完成"
+            status = "success"
+            summary = result.take(500)
+        } catch (exception: CancellationException) {
+            status = "stopped"
+            summary = "用户停止了任务"
+        } catch (exception: Exception) {
+            status = if (stopRequested.get()) "stopped" else "failure"
+            summary = if (stopRequested.get()) "用户停止了任务" else exception.message ?: "任务执行失败"
+        } finally {
+            try {
+                capture?.close()
+            } catch (exception: Exception) {
+                if (status == "success") {
+                    status = "failure"
+                    summary = "关闭屏幕捕获时失败：${exception.message ?: "未知错误"}"
+                }
+            }
+            val reporter = api ?: activeSession?.let { ApiClient(it.apiBaseUrl) }
+            val reportToken = token ?: activeSession?.token
+            if (reporter != null && reportToken != null && runId.isNotBlank()) {
+                try {
+                    val serverSummary = when (status) {
+                        "success" -> "任务完成"
+                        "stopped" -> "任务已停止"
+                        else -> "任务执行失败"
+                    }
+                    withContext(Dispatchers.IO) {
+                        reporter.updateRun(reportToken, runId, status, serverSummary)
+                    }
+                } catch (exception: Exception) {
+                    summary = "$summary；运行结果同步失败：${exception.message ?: "服务器不可用"}"
+                    if (status == "success") status = "failure"
+                }
+            }
+            store.update(runId, taskName, status, summary)
+            notifyRunStatusChanged()
+            setTaskNotification("$taskName：${statusLabel(status)}", ongoing = false)
+            stopForeground(STOP_FOREGROUND_DETACH)
+            stopSelf(startId)
+        }
+    }
+
+    private fun ensureNotStopped() {
+        if (stopRequested.get()) throw CancellationException("任务已停止")
+    }
+
+    private fun rejectConcurrentRun(intent: Intent) {
+        serviceScope.launch {
+            val runId = intent.getStringExtra(EXTRA_RUN_ID).orEmpty()
+            val taskName = intent.getStringExtra(EXTRA_TASK_NAME).orEmpty()
+            val message = "设备上已有任务运行，本次任务未启动"
+            try {
+                val session = SessionStore(this@TaskExecutionService).read()
+                    ?: throw IllegalStateException("登录状态已失效")
+                ApiClient(session.apiBaseUrl).updateRun(session.token, runId, "failure", message)
+            } catch (exception: Exception) {
+                RunStatusStore(this@TaskExecutionService).appendLog(
+                    "无法记录未启动任务 $taskName：${exception.message ?: "服务器不可用"}",
+                )
+            }
+        }
+    }
+
+    private fun notifyRunStatusChanged() {
+        sendBroadcast(Intent(ACTION_RUN_STATUS_CHANGED).setPackage(packageName))
+    }
+
+    private fun taskNotification(message: String, ongoing: Boolean): Notification {
+        val stopIntent = PendingIntent.getService(
+            this,
+            STOP_PENDING_INTENT,
+            Intent(this, TaskExecutionService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle("FlowPilot")
+            .setContentText(message)
+            .setOngoing(ongoing)
+            .setOnlyAlertOnce(true)
+            .also { builder ->
+                if (ongoing) builder.addAction(0, "停止", stopIntent)
+            }
+            .build()
+    }
+
+    private fun setTaskNotification(message: String, ongoing: Boolean) {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_ID, taskNotification(message, ongoing))
+    }
+
+    private fun ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "任务运行", NotificationManager.IMPORTANCE_LOW),
+            )
+        }
+    }
+
+    private inner class NativeTaskBridge(
+        private val context: Context,
+        private val capture: ScreenCaptureSession,
+        private val stopRequested: AtomicBoolean,
+    ) {
+        private val clickUsed = AtomicBoolean(false)
+
+        fun openDouyin(): Boolean {
+            checkRunning()
+            DouyinAccessibilityService.requireInstance().openDouyin()
+            return true
+        }
+
+        fun ocr(): String {
+            checkRunning()
+            DouyinAccessibilityService.requireInstance().currentScreenText()
+            return capture.recognizeText()
+        }
+
+        fun clickText(text: String): Boolean {
+            checkRunning()
+            check(clickUsed.compareAndSet(false, true)) { "每次运行只允许点击一次" }
+            return DouyinAccessibilityService.requireInstance().clickText(text)
+        }
+
+        fun log(message: String) {
+            checkRunning()
+            RunStatusStore(context).appendLog(message.take(MAX_LOG_ENTRY_CHARS))
+        }
+
+        fun isStopped(): Boolean = stopRequested.get()
+
+        private fun checkRunning() {
+            if (stopRequested.get()) throw CancellationException("任务已停止")
+        }
+    }
+
+    private inline fun <reified T> Intent.parcelableExtra(key: String): T? =
+        if (Build.VERSION.SDK_INT >= 33) getParcelableExtra(key, T::class.java) else {
+            @Suppress("DEPRECATION")
+            getParcelableExtra(key)
+        }
+
+    private fun statusLabel(status: String): String = when (status) {
+        "success" -> "已完成"
+        "stopped" -> "已停止"
+        else -> "失败"
+    }
+
+    companion object {
+        const val ACTION_EXECUTE = "com.flowpilot.android.action.EXECUTE_TASK"
+        const val ACTION_STOP = "com.flowpilot.android.action.STOP_TASK"
+        const val ACTION_RUN_STATUS_CHANGED = "com.flowpilot.android.action.RUN_STATUS_CHANGED"
+        const val EXTRA_RUN_ID = "run_id"
+        const val EXTRA_TASK_ID = "task_id"
+        const val EXTRA_TASK_NAME = "task_name"
+        const val EXTRA_TASK_VERSION = "task_version"
+        const val EXTRA_DEVICE_ID = "device_id"
+        const val EXTRA_CAPTURE_RESULT_CODE = "capture_result_code"
+        const val EXTRA_CAPTURE_RESULT_DATA = "capture_result_data"
+        const val CHANNEL_ID = "flowpilot_task_execution"
+        const val NOTIFICATION_ID = 32
+        private const val STOP_PENDING_INTENT = 320
+        private const val MAX_LOG_ENTRY_CHARS = 500
+        private const val SERVICE_START_GRACE_PERIOD_MILLIS = 1_000L
+
+        private val PYTHON_BRIDGE = """
+            class FlowPilotBridge:
+                def open_douyin(self):
+                    return nativeBridge.openDouyin()
+                def ocr(self):
+                    return nativeBridge.ocr()
+                def click_text(self, text):
+                    return nativeBridge.clickText(text)
+                def log(self, message):
+                    return nativeBridge.log(str(message))
+                def is_stopped(self):
+                    return nativeBridge.isStopped()
+            bridge = FlowPilotBridge()
+        """.trimIndent()
+
+        fun start(
+            context: Context,
+            task: AvailableTask,
+            runId: String,
+            captureResultCode: Int,
+            captureResultData: Intent,
+            deviceId: String,
+        ) {
+            val intent = Intent(context, TaskExecutionService::class.java)
+                .setAction(ACTION_EXECUTE)
+                .putExtra(EXTRA_RUN_ID, runId)
+                .putExtra(EXTRA_TASK_ID, task.id)
+                .putExtra(EXTRA_TASK_NAME, task.name)
+                .putExtra(EXTRA_TASK_VERSION, task.version)
+                .putExtra(EXTRA_DEVICE_ID, deviceId)
+                .putExtra(EXTRA_CAPTURE_RESULT_CODE, captureResultCode)
+                .putExtra(EXTRA_CAPTURE_RESULT_DATA, captureResultData)
+            ContextCompat.startForegroundService(context, intent)
+        }
+
+        fun stop(context: Context) {
+            context.startService(Intent(context, TaskExecutionService::class.java).setAction(ACTION_STOP))
+        }
+    }
+}
+
+internal class RunStatusStore(context: Context) {
+    private val preferences = context.getSharedPreferences("flowpilot_runtime", Context.MODE_PRIVATE)
+
+    fun update(runId: String, taskName: String, status: String, summary: String) {
+        preferences.edit()
+            .putString(KEY_RUN_ID, runId)
+            .putString(KEY_TASK_NAME, taskName)
+            .putString(KEY_STATUS, status)
+            .putString(KEY_SUMMARY, summary.take(500))
+            .apply()
+    }
+
+    fun appendLog(message: String) {
+        val existing = preferences.getString(KEY_LOG, "").orEmpty()
+        preferences.edit().putString(KEY_LOG, (existing + message + "\n").takeLast(MAX_LOG_CHARS)).apply()
+    }
+
+    fun snapshot(): RunStatus =
+        RunStatus(
+            runId = preferences.getString(KEY_RUN_ID, null),
+            taskName = preferences.getString(KEY_TASK_NAME, null),
+            status = preferences.getString(KEY_STATUS, null),
+            summary = preferences.getString(KEY_SUMMARY, null),
+            log = preferences.getString(KEY_LOG, "").orEmpty(),
+        )
+
+    private companion object {
+        const val KEY_RUN_ID = "run_id"
+        const val KEY_TASK_NAME = "task_name"
+        const val KEY_STATUS = "status"
+        const val KEY_SUMMARY = "summary"
+        const val KEY_LOG = "log"
+        const val MAX_LOG_CHARS = 4000
+    }
+}
+
+internal data class RunStatus(
+    val runId: String?,
+    val taskName: String?,
+    val status: String?,
+    val summary: String?,
+    val log: String,
+)

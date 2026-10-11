@@ -5,3 +5,8 @@ __pycache__/
 server/flowpilot.sqlite3
 server/flowpilot.sqlite3-shm
 server/flowpilot.sqlite3-wal
+android/.gradle/
+android/.kotlin/
+android/.idea/
+android/local.properties
+android/**/build/

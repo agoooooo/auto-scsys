@@ -1,6 +1,6 @@
 # FlowPilot
 
-FlowPilot is an Android automation product prototype with a local FastAPI service and browser-based admin/mobile UI. The browser and API demonstrate the workflows; they do not execute Android actions or uploaded Python scripts.
+FlowPilot is an Android automation prototype with a local FastAPI service, browser-based admin demo, and a native Android client. The Android app can run user-reviewed Python task versions and use explicitly authorized OCR/accessibility capabilities; the browser and API remain demo systems and are not production-ready.
 
 ## Requirements
 
@@ -35,3 +35,5 @@ make test
 ```
 
 This runs the FastAPI tests and all Node.js tests without contacting Android devices. For API setup, endpoints, and current limitations, see [`server/README.md`](server/README.md).
+
+The native Android client setup, runtime bridge, permissions, and current limitations are documented in [`android/README.md`](android/README.md).

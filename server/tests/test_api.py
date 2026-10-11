@@ -501,6 +501,40 @@ def test_remote_run_confirmation_rejection_and_run_record(client):
     assert rejected.json()["status"] == "rejected"
 
 
+def test_device_can_poll_preauthorized_remote_run_until_execution_finishes(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    request = client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).json()
+    approved = client.patch(
+        f"/remote-runs/{request['id']}",
+        headers=auth(user),
+        json={"decision": "approve", "preauthorize": True},
+    ).json()
+
+    polled = client.get("/devices/d-001/remote-runs", headers=auth(user))
+    assert polled.status_code == 200
+    assert len(polled.json()) == 1
+    active_request = polled.json()[0]
+    assert active_request["id"] == request["id"]
+    assert active_request["task_id"] == "t-001"
+    assert active_request["device_id"] == "d-001"
+    assert active_request["status"] == "running"
+    assert active_request["run_id"] == approved["run_id"]
+    assert active_request["version"] == request["version"]
+
+    completed = client.post(
+        f"/runs/{approved['run_id']}",
+        headers=auth(user),
+        json={"status": "success", "result_summary": "完成"},
+    )
+    assert completed.status_code == 200
+    assert client.get("/devices/d-001/remote-runs", headers=auth(user)).json() == []
+
+
 def test_device_user_must_confirm_remote_runs_and_can_report_local_runs(client):
     admin = login(client, "admin@example.com", "admin-demo")
     user = login(client)

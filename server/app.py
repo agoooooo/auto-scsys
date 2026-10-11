@@ -877,15 +877,17 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         device = _device_for_user(db, device_id, user)
         _expire_requests(db)
         rows = db.execute(
-            """SELECT r.*,t.name AS task_name,t.source,t.capabilities_json,u.name AS requested_by_name
+            """SELECT r.*,t.name AS task_name,t.source,t.capabilities_json,u.name AS requested_by_name,
+                      (SELECT id FROM runs WHERE remote_run_id=r.id LIMIT 1) AS run_id
                FROM remote_runs r JOIN tasks t ON t.id=r.task_id
                JOIN users u ON u.id=r.requested_by
-               WHERE r.device_id=? AND r.status='pending' ORDER BY r.created_at""",
+               WHERE r.device_id=? AND r.status IN ('pending','running') ORDER BY r.created_at""",
             (device["id"],),
         )
         return [{
             "id": row["id"], "task_id": row["task_id"], "task": row["task_name"], "version": row["version"],
             "device_id": row["device_id"], "status": row["status"], "requested_by": row["requested_by"],
+            "run_id": row["run_id"],
             "requested_by_name": row["requested_by_name"],
             "created_at": row["created_at"], "expires_at": row["expires_at"], "source": row["source"],
             "capabilities": json.loads(row["capabilities_json"]),
