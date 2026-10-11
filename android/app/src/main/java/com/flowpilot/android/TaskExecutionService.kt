@@ -332,7 +332,13 @@ internal class RunStatusStore(context: Context) {
     private val preferences = context.getSharedPreferences("flowpilot_runtime", Context.MODE_PRIVATE)
 
     fun update(runId: String, taskName: String, status: String, summary: String) {
-        preferences.edit()
+        val previousRunId = preferences.getString(KEY_RUN_ID, null)
+        val previousStatus = preferences.getString(KEY_STATUS, null)
+        val editor = preferences.edit()
+        if (shouldClearRunLog(previousRunId, previousStatus, runId, status)) {
+            editor.remove(KEY_LOG)
+        }
+        editor
             .putString(KEY_RUN_ID, runId)
             .putString(KEY_TASK_NAME, taskName)
             .putString(KEY_STATUS, status)
@@ -371,3 +377,10 @@ internal data class RunStatus(
     val summary: String?,
     val log: String,
 )
+
+internal fun shouldClearRunLog(
+    previousRunId: String?,
+    previousStatus: String?,
+    runId: String,
+    status: String,
+): Boolean = previousRunId != runId || (status == "running" && previousStatus != "running")
