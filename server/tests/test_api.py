@@ -1,0 +1,292 @@
+import hashlib
+import time
+
+import pytest
+from fastapi.testclient import TestClient
+
+from server.app import create_app
+
+
+@pytest.fixture
+def client(tmp_path):
+    app = create_app(tmp_path / "test.sqlite3", b"test-secret-must-be-at-least-32-bytes")
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+def login(client, email="chen.xiao@example.com", password="user-demo"):
+    response = client.post("/auth/login", json={"email": email, "password": password})
+    assert response.status_code == 200
+    return response.json()["access_token"]
+
+
+def auth(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_login_roles_and_disabled_accounts(client):
+    assert client.post("/auth/login", json={"email": "admin@example.com", "password": "wrong"}).status_code == 401
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    assert client.get("/users", headers=auth(user)).status_code == 403
+    assert client.get("/users", headers=auth(admin)).status_code == 200
+    assert client.get("/devices").status_code == 401
+    refreshed = client.post("/auth/refresh", headers=auth(user))
+    assert refreshed.status_code == 200
+    assert client.get("/me", headers=auth(refreshed.json()["access_token"])).status_code == 200
+
+    client.patch("/users/u-1001", headers=auth(admin), json={"status": "disabled"})
+    assert client.get("/me", headers=auth(user)).status_code == 401
+
+
+def test_user_devices_and_task_access_are_scoped(client):
+    user = login(client)
+    devices = client.get("/devices", headers=auth(user)).json()
+    assert {device["id"] for device in devices} == {"d-001", "d-002"}
+    tasks = client.get("/tasks", headers=auth(user)).json()
+    assert [task["id"] for task in tasks] == ["t-001"]
+    assert tasks[0]["active_version"] == "v1.4.0"
+    assert client.post("/devices/d-002/sync", headers=auth(user)).status_code == 200
+    assert client.post("/devices/d-003/sync", headers=auth(user)).status_code == 404
+    assert client.get("/devices/d-001/tasks/t-002/versions/v0.2.0/content", headers=auth(user)).status_code == 404
+
+
+def test_user_can_bind_devices_up_to_account_limit(client):
+    user = login(client)
+    created_ids = []
+    for index in range(3):
+        response = client.post(
+            "/devices",
+            headers=auth(user),
+            json={"name": f"Extra {index}", "model": "Android 15", "app_version": "1.2.0"},
+        )
+        assert response.status_code == 201
+        created_ids.append(response.json()["id"])
+    assert client.post(
+        "/devices",
+        headers=auth(user),
+        json={"name": "Over limit", "model": "Android"},
+    ).status_code == 409
+    assert client.delete(f"/devices/{created_ids[0]}", headers=auth(user)).status_code == 200
+    assert client.post(
+        "/devices",
+        headers=auth(user),
+        json={"name": "Replacement", "model": "Android"},
+    ).status_code == 201
+    assert client.get(f"/devices/{created_ids[0]}/remote-runs", headers=auth(login(client, "zhou.ke@example.com", "user-demo"))).status_code == 404
+
+
+def test_user_can_create_and_publish_owned_task_but_not_another_users_task(client):
+    user = login(client)
+    created = client.post(
+        "/tasks",
+        headers=auth(user),
+        json={
+            "name": "我的 OCR 任务",
+            "description": "个人任务",
+            "capabilities": ["OCR 文字识别"],
+        },
+    )
+    assert created.status_code == 201
+    task_id = created.json()["id"]
+    assert created.json()["status"] == "draft"
+    assert task_id in {task["id"] for task in client.get("/tasks", headers=auth(user)).json()}
+
+    content = b"print('owner only')\n"
+    published = client.post(
+        f"/tasks/{task_id}/versions",
+        headers=auth(user),
+        data={"version": "v1.0.0"},
+        files={"script": ("my_task.py", content, "text/x-python")},
+    )
+    assert published.status_code == 201
+    assert next(task for task in client.get("/tasks", headers=auth(user)).json() if task["id"] == task_id)["status"] == "published"
+
+    other_user = login(client, "zhou.ke@example.com", "user-demo")
+    forbidden_upload = client.post(
+        f"/tasks/{task_id}/versions",
+        headers=auth(other_user),
+        data={"version": "v1.1.0"},
+        files={"script": ("stolen.py", b"pass", "text/x-python")},
+    )
+    assert forbidden_upload.status_code == 404
+
+
+def test_publish_script_validates_and_checks_content_hash(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    invalid_version = client.post(
+        "/tasks/t-002/versions",
+        headers=auth(admin),
+        data={"version": "latest"},
+        files={"script": ("task.py", b"print(1)", "text/x-python")},
+    )
+    assert invalid_version.status_code == 422
+    invalid_file = client.post(
+        "/tasks/t-002/versions",
+        headers=auth(admin),
+        data={"version": "v1.0.0"},
+        files={"script": ("task.txt", b"print(1)", "text/plain")},
+    )
+    assert invalid_file.status_code == 422
+
+    content = b"print('hello')\n"
+    published = client.post(
+        "/tasks/t-002/versions",
+        headers=auth(admin),
+        data={"version": "v1.0.0", "notes": "first"},
+        files={"script": ("task.py", content, "text/x-python")},
+    )
+    assert published.status_code == 201
+    assert published.json()["sha256"] == hashlib.sha256(content).hexdigest()
+    assert client.post("/tasks/t-002/grants/u-1001", headers=auth(admin)).status_code == 201
+    user = login(client)
+    downloaded = client.get(
+        "/devices/d-001/tasks/t-002/versions/v1.0.0/content",
+        headers=auth(user),
+    )
+    assert downloaded.content == content
+    assert downloaded.headers["x-content-sha256"] == hashlib.sha256(content).hexdigest()
+
+
+def test_remote_run_confirmation_rejection_and_run_record(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    created = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"})
+    assert created.status_code == 201
+    request_id = created.json()["id"]
+    assert created.json()["status"] == "pending"
+    pending = client.get("/devices/d-001/remote-runs", headers=auth(user))
+    assert [request["id"] for request in pending.json()] == [request_id]
+    approved = client.patch(
+        f"/remote-runs/{request_id}",
+        headers=auth(user),
+        json={"decision": "approve", "preauthorize": True},
+    )
+    assert approved.status_code == 200
+    run_id = approved.json()["run_id"]
+    assert client.get("/runs", headers=auth(user)).json()[0]["status"] == "running"
+    completed = client.post(
+        f"/runs/{run_id}",
+        headers=auth(user),
+        json={"status": "success", "result_summary": "OCR result"},
+    )
+    assert completed.status_code == 200
+    assert client.get("/runs", headers=auth(admin)).json()[0]["result_summary"] == "OCR result"
+
+    rejected_request = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-002"}).json()
+    rejected = client.patch(
+        f"/remote-runs/{rejected_request['id']}",
+        headers=auth(user),
+        json={"decision": "reject"},
+    )
+    assert rejected.json()["status"] == "rejected"
+
+
+def test_device_user_must_confirm_remote_runs_and_can_report_local_runs(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    request = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
+    forbidden = client.patch(
+        f"/remote-runs/{request['id']}",
+        headers=auth(admin),
+        json={"decision": "approve"},
+    )
+    assert forbidden.status_code == 403
+
+    local = client.post(
+        "/devices/d-001/runs",
+        headers=auth(user),
+        json={"task_id": "t-001", "version": "v1.4.0"},
+    )
+    assert local.status_code == 201
+    result = client.post(
+        f"/runs/{local.json()['id']}",
+        headers=auth(user),
+        json={"status": "success", "result_summary": "本地 OCR"},
+    )
+    assert result.status_code == 200
+    assert client.post(
+        f"/runs/{local.json()['id']}",
+        headers=auth(admin),
+        json={"status": "stopped"},
+    ).status_code == 403
+
+
+def test_preauthorization_is_limited_to_device_and_version_and_revocable(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    first = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
+    approved = client.patch(
+        f"/remote-runs/{first['id']}",
+        headers=auth(user),
+        json={"decision": "approve", "preauthorize": True},
+    ).json()
+    grants = client.get("/run-authorizations", headers=auth(user)).json()
+    assert len(grants) == 1
+    assert grants[0]["device_id"] == "d-001"
+    next_run = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
+    assert next_run["status"] == "running"
+    other_device = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-002"}).json()
+    assert other_device["status"] == "pending"
+
+    revoked = client.delete(f"/run-authorizations/{grants[0]['id']}", headers=auth(user))
+    assert revoked.status_code == 200
+    after_revoke = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
+    assert after_revoke["status"] == "pending"
+    assert client.delete(f"/run-authorizations/{grants[0]['id']}", headers=auth(user)).status_code == 404
+
+
+def test_expired_requests_cannot_be_approved(client):
+    import server.app as api
+
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    request = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
+    with api._connect(client.app.state.db_path) as db:
+        db.execute("UPDATE remote_runs SET expires_at=? WHERE id=?", (int(time.time()) - 1, request["id"]))
+    assert client.get("/devices/d-001/remote-runs", headers=auth(user)).json() == []
+    response = client.patch(
+        f"/remote-runs/{request['id']}",
+        headers=auth(user),
+        json={"decision": "approve"},
+    )
+    assert response.status_code == 410
+
+
+def test_disabling_a_device_revokes_its_preauthorizations_and_blocks_new_runs(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    request = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
+    client.patch(
+        f"/remote-runs/{request['id']}",
+        headers=auth(user),
+        json={"decision": "approve", "preauthorize": True},
+    )
+    assert client.get("/run-authorizations", headers=auth(user)).json()
+    assert client.patch("/devices/d-001", headers=auth(admin), json={"status": "disabled"}).status_code == 200
+    assert client.get("/run-authorizations", headers=auth(user)).json() == []
+    assert client.patch(
+        f"/remote-runs/{request['id']}",
+        headers=auth(user),
+        json={"decision": "approve"},
+    ).status_code == 409
+    assert client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).status_code == 409
+
+
+def test_database_persists_between_app_restarts(tmp_path):
+    database = tmp_path / "persistent.sqlite3"
+    app = create_app(database, b"shared-secret-must-be-at-least-32-bytes")
+    with TestClient(app) as first_client:
+        admin = login(first_client, "admin@example.com", "admin-demo")
+        response = first_client.post(
+            "/users",
+            headers=auth(admin),
+            json={"name": "持久用户", "email": "persist@example.com", "password": "long-password"},
+        )
+        assert response.status_code == 201
+    restarted = create_app(database, b"shared-secret-must-be-at-least-32-bytes")
+    with TestClient(restarted) as second_client:
+        assert second_client.post(
+            "/auth/login",
+            json={"email": "persist@example.com", "password": "long-password"},
+        ).status_code == 200

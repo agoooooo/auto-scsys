@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+.venv/
+server/flowpilot.sqlite3
+server/flowpilot.sqlite3-shm
+server/flowpilot.sqlite3-wal
