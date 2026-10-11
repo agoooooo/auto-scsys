@@ -632,7 +632,7 @@ function showUserModal() {
       <div class="form-field"><label for="user-name">用户姓名</label><input id="user-name" name="name" required placeholder="例如：林小满" /></div>
       <div class="form-field"><label for="user-email">邮箱地址</label><input id="user-email" name="email" type="email" required placeholder="name@example.com" /></div>
       <div class="form-field"><label for="device-limit">设备数量上限</label><select id="device-limit" name="deviceLimit"><option value="2">2 台设备</option><option value="3">3 台设备</option><option value="5" selected>5 台设备</option><option value="10">10 台设备</option></select></div>
-      ${session ? `<div class="form-field"><label for="user-password">初始密码</label><input id="user-password" name="password" type="password" minlength="8" required placeholder="至少 8 个字符" /></div>` : ""}
+      ${session ? `<div class="form-field"><label for="user-password">初始密码</label><input id="user-password" name="password" type="password" minlength="12" maxlength="256" required placeholder="至少 12 个字符" /></div>` : ""}
       <div class="form-hint">${session ? "创建后用户可使用此邮箱和初始密码登录。" : "此 Demo 仅模拟创建账号，不会发送邀请邮件。"}</div>
     </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit">创建用户</button></div></form>
   </section></div>`;

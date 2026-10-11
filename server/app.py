@@ -354,7 +354,7 @@ class CreateUserInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     email: str = Field(min_length=3, max_length=254)
     device_limit: int = Field(default=2, ge=1, le=50)
-    password: str = Field(min_length=8, max_length=256)
+    password: str = Field(min_length=12, max_length=256)
 
 
 class CreateTaskInput(BaseModel):

@@ -137,6 +137,13 @@ def test_successful_login_clears_prior_failures(client):
 
 def test_admin_audit_contains_key_actions_without_sensitive_account_data(client):
     admin = login(client, "admin@example.com", "admin-demo")
+    short_password = client.post(
+        "/users",
+        headers=auth(admin),
+        json={"name": "短密码用户", "email": "short-password@example.com", "password": "shortpass"},
+    )
+    assert short_password.status_code == 422
+
     created = client.post(
         "/users",
         headers=auth(admin),
