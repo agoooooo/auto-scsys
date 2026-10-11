@@ -122,15 +122,11 @@ internal class TaskExecutionService : Service() {
             }
             ensureNotStopped()
             if (!Python.isStarted()) Python.start(AndroidPlatform(applicationContext))
-            val python = Python.getInstance()
-            val builtins = python.getBuiltins()
-            val globals = builtins.callAttr("dict")
-            globals.put("nativeBridge", NativeTaskBridge(this, capture, stopRequested))
-            builtins.callAttr("exec", PYTHON_BRIDGE, globals)
-            builtins.callAttr("exec", script.source, globals)
+            val result = PythonTaskRuntime.execute(
+                script.source,
+                NativeTaskBridge(this, capture, stopRequested),
+            )
             ensureNotStopped()
-            val result = globals.get("result")?.toString()?.takeIf(String::isNotBlank)
-                ?: "脚本已执行完成"
             status = "success"
             summary = result.take(500)
         } catch (exception: CancellationException) {
@@ -296,21 +292,6 @@ internal class TaskExecutionService : Service() {
         private const val STOP_PENDING_INTENT = 320
         private const val MAX_LOG_ENTRY_CHARS = 500
         private const val SERVICE_START_GRACE_PERIOD_MILLIS = 1_000L
-
-        private val PYTHON_BRIDGE = """
-            class FlowPilotBridge:
-                def open_douyin(self):
-                    return nativeBridge.openDouyin()
-                def ocr(self):
-                    return nativeBridge.ocr()
-                def click_text(self, text):
-                    return nativeBridge.clickText(text)
-                def log(self, message):
-                    return nativeBridge.log(str(message))
-                def is_stopped(self):
-                    return nativeBridge.isStopped()
-            bridge = FlowPilotBridge()
-        """.trimIndent()
 
         fun start(
             context: Context,
