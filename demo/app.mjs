@@ -21,6 +21,7 @@ import {
   readSession,
 } from "./api-client.mjs";
 import { mapUsersForCsv, toCsv, userCsvColumns } from "./csv.mjs";
+import { filterUsers, paginateUsers } from "./user-list.mjs";
 
 let state = structuredClone(initialDemoState);
 let session = readSession();
@@ -31,6 +32,7 @@ let phoneTab = "home";
 let currentPhoneDeviceId = "d-001";
 let userQuery = "";
 let userFilter = "all";
+let userListPage = 1;
 let activityQuery = "";
 let activityFilter = "all";
 let auditEvents = [];
@@ -188,10 +190,9 @@ function renderOverview() {
     </div>`;
 }
 
-function userRows() {
-  const filtered = filteredUsers();
-  if (!filtered.length) return `<tr><td colspan="6"><div class="empty-state">没有找到匹配的用户</div></td></tr>`;
-  return filtered.map((user, index) => {
+function userRows(users = paginateUsers(filteredUsers(), userListPage, 10).items) {
+  if (!users.length) return `<tr><td colspan="6"><div class="empty-state">没有找到匹配的用户</div></td></tr>`;
+  return users.map((user, index) => {
     const count = state.devices.filter((device) => device.userId === user.id && device.status !== "disabled").length;
     return `<tr>
       <td><div class="person-cell"><span class="avatar a${(index % 4) + 1}">${escapeHtml(user.name.slice(0, 1))}</span><span class="person-details"><strong>${escapeHtml(user.name)}</strong><small>${escapeHtml(user.email)}</small></span></div></td>
@@ -203,15 +204,16 @@ function userRows() {
 }
 
 function filteredUsers() {
-  const query = userQuery.trim().toLocaleLowerCase();
-  return state.users.filter((user) => {
-    const matchesQuery = `${user.name} ${user.email}`.toLocaleLowerCase().includes(query);
-    return matchesQuery && (userFilter === "all" || user.status === userFilter);
-  });
+  return filterUsers(state.users, userQuery, userFilter);
 }
 
 function renderUsers() {
   const actions = `<button class="primary-button" data-action="new-user"><span class="button-icon">＋</span>添加用户</button>`;
+  const filtered = filteredUsers();
+  const pagination = paginateUsers(filtered, userListPage, 10);
+  userListPage = pagination.page;
+  const firstShown = filtered.length ? pagination.start + 1 : 0;
+  const lastShown = pagination.start + pagination.items.length;
   return `${pageHeading("用户管理", "管理账号状态、设备额度和用户访问权限。", actions)}
     <div class="toolbar">
       <label class="search-box"><span>⌕</span><input id="user-search" type="search" placeholder="搜索姓名或邮箱…" value="${escapeHtml(userQuery)}" /></label>
@@ -220,7 +222,11 @@ function renderUsers() {
       </select><button class="secondary-button" data-action="export-users">↓ 导出</button></div>
     </div>
     <section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>用户</th><th>状态</th><th>设备使用量</th><th>创建日期</th><th>账号类型</th><th></th></tr></thead><tbody>${userRows()}</tbody></table></div>
-      <div class="table-footer"><span>显示 ${filteredUsers().length} 位用户</span><div class="pagination"><button class="current">1</button><button aria-label="下一页">→</button></div></div></section>`;
+      <div class="table-footer"><span>显示 ${firstShown}–${lastShown} / ${filtered.length} 位用户</span><div class="pagination">
+        <button data-user-page="${pagination.page - 1}" aria-label="上一页" ${pagination.page <= 1 ? "disabled" : ""}>←</button>
+        <span>${pagination.page} / ${pagination.pageCount}</span>
+        <button data-user-page="${pagination.page + 1}" aria-label="下一页" ${pagination.page >= pagination.pageCount ? "disabled" : ""}>→</button>
+      </div></div></section>`;
 }
 
 function renderDevices() {
@@ -766,6 +772,13 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const userPageButton = event.target.closest("[data-user-page]");
+  if (userPageButton) {
+    userListPage = Number(userPageButton.dataset.userPage);
+    render();
+    return;
+  }
+
   const actionButton = event.target.closest("[data-action]");
   if (!actionButton) return;
   const { action, id } = actionButton.dataset;
@@ -987,6 +1000,7 @@ document.addEventListener("submit", async (event) => {
       currentView = "admin";
       userQuery = "";
       userFilter = "all";
+      userListPage = 1;
       render();
       showToast(session ? "用户已创建" : "用户已创建（演示）");
     } catch (error) {
@@ -1160,8 +1174,8 @@ document.addEventListener("input", (event) => {
   if (event.target.id === "user-search") {
     const selectionStart = event.target.selectionStart;
     userQuery = event.target.value;
-    const tbody = workspace.querySelector(".data-table tbody");
-    if (tbody) tbody.innerHTML = userRows();
+    userListPage = 1;
+    render();
     const replacement = workspace.querySelector("#user-search");
     replacement?.focus();
     replacement?.setSelectionRange(selectionStart, selectionStart);
@@ -1182,6 +1196,7 @@ document.addEventListener("change", (event) => {
   }
   if (event.target.id === "user-filter") {
     userFilter = event.target.value;
+    userListPage = 1;
     render();
   }
   if (event.target.id === "device-filter") {
