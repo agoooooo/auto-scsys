@@ -273,6 +273,12 @@ class RemoteRunDecision(BaseModel):
     preauthorize: bool = False
 
 
+class RunAuthorizationInput(BaseModel):
+    task_id: str
+    version: str
+    device_id: str
+
+
 class RunUpdate(BaseModel):
     status: Literal["success", "failure", "stopped"]
     result_summary: str = Field(default="", max_length=500)
@@ -343,11 +349,17 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         )
 
     def _device_for_user(db: sqlite3.Connection, device_id: str, user: dict) -> sqlite3.Row:
-        device = db.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+        device = db.execute(
+            """SELECT d.*,u.status AS account_status FROM devices d
+               JOIN users u ON u.id=d.user_id WHERE d.id=?""",
+            (device_id,),
+        ).fetchone()
         if not device:
             raise HTTPException(status_code=404, detail="设备不存在")
         if user["role"] != "admin" and device["user_id"] != user["id"]:
             raise HTTPException(status_code=404, detail="设备不存在")
+        if device["account_status"] != "active":
+            raise HTTPException(status_code=409, detail="设备所属账号已停用")
         if device["status"] == "disabled":
             raise HTTPException(status_code=409, detail="设备已停用")
         return device
@@ -439,12 +451,28 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if not target:
             raise HTTPException(status_code=404, detail="用户不存在")
         db.execute("UPDATE users SET status=? WHERE id=?", (body.status, user_id))
+        if body.status == "disabled":
+            now = utc_now()
+            db.execute("UPDATE run_authorizations SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (now, user_id))
+            db.execute("UPDATE remote_runs SET status='expired' WHERE status='pending' AND device_id IN (SELECT id FROM devices WHERE user_id=?)", (user_id,))
+            db.execute(
+                """UPDATE runs SET status='stopped',finished_at=?,result_summary='账号已停用'
+                   WHERE status='running' AND device_id IN (SELECT id FROM devices WHERE user_id=?)""",
+                (now, user_id),
+            )
+            db.execute(
+                """UPDATE remote_runs SET status='stopped'
+                   WHERE run_id IN (SELECT id FROM runs WHERE device_id IN
+                     (SELECT id FROM devices WHERE user_id=?) AND status='stopped') AND status='running'""",
+                (user_id,),
+            )
         audit(db, user["id"], f"user.{body.status}", "user", user_id)
         return {"id": user_id, "status": body.status}
 
     @app.get("/devices")
     def list_devices(user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
-        query = """SELECT d.id,d.user_id,d.name,d.model,d.status,d.app_version,d.last_active,u.name AS user_name
+        query = """SELECT d.id,d.user_id,d.name,d.model,d.status,d.app_version,d.last_active,
+                          u.name AS user_name,u.status AS account_status
                    FROM devices d JOIN users u ON u.id=d.user_id"""
         rows = db.execute(query + (" ORDER BY d.id" if user["role"] == "admin" else " WHERE d.user_id=? ORDER BY d.id"),
                           () if user["role"] == "admin" else (user["id"],))
@@ -702,14 +730,16 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         device = _device_for_user(db, device_id, user)
         _expire_requests(db)
         rows = db.execute(
-            """SELECT r.*,t.name AS task_name,t.source,t.capabilities_json
+            """SELECT r.*,t.name AS task_name,t.source,t.capabilities_json,u.name AS requested_by_name
                FROM remote_runs r JOIN tasks t ON t.id=r.task_id
+               JOIN users u ON u.id=r.requested_by
                WHERE r.device_id=? AND r.status='pending' ORDER BY r.created_at""",
             (device["id"],),
         )
         return [{
             "id": row["id"], "task_id": row["task_id"], "task": row["task_name"], "version": row["version"],
             "device_id": row["device_id"], "status": row["status"], "requested_by": row["requested_by"],
+            "requested_by_name": row["requested_by_name"],
             "created_at": row["created_at"], "expires_at": row["expires_at"], "source": row["source"],
             "capabilities": json.loads(row["capabilities_json"]),
         } for row in rows]
@@ -799,6 +829,34 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                 (user["id"], int(time.time())),
             )
         return [dict(row) for row in rows]
+
+    @app.post("/run-authorizations", status_code=201)
+    def create_run_authorization(body: RunAuthorizationInput, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
+        device = _device_for_user(db, body.device_id, user)
+        if user["role"] != "user" or device["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="只能为自己的设备创建运行预授权")
+        task = _task_for_user(db, body.task_id, user)
+        version = db.execute(
+            "SELECT 1 FROM task_versions WHERE task_id=? AND version=?",
+            (task["id"], body.version),
+        ).fetchone()
+        if not version:
+            raise HTTPException(status_code=404, detail="脚本版本不存在")
+        authorization_id = str(uuid.uuid4())
+        expires_at = int(time.time()) + PREAUTHORIZATION_TTL_SECONDS
+        db.execute(
+            """INSERT INTO run_authorizations(id,task_id,version,device_id,user_id,expires_at)
+               VALUES(?,?,?,?,?,?)
+               ON CONFLICT(task_id,version,device_id) DO UPDATE SET
+                 id=excluded.id,user_id=excluded.user_id,expires_at=excluded.expires_at,revoked_at=NULL""",
+            (authorization_id, task["id"], body.version, device["id"], user["id"], expires_at),
+        )
+        row = db.execute(
+            "SELECT id FROM run_authorizations WHERE task_id=? AND version=? AND device_id=?",
+            (task["id"], body.version, device["id"]),
+        ).fetchone()
+        audit(db, user["id"], "run_authorization.created", "run_authorization", row["id"])
+        return {"id": row["id"], "task_id": task["id"], "version": body.version, "device_id": device["id"], "expires_at": expires_at}
 
     @app.delete("/run-authorizations/{authorization_id}")
     def revoke_authorization(authorization_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):

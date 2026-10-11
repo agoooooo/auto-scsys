@@ -236,6 +236,32 @@ def test_preauthorization_is_limited_to_device_and_version_and_revocable(client)
     assert client.delete(f"/run-authorizations/{grants[0]['id']}", headers=auth(user)).status_code == 404
 
 
+def test_user_can_create_only_own_device_and_granted_version_authorization(client):
+    user = login(client)
+    response = client.post(
+        "/run-authorizations",
+        headers=auth(user),
+        json={"task_id": "t-001", "version": "v1.4.0", "device_id": "d-001"},
+    )
+    assert response.status_code == 201
+    assert response.json()["device_id"] == "d-001"
+    assert client.post(
+        "/run-authorizations",
+        headers=auth(user),
+        json={"task_id": "t-001", "version": "v1.4.0", "device_id": "d-003"},
+    ).status_code == 404
+    assert client.post(
+        "/run-authorizations",
+        headers=auth(user),
+        json={"task_id": "t-001", "version": "v1.3.0", "device_id": "d-001"},
+    ).status_code == 201
+    assert client.post(
+        "/run-authorizations",
+        headers=auth(user),
+        json={"task_id": "t-001", "version": "missing", "device_id": "d-001"},
+    ).status_code == 404
+
+
 def test_expired_requests_cannot_be_approved(client):
     import server.app as api
 
@@ -270,6 +296,22 @@ def test_disabling_a_device_revokes_its_preauthorizations_and_blocks_new_runs(cl
         headers=auth(user),
         json={"decision": "approve"},
     ).status_code == 409
+    assert client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).status_code == 409
+
+
+def test_disabling_user_revokes_grants_and_stops_active_remote_runs(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    request = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
+    started = client.patch(
+        f"/remote-runs/{request['id']}",
+        headers=auth(user),
+        json={"decision": "approve", "preauthorize": True},
+    ).json()
+    assert client.patch("/users/u-1001", headers=auth(admin), json={"status": "disabled"}).status_code == 200
+    assert client.get("/run-authorizations", headers=auth(admin)).json() == []
+    admin_runs = client.get("/runs", headers=auth(admin)).json()
+    assert next(run for run in admin_runs if run["id"] == started["run_id"])["status"] == "stopped"
     assert client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).status_code == 409
 
 

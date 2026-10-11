@@ -14,7 +14,8 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="app-shell">
+    <section class="login-gate" id="login-gate" hidden></section>
+    <div class="app-shell" id="app-shell" hidden>
       <aside class="sidebar" id="sidebar">
         <a class="brand" href="#" aria-label="自动化控制台首页">
           <span class="brand-mark"><span></span><span></span><span></span></span>
@@ -44,7 +45,7 @@
             <p>试试发布一个任务，然后在手机端运行。</p>
             <button data-action="go-tasks">了解任务发布 <span>→</span></button>
           </div>
-          <button class="profile-button">
+          <button class="profile-button" data-action="logout">
             <span class="profile-avatar">林</span>
             <span class="profile-copy"><strong>林管理员</strong><small>系统管理员</small></span>
             <span class="more">···</span>

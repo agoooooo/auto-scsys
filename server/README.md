@@ -33,7 +33,7 @@ FLOWPILOT_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32)
 - `GET /devices/{id}/tasks/{task_id}/versions/{version}/content`
 - `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`PATCH /remote-runs/{id}`
 - `POST /runs/{id}`、`GET /runs`
-- `GET/DELETE /run-authorizations`、`GET /admin/audit`
+- `GET/POST/DELETE /run-authorizations`、`GET /admin/audit`
 
 脚本只向已绑定、已授权的用户设备提供；远程请求默认需设备用户逐次确认，过期请求不执行。预授权限定在任务版本和设备上，有效期 30 天并可撤销。运行 API 只记录客户端回报状态，不在服务端或浏览器里执行 Python。
 
