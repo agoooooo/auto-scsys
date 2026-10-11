@@ -1,11 +1,11 @@
-import time
-
 ORDER_STATUS_LABELS = ("待支付", "待发货", "待收货", "已完成", "退款")
 
 if not bridge.open_douyin():
     raise RuntimeError("无法打开抖音")
 
-time.sleep(3)
+if not bridge.wait_for_douyin(20):
+    raise RuntimeError("等待抖音界面启动超时")
+
 screen_text = bridge.ocr()
 if not screen_text.strip():
     raise RuntimeError("当前抖音界面未识别到文字")

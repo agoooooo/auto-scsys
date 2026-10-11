@@ -231,7 +231,8 @@ def _seed_database(db: sqlite3.Connection) -> None:
         [
             ("tv-002", "t-001", "v1.3.0", "orders.py", b"# Previous demo script placeholder; not executed.\n", hashlib.sha256(b"# Previous demo script placeholder; not executed.\n").hexdigest(), "历史演示版本", now),
             ("tv-001", "t-001", "v1.4.0", "orders.py", b"# Previous demo script placeholder; not executed.\n", hashlib.sha256(b"# Previous demo script placeholder; not executed.\n").hexdigest(), "历史演示版本", now),
-            ("tv-004", "t-001", "v1.5.0", "order_status_ocr.py", demo_ocr_script, hashlib.sha256(demo_ocr_script).hexdigest(), "设备端 OCR 演示；不点击且不上传 OCR 内容", now),
+            ("tv-004", "t-001", "v1.5.0", "order_status_ocr.py", b"# Previous demo version; waits for app launch are added in v1.6.0.\n", hashlib.sha256(b"# Previous demo version; waits for app launch are added in v1.6.0.\n").hexdigest(), "历史演示版本", now),
+            ("tv-005", "t-001", "v1.6.0", "order_status_ocr.py", demo_ocr_script, hashlib.sha256(demo_ocr_script).hexdigest(), "等待目标应用进入前台后在设备端 OCR；不点击且不上传 OCR 内容", now),
             ("tv-003", "t-002", "v0.2.0", "checkin.py", b"# Draft demo script placeholder; not executed.\n", hashlib.sha256(b"# Draft demo script placeholder; not executed.\n").hexdigest(), "草稿", now),
         ],
     )

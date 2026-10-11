@@ -29,6 +29,38 @@ class TaskActionPolicyTest {
     }
 
     @Test
+    fun douyinForegroundWaitPollsUntilSupportedAppIsActive() {
+        var elapsedMillis = 0L
+        var checks = 0
+        val active = awaitDouyinForeground(
+            isForeground = { ++checks == 3 },
+            timeoutMillis = 1_000,
+            pollIntervalMillis = 250,
+            wait = { elapsedMillis += it },
+            nowNanos = { elapsedMillis * 1_000_000 },
+        )
+
+        assertTrue(active)
+        assertEquals(3, checks)
+        assertEquals(500L, elapsedMillis)
+    }
+
+    @Test
+    fun douyinForegroundWaitStopsAtTimeout() {
+        var elapsedMillis = 0L
+        val active = awaitDouyinForeground(
+            isForeground = { false },
+            timeoutMillis = 600,
+            pollIntervalMillis = 250,
+            wait = { elapsedMillis += it },
+            nowNanos = { elapsedMillis * 1_000_000 },
+        )
+
+        assertFalse(active)
+        assertEquals(600L, elapsedMillis)
+    }
+
+    @Test
     fun scriptCanBeInspectedWithoutAccessibilityPermission() {
         assertTrue(canInspectTaskScript("active", null))
     }

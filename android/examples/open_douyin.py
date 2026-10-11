@@ -1,9 +1,9 @@
-import time
-
 if not bridge.open_douyin():
     raise RuntimeError("无法打开抖音")
 
-time.sleep(3)
+if not bridge.wait_for_douyin(20):
+    raise RuntimeError("等待抖音界面启动超时")
+
 screen_text = bridge.ocr()
 if not screen_text:
     raise RuntimeError("没有识别到抖音界面文字")

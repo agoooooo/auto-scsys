@@ -7,6 +7,8 @@ internal object PythonTaskRuntime {
         class FlowPilotBridge:
             def open_douyin(self):
                 return nativeBridge.openDouyin()
+            def wait_for_douyin(self, timeout_seconds=15):
+                return nativeBridge.waitForDouyin(timeout_seconds)
             def ocr(self):
                 return nativeBridge.ocr()
             def click_text(self, text):

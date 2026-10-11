@@ -240,6 +240,12 @@ internal class TaskExecutionService : Service() {
             return true
         }
 
+        fun waitForDouyin(timeoutSeconds: Int): Boolean {
+            checkRunning()
+            require(timeoutSeconds in 1..30) { "等待抖音超时时间须在 1 到 30 秒之间" }
+            return DouyinAccessibilityService.requireInstance().waitForDouyin(timeoutSeconds)
+        }
+
         fun ocr(): String {
             checkRunning()
             DouyinAccessibilityService.requireInstance().currentScreenText()

@@ -11,6 +11,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import java.util.concurrent.Callable
 import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
 
 @Suppress("DEPRECATION")
 internal class DouyinAccessibilityService : AccessibilityService() {
@@ -30,9 +31,14 @@ internal class DouyinAccessibilityService : AccessibilityService() {
     private val mainHandler by lazy { Handler(mainLooper) }
 
     fun openDouyin() {
-        val root = rootInActiveWindow
-        val alreadyInDouyin = DouyinPackagePolicy.isSupportedPackage(root?.packageName?.toString())
-        root?.recycle()
+        val alreadyInDouyin = onServiceThread {
+            val root = rootInActiveWindow ?: return@onServiceThread false
+            try {
+                DouyinPackagePolicy.isSupportedPackage(root.packageName?.toString())
+            } finally {
+                root.recycle()
+            }
+        }
         if (alreadyInDouyin) {
             return
         }
@@ -43,6 +49,22 @@ internal class DouyinAccessibilityService : AccessibilityService() {
             ?: throw IllegalStateException("无法启动已安装的抖音应用")
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         startActivity(intent)
+    }
+
+    fun waitForDouyin(timeoutSeconds: Int): Boolean =
+        awaitDouyinForeground(
+            isForeground = ::isDouyinForeground,
+            timeoutMillis = TimeUnit.SECONDS.toMillis(timeoutSeconds.toLong()),
+            pollIntervalMillis = FOREGROUND_POLL_INTERVAL_MILLIS,
+        )
+
+    private fun isDouyinForeground(): Boolean = onServiceThread {
+        val root = rootInActiveWindow ?: return@onServiceThread false
+        try {
+            DouyinPackagePolicy.isSupportedPackage(root.packageName?.toString())
+        } finally {
+            root.recycle()
+        }
     }
 
     fun currentScreenText(): String = onServiceThread {
@@ -149,6 +171,7 @@ internal class DouyinAccessibilityService : AccessibilityService() {
         private const val MAX_DEPTH = 24
         private const val MAX_CLICKABLE_ANCESTORS = 8
         private const val SERVICE_CALL_TIMEOUT_SECONDS = 8L
+        private const val FOREGROUND_POLL_INTERVAL_MILLIS = 250L
         @Volatile
         private var instance: DouyinAccessibilityService? = null
 
