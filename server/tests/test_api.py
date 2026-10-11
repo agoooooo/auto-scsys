@@ -139,6 +139,28 @@ def test_device_liveness_expires_and_device_activity_restores_online_status(clie
     assert request.status_code == 201
 
 
+def test_admin_reads_do_not_refresh_device_heartbeat(client):
+    import server.app as api
+
+    admin = login(client, "admin@example.com", "admin-demo")
+    stale_activity = (datetime.now(timezone.utc) - timedelta(seconds=90)).isoformat()
+    with api._connect(client.app.state.db_path) as db:
+        db.execute("UPDATE devices SET last_active=? WHERE id='d-001'", (stale_activity,))
+
+    requests = client.get("/devices/d-001/remote-runs", headers=auth(admin))
+    assert requests.status_code == 200
+    with api._connect(client.app.state.db_path) as db:
+        last_active = db.execute(
+            "SELECT last_active FROM devices WHERE id='d-001'"
+        ).fetchone()["last_active"]
+    assert last_active == stale_activity
+    assert client.post("/devices/d-001/sync", headers=auth(admin)).status_code == 403
+    with api._connect(client.app.state.db_path) as db:
+        assert db.execute(
+            "SELECT last_active FROM devices WHERE id='d-001'"
+        ).fetchone()["last_active"] == stale_activity
+
+
 def test_seeded_ocr_demo_script_is_versioned_hashed_and_does_not_click(client):
     user = login(client)
     downloaded = client.get(

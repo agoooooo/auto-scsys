@@ -841,6 +841,8 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     @app.post("/devices/{device_id}/sync")
     def sync_device(device_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         device = _device_for_user(db, device_id, user)
+        if user["role"] != "user" or device["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="只有设备所属用户可以同步设备")
         _touch_device(db, device_id)
         rows = db.execute(
             """SELECT t.* FROM tasks t JOIN task_grants g ON g.task_id=t.id
@@ -926,7 +928,8 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     @app.get("/devices/{device_id}/remote-runs")
     def pending_remote_runs(device_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         device = _device_for_user(db, device_id, user)
-        _touch_device(db, device_id)
+        if user["role"] == "user" and device["user_id"] == user["id"]:
+            _touch_device(db, device_id)
         _expire_requests(db)
         rows = db.execute(
             """SELECT r.*,t.name AS task_name,t.source,t.capabilities_json,u.name AS requested_by_name,
