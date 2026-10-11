@@ -478,16 +478,20 @@ private fun FlowPilotScreen(
                                 onClick = {
                                     viewModel.refreshTasks()
                                     viewModel.refreshRemoteRuns()
+                                    viewModel.refreshRunHistory()
                                 },
                                 enabled = !state.loading,
                             ) {
                                 Text("同步")
                             }
                             TextButton(
-                                onClick = { viewModel.refreshRemoteRuns() },
+                                onClick = {
+                                    viewModel.refreshRemoteRuns()
+                                    viewModel.refreshRunHistory()
+                                },
                                 enabled = !state.loading,
                             ) {
-                                Text("刷新远程请求")
+                                Text("刷新远程请求和记录")
                             }
                         }
                     }
