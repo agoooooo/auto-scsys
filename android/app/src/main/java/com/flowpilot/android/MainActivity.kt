@@ -360,7 +360,12 @@ private fun FlowPilotScreen(
                 value = apiBaseUrl,
                 onValueChange = { apiBaseUrl = it },
                 label = { Text("API 地址") },
-                placeholder = { Text("http://192.168.0.101:8001") },
+                placeholder = { Text(if (apiBaseUrl.isBlank()) "http://<开发机局域网 IP>:8001" else "http://10.0.2.2:8001") },
+                supportingText = {
+                    if (apiBaseUrl.isBlank()) {
+                        Text("真机请输入开发机在同一局域网内的 IP 地址和端口")
+                    }
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -381,7 +386,8 @@ private fun FlowPilotScreen(
             )
             Button(
                 onClick = { viewModel.login(apiBaseUrl, email, password) },
-                enabled = !state.loading && email.isNotBlank() && password.isNotBlank(),
+                enabled = !state.loading && apiBaseUrl.isNotBlank() &&
+                    email.isNotBlank() && password.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("登录")

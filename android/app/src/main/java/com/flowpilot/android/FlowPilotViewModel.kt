@@ -15,7 +15,7 @@ internal data class AppUiState(
     val user: SignedInUser? = null,
     val token: String? = null,
     val tokenExpiresAt: Long = 0L,
-    val apiBaseUrl: String = "http://10.0.2.2:8001",
+    val apiBaseUrl: String = defaultApiBaseUrl(isEmulator()),
     val device: BoundDevice? = null,
     val tasks: List<AvailableTask> = emptyList(),
     val remoteRuns: List<RemoteRun> = emptyList(),
@@ -25,6 +25,15 @@ internal data class AppUiState(
     val runStatus: RunStatus? = null,
     val remoteMonitoring: Boolean = false,
 )
+
+private fun isEmulator(): Boolean =
+    Build.FINGERPRINT.startsWith("generic") ||
+        Build.FINGERPRINT.startsWith("unknown") ||
+        Build.MODEL.contains("google_sdk", ignoreCase = true) ||
+        Build.MODEL.contains("Emulator", ignoreCase = true) ||
+        Build.MODEL.contains("Android SDK built for", ignoreCase = true) ||
+        Build.MANUFACTURER.contains("Genymotion", ignoreCase = true) ||
+        (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
 
 internal data class ScriptReview(val task: AvailableTask, val script: DownloadedScript)
 
@@ -39,10 +48,19 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
 
     fun login(baseUrl: String, email: String, password: String) {
         if (_state.value.loading) return
-        _state.value = _state.value.copy(loading = true, error = null)
+        val normalizedUrl = try {
+            normalizeApiBaseUrl(baseUrl)
+        } catch (exception: IllegalArgumentException) {
+            _state.value = _state.value.copy(error = exception.message ?: "请输入有效的 API 地址")
+            return
+        }
+        _state.value = _state.value.copy(
+            loading = true,
+            error = null,
+            apiBaseUrl = normalizedUrl,
+        )
         viewModelScope.launch {
             try {
-                val normalizedUrl = normalizeApiBaseUrl(baseUrl)
                 val client = ApiClient(normalizedUrl)
                 val login = withContext(Dispatchers.IO) { client.login(email.trim(), password) }
                 if (login.user.role != "user") {

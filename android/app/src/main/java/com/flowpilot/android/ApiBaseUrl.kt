@@ -3,6 +3,9 @@ package com.flowpilot.android
 import java.net.URI
 import java.util.Locale
 
+internal fun defaultApiBaseUrl(isEmulator: Boolean): String =
+    if (isEmulator) "http://10.0.2.2:8001" else ""
+
 internal fun normalizeApiBaseUrl(value: String): String {
     val uri = try {
         URI(value.trim())

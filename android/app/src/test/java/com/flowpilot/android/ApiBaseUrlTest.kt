@@ -6,6 +6,12 @@ import org.junit.Test
 
 class ApiBaseUrlTest {
     @Test
+    fun defaultsToEmulatorHostOnlyForEmulators() {
+        assertEquals("http://10.0.2.2:8001", defaultApiBaseUrl(isEmulator = true))
+        assertEquals("", defaultApiBaseUrl(isEmulator = false))
+    }
+
+    @Test
     fun normalizesLanHttpAddressAndTrailingSlash() {
         assertEquals("http://192.168.0.101:8001", normalizeApiBaseUrl(" http://192.168.0.101:8001/ "))
     }
