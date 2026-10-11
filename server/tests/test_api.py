@@ -148,6 +148,75 @@ def test_publish_script_validates_and_checks_content_hash(client):
     assert downloaded.headers["x-content-sha256"] == hashlib.sha256(content).hexdigest()
 
 
+def test_admin_can_list_grant_and_revoke_task_access(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    chen = login(client)
+    zhou = login(client, "zhou.ke@example.com", "user-demo")
+    content = b"print('shared')\n"
+    assert client.post(
+        "/tasks/t-002/versions",
+        headers=auth(admin),
+        data={"version": "v1.0.0"},
+        files={"script": ("shared.py", content, "text/x-python")},
+    ).status_code == 201
+    assert client.get("/tasks/t-002/grants", headers=auth(chen)).status_code == 403
+    assert client.get("/tasks/missing/grants", headers=auth(admin)).status_code == 404
+
+    granted = client.post("/tasks/t-002/grants/u-1001", headers=auth(admin))
+    assert granted.status_code == 201
+    grant_list = client.get("/tasks/t-002/grants", headers=auth(admin))
+    assert grant_list.status_code == 200
+    assert {grant["id"]: grant["is_owner"] for grant in grant_list.json()} == {
+        "u-admin": True,
+        "u-1001": False,
+    }
+    assert {task["id"] for task in client.get("/tasks", headers=auth(chen)).json()} == {"t-001", "t-002"}
+    assert client.get(
+        "/devices/d-001/tasks/t-002/versions/v1.0.0/content",
+        headers=auth(chen),
+    ).content == content
+
+    pending = client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-002", "device_id": "d-001"},
+    ).json()
+    authorized = client.post(
+        "/run-authorizations",
+        headers=auth(chen),
+        json={"task_id": "t-002", "version": "v1.0.0", "device_id": "d-001"},
+    )
+    assert authorized.status_code == 201
+
+    revoked = client.delete("/tasks/t-002/grants/u-1001", headers=auth(admin))
+    assert revoked.status_code == 200
+    remaining_grants = client.get("/tasks/t-002/grants", headers=auth(admin)).json()
+    assert [(grant["id"], grant["is_owner"]) for grant in remaining_grants] == [("u-admin", True)]
+    assert {task["id"] for task in client.get("/tasks", headers=auth(chen)).json()} == {"t-001"}
+    assert client.get(
+        "/devices/d-001/tasks/t-002/versions/v1.0.0/content",
+        headers=auth(chen),
+    ).status_code == 404
+    assert client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-002", "device_id": "d-001"},
+    ).status_code == 404
+    assert client.patch(
+        f"/remote-runs/{pending['id']}",
+        headers=auth(chen),
+        json={"decision": "approve"},
+    ).status_code == 410
+    assert client.get("/run-authorizations", headers=auth(chen)).json() == []
+    assert client.delete("/tasks/t-002/grants/u-1001", headers=auth(admin)).status_code == 404
+    assert client.delete("/tasks/t-002/grants/u-admin", headers=auth(admin)).status_code == 409
+
+    assert client.post("/tasks/t-002/grants/u-1002", headers=auth(admin)).status_code == 201
+    assert any(task["id"] == "t-002" for task in client.get("/tasks", headers=auth(zhou)).json())
+    inactive_grant = client.post("/tasks/t-002/grants/u-1003", headers=auth(admin))
+    assert inactive_grant.status_code == 409
+
+
 def test_admin_can_pause_and_resume_tasks_with_access_and_run_controls(client):
     import server.app as api
 

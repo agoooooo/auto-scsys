@@ -619,13 +619,66 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
 
     @app.post("/tasks/{task_id}/grants/{user_id}", status_code=201)
     def grant_task(task_id: str, user_id: str, user: dict = Depends(require_admin), db: sqlite3.Connection = Depends(connection)):
-        if not db.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
+        task = db.execute("SELECT owner_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
         target = db.execute("SELECT id,status,role FROM users WHERE id=?", (user_id,)).fetchone()
         if not target or target["role"] != "user":
             raise HTTPException(status_code=404, detail="用户不存在")
+        if target["status"] != "active":
+            raise HTTPException(status_code=409, detail="不能向已停用用户授权任务")
         db.execute("INSERT OR IGNORE INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?)", (task_id, user_id, utc_now()))
         audit(db, user["id"], "task.granted", "task", task_id)
+        return {"task_id": task_id, "user_id": user_id}
+
+    @app.get("/tasks/{task_id}/grants")
+    def list_task_grants(
+        task_id: str,
+        user: dict = Depends(require_admin),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        task = db.execute("SELECT owner_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        rows = db.execute(
+            """SELECT u.id,u.name,u.email,u.status,u.role
+               FROM task_grants g JOIN users u ON u.id=g.user_id
+               WHERE g.task_id=? ORDER BY u.name""",
+            (task_id,),
+        )
+        return [{**dict(row), "is_owner": row["id"] == task["owner_id"]} for row in rows]
+
+    @app.delete("/tasks/{task_id}/grants/{user_id}")
+    def revoke_task_grant(
+        task_id: str,
+        user_id: str,
+        user: dict = Depends(require_admin),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        task = db.execute("SELECT owner_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        if task["owner_id"] == user_id:
+            raise HTTPException(status_code=409, detail="任务所有者始终保留访问权限")
+        grant = db.execute(
+            "SELECT 1 FROM task_grants WHERE task_id=? AND user_id=?",
+            (task_id, user_id),
+        ).fetchone()
+        if not grant:
+            raise HTTPException(status_code=404, detail="任务授权不存在")
+        db.execute("DELETE FROM task_grants WHERE task_id=? AND user_id=?", (task_id, user_id))
+        now = utc_now()
+        db.execute(
+            """UPDATE remote_runs SET status='expired'
+               WHERE task_id=? AND device_id IN (SELECT id FROM devices WHERE user_id=?) AND status='pending'""",
+            (task_id, user_id),
+        )
+        db.execute(
+            """UPDATE run_authorizations SET revoked_at=?
+               WHERE task_id=? AND user_id=? AND revoked_at IS NULL""",
+            (now, task_id, user_id),
+        )
+        audit(db, user["id"], "task.grant_revoked", "task", task_id)
         return {"task_id": task_id, "user_id": user_id}
 
     @app.post("/tasks/{task_id}/versions", status_code=201)

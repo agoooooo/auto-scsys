@@ -209,7 +209,7 @@ function renderTasks() {
     <div class="task-grid">${state.tasks.map((task, index) => `<article class="task-card">
       <div class="task-card-top"><div class="task-symbol ${index % 2 ? "mint" : ""}">${index % 2 ? "◌" : "⌕"}</div><div class="task-main"><h3>${escapeHtml(task.name)}</h3><small>${escapeHtml(task.category)}</small></div>${statusPill(task.status)}</div>
       <p>${escapeHtml(task.description)}</p>${task.scriptFile ? `<div class="file-meta">${escapeHtml(task.scriptFile.name)} · ${Math.ceil(task.scriptFile.size / 1024)} KB · SHA-256 ${escapeHtml(task.scriptFile.sha256.slice(0, 12))}…</div>` : ""}<div class="task-card-meta"><span>当前版本<strong>${escapeHtml(task.activeVersion ?? "尚未发布")}</strong></span><span>已分配设备<strong>${task.devices} 台设备</strong></span><span>最近运行<strong>${escapeHtml(task.lastRun)}</strong></span><span>成功率<strong>${task.successRate ? `${task.successRate}%` : "—"}</strong></span></div>
-      <div class="task-card-footer"><button class="text-button" data-action="switch-version" data-id="${escapeHtml(task.id)}">版本管理 ⌄</button>${(!session || session.user.role === "admin") && ["published", "paused"].includes(task.status) ? `<button class="text-button" data-action="toggle-task-status" data-id="${escapeHtml(task.id)}">${task.status === "paused" ? "恢复发布" : "暂停任务"}</button>` : ""}<button class="run-button" data-action="remote-run" data-id="${escapeHtml(task.id)}" ${task.status !== "published" ? "disabled" : ""}>▶　请求远程运行</button></div>
+      <div class="task-card-footer"><button class="text-button" data-action="switch-version" data-id="${escapeHtml(task.id)}">版本管理 ⌄</button>${session?.user.role === "admin" ? `<button class="text-button" data-action="manage-task-access" data-id="${escapeHtml(task.id)}">访问授权</button>` : ""}${(!session || session.user.role === "admin") && ["published", "paused"].includes(task.status) ? `<button class="text-button" data-action="toggle-task-status" data-id="${escapeHtml(task.id)}">${task.status === "paused" ? "恢复发布" : "暂停任务"}</button>` : ""}<button class="run-button" data-action="remote-run" data-id="${escapeHtml(task.id)}" ${task.status !== "published" ? "disabled" : ""}>▶　请求远程运行</button></div>
     </article>`).join("")}</div>`;
 }
 
@@ -494,6 +494,26 @@ function suggestVersion(version) {
   return match ? `v${match[1]}.${match[2]}.${Number(match[3]) + 1}` : "v1.0.0";
 }
 
+async function showTaskAccessModal(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  const grants = await apiRequest(session, `/tasks/${encodeURIComponent(taskId)}/grants`);
+  const grantedIds = new Set(grants.map((grant) => grant.id));
+  const eligibleUsers = state.users.filter((user) =>
+    user.role === "user" && user.status === "active" && !grantedIds.has(user.id));
+  modalRoot.innerHTML = `<div class="modal-root-inner"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-header"><div><h2 id="modal-title">访问授权</h2><p>${escapeHtml(task?.name ?? "任务")} · 管理可以查看和运行此任务的用户</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
+    <div class="modal-body">
+      <div class="task-grant-list">${grants.length ? grants.map((grant) => `<div class="task-grant-row"><span><strong>${escapeHtml(grant.name)}</strong><small>${escapeHtml(grant.email)} · ${grant.status === "active" ? "正常" : "已停用"}${grant.is_owner ? " · 所有者" : ""}</small></span>${grant.is_owner ? `<span class="form-hint">所有者</span>` : `<button class="text-button" data-action="revoke-task-grant" data-task-id="${escapeHtml(taskId)}" data-user-id="${escapeHtml(grant.id)}">撤销</button>`}</div>`).join("") : `<div class="empty-state">尚未授权其他用户</div>`}</div>
+      ${eligibleUsers.length ? `<form id="task-access-form" data-task-id="${escapeHtml(taskId)}"><div class="form-field"><label for="task-access-user">授权用户</label><select id="task-access-user" name="userId" required>${eligibleUsers.map((user) => `<option value="${escapeHtml(user.id)}">${escapeHtml(user.name)} · ${escapeHtml(user.email)}</option>`).join("")}</select></div><button class="primary-button" type="submit">添加授权</button></form>` : `<div class="form-hint">没有可添加的正常用户。</div>`}
+      <div class="form-hint">撤销后用户将无法同步或下载任务；未处理的远程请求和此任务的预授权会失效，已开始的运行不受影响。</div>
+    </div>
+    <div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">完成</button></div>
+  </section></div>`;
+  modalRoot.querySelector(".modal-root-inner").addEventListener("click", (event) => {
+    if (event.target.classList.contains("modal-root-inner")) closeModal();
+  });
+}
+
 function switchVersion(taskId, version) {
   const task = state.tasks.find((item) => item.id === taskId);
   const nextVersions = [task.activeVersion, ...task.versions.filter((item) => item !== version && item !== task.activeVersion)];
@@ -538,6 +558,20 @@ document.addEventListener("click", async (event) => {
   else if (action === "switch-version") showVersionModal(id);
   else if (action === "remote-run") showRemoteRunModal(id);
   else if (action === "local-run") showConsentModal(id);
+  else if (action === "manage-task-access") {
+    try { await showTaskAccessModal(id); }
+    catch (error) { showToast(error.message); }
+  } else if (action === "revoke-task-grant") {
+    const { taskId, userId } = actionButton.dataset;
+    try {
+      await apiRequest(session, `/tasks/${encodeURIComponent(taskId)}/grants/${encodeURIComponent(userId)}`, {
+        method: "DELETE",
+      });
+      await refreshFromApi();
+      await showTaskAccessModal(taskId);
+      showToast("任务访问权限已撤销");
+    } catch (error) { showToast(error.message); }
+  }
   else if (action === "toggle-task-status") {
     const task = state.tasks.find((item) => item.id === id);
     const nextStatus = task.status === "paused" ? "published" : "paused";
@@ -660,7 +694,20 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("submit", async (event) => {
-  if (event.target.id === "login-form") {
+  if (event.target.id === "task-access-form") {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const taskId = event.target.dataset.taskId;
+    try {
+      await apiRequest(session, `/tasks/${encodeURIComponent(taskId)}/grants/${encodeURIComponent(formData.get("userId"))}`, {
+        method: "POST",
+        body: {},
+      });
+      await refreshFromApi();
+      await showTaskAccessModal(taskId);
+      showToast("任务访问权限已添加");
+    } catch (error) { showToast(error.message); }
+  } else if (event.target.id === "login-form") {
     event.preventDefault();
     const formData = new FormData(event.target);
     try {
