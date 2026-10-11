@@ -476,6 +476,7 @@ private fun FlowPilotScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
                                 onClick = {
+                                    viewModel.clearRunHistoryError()
                                     viewModel.refreshTasks()
                                     viewModel.refreshRemoteRuns()
                                     viewModel.refreshRunHistory()
@@ -486,6 +487,7 @@ private fun FlowPilotScreen(
                             }
                             TextButton(
                                 onClick = {
+                                    viewModel.clearRunHistoryError()
                                     viewModel.refreshRemoteRuns()
                                     viewModel.refreshRunHistory()
                                 },
@@ -591,12 +593,39 @@ private fun FlowPilotScreen(
                 }
 
                 Text("运行历史（${state.runHistory.size}）", style = MaterialTheme.typography.titleLarge)
-                if (state.runHistory.isEmpty()) {
-                    Text(state.runHistoryError ?: "暂无运行记录。")
-                } else {
-                    state.runHistoryError?.let { error ->
-                        Text(error, color = MaterialTheme.colorScheme.error)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (state.runHistoryLoading) {
+                            "正在刷新运行记录…"
+                        } else {
+                            state.runHistoryError ?: if (state.runHistory.isEmpty()) {
+                                "暂无运行记录。"
+                            } else {
+                                "显示最近 ${state.runHistory.size.coerceAtMost(MAX_VISIBLE_RUN_HISTORY)} 条"
+                            }
+                        },
+                        color = if (state.runHistoryError == null) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    TextButton(
+                        onClick = {
+                            viewModel.clearRunHistoryError()
+                            viewModel.refreshRunHistory()
+                        },
+                        enabled = !state.loading && !state.runHistoryLoading,
+                    ) {
+                        Text(if (state.runHistoryLoading) "刷新中" else "刷新记录")
                     }
+                }
+                if (state.runHistory.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         visibleRunHistory(state.runHistory).forEach { run ->
                             Card(modifier = Modifier.fillMaxWidth()) {

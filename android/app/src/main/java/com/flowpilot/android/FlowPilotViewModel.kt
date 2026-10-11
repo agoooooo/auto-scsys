@@ -23,6 +23,7 @@ internal data class AppUiState(
     val tasks: List<AvailableTask> = emptyList(),
     val remoteRuns: List<RemoteRun> = emptyList(),
     val runHistory: List<RunRecord> = emptyList(),
+    val runHistoryLoading: Boolean = false,
     val runHistoryError: String? = null,
     val scriptReview: ScriptReview? = null,
     val loading: Boolean = false,
@@ -252,7 +253,8 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
     fun refreshRunHistory() {
         val current = _state.value
         val userId = current.user?.id ?: return
-        if (current.token == null) return
+        if (current.token == null || current.runHistoryLoading) return
+        _state.value = current.copy(runHistoryLoading = true, runHistoryError = null)
         viewModelScope.launch {
             try {
                 val session = withContext(Dispatchers.IO) { freshSession() }
@@ -264,15 +266,21 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                     token = session.token,
                     tokenExpiresAt = session.tokenExpiresAt,
                     runHistory = runs,
+                    runHistoryLoading = false,
                     runHistoryError = null,
                 )
             } catch (exception: Exception) {
                 if (_state.value.user?.id != userId) return@launch
                 _state.value = _state.value.copy(
+                    runHistoryLoading = false,
                     runHistoryError = "运行记录同步失败：${exception.message ?: "服务器不可用"}",
                 )
             }
         }
+    }
+
+    fun clearRunHistoryError() {
+        _state.value = _state.value.copy(runHistoryError = null)
     }
 
     suspend fun createLocalRun(task: AvailableTask): String = withContext(Dispatchers.IO) {
