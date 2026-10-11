@@ -11,7 +11,6 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import java.util.concurrent.Callable
 import java.util.concurrent.FutureTask
-import java.util.concurrent.TimeUnit
 
 @Suppress("DEPRECATION")
 internal class DouyinAccessibilityService : AccessibilityService() {
@@ -137,7 +136,9 @@ internal class DouyinAccessibilityService : AccessibilityService() {
         if (Thread.currentThread() === mainLooper.thread) return action()
         val task = FutureTask(Callable(action))
         mainHandler.post(task)
-        return task.get(SERVICE_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        return awaitAccessibilityCall(task, SERVICE_CALL_TIMEOUT_SECONDS) {
+            mainHandler.removeCallbacks(task)
+        }
     }
 
     companion object {
