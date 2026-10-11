@@ -17,4 +17,12 @@ class RunStatusLabelTest {
     fun usesNeutralLabelForUnknownStatus() {
         assertEquals("未知状态", runStatusLabel("unexpected"))
     }
+
+    @Test
+    fun displaysVersionOnlyWhenAvailable() {
+        assertEquals("版本：v1.7.0", runVersionLabel("v1.7.0"))
+        assertEquals(null, runVersionLabel(null))
+        assertEquals(null, runVersionLabel(""))
+        assertEquals(null, runVersionLabel("  "))
+    }
 }

@@ -8,3 +8,6 @@ internal fun runStatusLabel(status: String): String = when (status) {
     "failure" -> "失败"
     else -> "未知状态"
 }
+
+internal fun runVersionLabel(version: String?): String? =
+    version?.takeIf(String::isNotBlank)?.let { "版本：$it" }

@@ -81,6 +81,7 @@ class MainActivity : ComponentActivity() {
             RunStatusStore(this).update(
                 pending.runId.orEmpty(),
                 pending.task.name,
+                pending.task.version,
                 "failure",
                 "屏幕捕获授权被拒绝，任务未执行",
             )
@@ -106,7 +107,7 @@ class MainActivity : ComponentActivity() {
                     null
                 }
                 RunStatusStore(this@MainActivity)
-                    .update(activeRunId, pending.task.name, "running", "正在启动任务")
+                    .update(activeRunId, pending.task.name, pending.task.version, "running", "正在启动任务")
                 TaskExecutionService.start(
                     context = this@MainActivity,
                     task = pending.task,
@@ -129,6 +130,7 @@ class MainActivity : ComponentActivity() {
                 RunStatusStore(this@MainActivity).update(
                     runId.orEmpty(),
                     pending.task.name,
+                    pending.task.version,
                     "failure",
                     original,
                 )
@@ -228,6 +230,7 @@ class MainActivity : ComponentActivity() {
         RunStatusStore(this).update(
             runId.orEmpty(),
             task.name,
+            task.version,
             "awaiting_permission",
             "等待 Android 屏幕捕获授权",
         )
@@ -585,6 +588,9 @@ private fun FlowPilotScreen(
                             ) {
                                 Text("最近一次运行", style = MaterialTheme.typography.titleMedium)
                                 Text("${runStatus.taskName.orEmpty()} · ${runStatusLabel(runStatus.status)}")
+                                runVersionLabel(runStatus.taskVersion)?.let { version ->
+                                    Text(version, style = MaterialTheme.typography.bodySmall)
+                                }
                                 runStatus.startedAtMillis?.let { startedAt ->
                                     Text(
                                         "开始时间：${formatRunStartTime(startedAt)}",

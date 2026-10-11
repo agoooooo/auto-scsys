@@ -79,6 +79,7 @@ internal class TaskExecutionService : Service() {
     private suspend fun executeTask(intent: Intent, startId: Int) {
         val runId = intent.getStringExtra(EXTRA_RUN_ID).orEmpty()
         val taskName = intent.getStringExtra(EXTRA_TASK_NAME).orEmpty().ifBlank { "自动化任务" }
+        val taskVersion = intent.getStringExtra(EXTRA_TASK_VERSION)
         val store = RunStatusStore(this)
         var status = "failure"
         var summary = "任务未能完成"
@@ -87,7 +88,7 @@ internal class TaskExecutionService : Service() {
         var token: String? = null
         var activeSession: StoredSession? = null
 
-        store.update(runId, taskName, "running", "正在执行")
+        store.update(runId, taskName, taskVersion, "running", "正在执行")
         notifyRunStatusChanged()
         setTaskNotification("正在运行：$taskName", ongoing = true)
 
@@ -105,7 +106,7 @@ internal class TaskExecutionService : Service() {
                 id = intent.getStringExtra(EXTRA_TASK_ID).orEmpty(),
                 name = taskName,
                 description = "",
-                version = intent.getStringExtra(EXTRA_TASK_VERSION).orEmpty(),
+                version = taskVersion.orEmpty(),
                 capabilities = emptyList(),
             )
             require(task.id.isNotBlank() && task.version.isNotBlank()) { "任务或版本信息不完整" }
@@ -161,7 +162,7 @@ internal class TaskExecutionService : Service() {
                     if (status == "success") status = "failure"
                 }
             }
-            store.update(runId, taskName, status, summary)
+            store.update(runId, taskName, taskVersion, status, summary)
             notifyRunStatusChanged()
             setTaskNotification("$taskName：${runStatusLabel(status)}", ongoing = false)
             stopForeground(STOP_FOREGROUND_DETACH)
@@ -325,7 +326,7 @@ internal class TaskExecutionService : Service() {
 internal class RunStatusStore(context: Context) {
     private val preferences = context.getSharedPreferences("flowpilot_runtime", Context.MODE_PRIVATE)
 
-    fun update(runId: String, taskName: String, status: String, summary: String) {
+    fun update(runId: String, taskName: String, taskVersion: String?, status: String, summary: String) {
         val previousRunId = preferences.getString(KEY_RUN_ID, null)
         val previousStatus = preferences.getString(KEY_STATUS, null)
         val startsNewRun = shouldStartNewRun(previousRunId, previousStatus, runId, status)
@@ -337,6 +338,7 @@ internal class RunStatusStore(context: Context) {
         editor
             .putString(KEY_RUN_ID, runId)
             .putString(KEY_TASK_NAME, taskName)
+            .putString(KEY_TASK_VERSION, taskVersion)
             .putString(KEY_STATUS, status)
             .putString(KEY_SUMMARY, summary.take(500))
             .apply()
@@ -351,6 +353,7 @@ internal class RunStatusStore(context: Context) {
         RunStatus(
             runId = preferences.getString(KEY_RUN_ID, null),
             taskName = preferences.getString(KEY_TASK_NAME, null),
+            taskVersion = preferences.getString(KEY_TASK_VERSION, null),
             status = preferences.getString(KEY_STATUS, null),
             summary = preferences.getString(KEY_SUMMARY, null),
             startedAtMillis = preferences.getLong(KEY_STARTED_AT, 0L).takeIf { it > 0L },
@@ -360,6 +363,7 @@ internal class RunStatusStore(context: Context) {
     private companion object {
         const val KEY_RUN_ID = "run_id"
         const val KEY_TASK_NAME = "task_name"
+        const val KEY_TASK_VERSION = "task_version"
         const val KEY_STATUS = "status"
         const val KEY_SUMMARY = "summary"
         const val KEY_STARTED_AT = "started_at"
@@ -371,6 +375,7 @@ internal class RunStatusStore(context: Context) {
 internal data class RunStatus(
     val runId: String?,
     val taskName: String?,
+    val taskVersion: String?,
     val status: String?,
     val summary: String?,
     val startedAtMillis: Long?,
