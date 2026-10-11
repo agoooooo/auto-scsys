@@ -101,12 +101,12 @@ class TaskActionPolicyTest {
     }
 
     @Test
-    fun logoutIsBlockedOnlyWhileWaitingForPermissionOrRunning() {
-        assertTrue(canLogoutDuringRun(null))
-        assertTrue(canLogoutDuringRun("success"))
-        assertTrue(canLogoutDuringRun("failure"))
-        assertTrue(canLogoutDuringRun("stopped"))
+    fun logoutBecomesAvailableAfterPermissionIsDeniedOrRunFinishes() {
         assertFalse(canLogoutDuringRun("running"))
         assertFalse(canLogoutDuringRun("awaiting_permission"))
+        assertTrue(canLogoutDuringRun("failure"))
+        assertTrue(canLogoutDuringRun("success"))
+        assertTrue(canLogoutDuringRun("stopped"))
+        assertTrue(canLogoutDuringRun(null))
     }
 }

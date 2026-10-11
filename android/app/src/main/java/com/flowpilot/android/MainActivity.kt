@@ -85,6 +85,7 @@ class MainActivity : ComponentActivity() {
                 "failure",
                 "屏幕捕获授权被拒绝，任务未执行",
             )
+            flowPilotViewModel.refreshRunStatus()
             flowPilotViewModel.showError("屏幕捕获是此任务所需能力，已取消运行")
             return@registerForActivityResult
         }
