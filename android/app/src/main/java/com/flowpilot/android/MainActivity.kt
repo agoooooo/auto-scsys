@@ -72,11 +72,16 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val flowPilotViewModel: FlowPilotViewModel by viewModels()
+    private val notificationPermissionGranted = mutableStateOf(false)
+    private var startMonitoringAfterNotificationGrant = false
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (granted || Build.VERSION.SDK_INT < 33) startRemoteMonitoring()
-        else flowPilotViewModel.showError("未授予通知权限，无法显示远程请求和运行状态")
+        notificationPermissionGranted.value = granted || Build.VERSION.SDK_INT < 33
+        val shouldStartMonitoring = startMonitoringAfterNotificationGrant
+        startMonitoringAfterNotificationGrant = false
+        if (granted && shouldStartMonitoring) startRemoteMonitoring()
+        else if (!granted) flowPilotViewModel.showError("未授予通知权限，无法显示远程待命和运行状态")
     }
     private val screenCapturePermission = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -193,7 +198,11 @@ class MainActivity : ComponentActivity() {
                         viewModel = flowPilotViewModel,
                         remoteIntentId = remoteIntentId.value,
                         accessibilityEnabled = accessibilityEnabled.value,
+                        notificationPermissionGranted = notificationPermissionGranted.value,
                         remoteMonitoring = remoteMonitoring.value,
+                        onRequestNotificationPermission = {
+                            requestNotificationPermission()
+                        },
                         onRunTask = ::beginExecution,
                         onDecideRemoteRun = ::decideRemoteRun,
                         onClearRemoteTarget = { remoteIntentId.value = null },
@@ -222,6 +231,10 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         accessibilityEnabled.value = DouyinAccessibilityService.isEnabled(this)
+        notificationPermissionGranted.value =
+            Build.VERSION.SDK_INT < 33 ||
+                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
         remoteMonitoring.value = RemoteRunMonitorService.isMonitoring(this)
         flowPilotViewModel.refreshRunStatus()
         flowPilotViewModel.refreshRunHistory()
@@ -370,20 +383,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestNotificationPermission(startMonitoringAfterGrant: Boolean = false) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            !notificationPermissionGranted.value
+        ) {
+            startMonitoringAfterNotificationGrant = startMonitoringAfterGrant
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else if (startMonitoringAfterGrant) {
+            startRemoteMonitoring()
+        }
+    }
+
     private fun setRemoteMonitoring(enabled: Boolean) {
         if (!enabled) {
             RemoteRunMonitorService.stop(this)
             remoteMonitoring.value = false
             return
         }
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            startRemoteMonitoring()
-        }
+        requestNotificationPermission(startMonitoringAfterGrant = true)
     }
 
     private fun startRemoteMonitoring() {
@@ -417,7 +434,9 @@ private fun FlowPilotScreen(
     viewModel: FlowPilotViewModel,
     remoteIntentId: String?,
     accessibilityEnabled: Boolean,
+    notificationPermissionGranted: Boolean,
     remoteMonitoring: Boolean,
+    onRequestNotificationPermission: () -> Unit,
     onRunTask: (AvailableTask, String?, String?) -> Unit,
     onDecideRemoteRun: (RemoteRun, Boolean, Boolean) -> Unit,
     onClearRemoteTarget: () -> Unit,
@@ -437,12 +456,28 @@ private fun FlowPilotScreen(
     var rememberLoginInfo by rememberSaveable { mutableStateOf(state.rememberLoginInfo) }
     var selectedRemoteRun by remember { mutableStateOf<RemoteRun?>(null) }
     val promptedRemotePermissionIds = remember { mutableSetOf<String>() }
+    var permissionOnboardingVisible by remember { mutableStateOf(false) }
+    var permissionOnboardingShownForUser by remember { mutableStateOf<String?>(null) }
     var selectedTask by remember { mutableStateOf<AvailableTask?>(null) }
     var authorizationToRevoke by remember { mutableStateOf<String?>(null) }
     var confirmDeviceUnbind by rememberSaveable { mutableStateOf(false) }
     var scriptReviewAttempt by remember { mutableStateOf<String?>(null) }
     var preauthorize by rememberSaveable { mutableStateOf(true) }
     var confirmScriptRun by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(user?.id, state.loading) {
+        if (user == null) {
+            permissionOnboardingShownForUser = null
+            permissionOnboardingVisible = false
+        } else if (shouldShowPermissionOnboarding(
+                userId = user.id,
+                loading = state.loading,
+                alreadyShownForUser = permissionOnboardingShownForUser == user.id,
+            )
+        ) {
+            permissionOnboardingShownForUser = user.id
+            permissionOnboardingVisible = true
+        }
+    }
     LaunchedEffect(user?.id, device?.id) {
         if (user != null && device != null) {
             viewModel.refreshRemoteRuns()
@@ -451,7 +486,8 @@ private fun FlowPilotScreen(
             onSetRemoteMonitoring(false)
         }
     }
-    LaunchedEffect(remoteIntentId, state.remoteRuns) {
+    LaunchedEffect(remoteIntentId, state.remoteRuns, permissionOnboardingVisible) {
+        if (permissionOnboardingVisible) return@LaunchedEffect
         if (remoteIntentId != null) {
             val request = state.remoteRuns.firstOrNull { it.id == remoteIntentId }
             if (request != null && requiresScreenCapture(request.capabilities)) {
@@ -1039,6 +1075,65 @@ private fun FlowPilotScreen(
             Text(message, color = MaterialTheme.colorScheme.error)
         }
         Spacer(Modifier.height(8.dp))
+    }
+
+    if (permissionOnboardingVisible && user != null) {
+        AlertDialog(
+            onDismissRequest = { permissionOnboardingVisible = false },
+            title = { Text("FlowPilot 权限设置") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("请了解并按需开启以下权限。Android 系统控制权限授予，FlowPilot 不会绕过系统确认或隐藏运行。")
+                    Text("网络访问：用于连接 FlowPilot 服务，由 Android 在安装时授权。")
+                    Text(
+                        "通知权限（Android 13 及以上）：${if (notificationPermissionGranted) "已允许" else "未允许"}。远程待命及任务状态需要通知权限。",
+                    )
+                    if (!notificationPermissionGranted) {
+                        TextButton(onClick = onRequestNotificationPermission) {
+                            Text("请求通知权限")
+                        }
+                    }
+                    Text(
+                        "无障碍服务：${if (accessibilityEnabled) "已启用" else "未启用"}。仅在任务需要屏幕交互时使用；需在 Android 设置中由你手动启用。",
+                    )
+                    if (!accessibilityEnabled) {
+                        TextButton(onClick = onOpenAccessibilitySettings) {
+                            Text("打开无障碍设置")
+                        }
+                    }
+                    Text(
+                        "前台服务：由 Android 管理并声明，用于远程待命和任务运行；运行期间必须显示持续通知，可随时停止。当前远程待命：${if (remoteMonitoring) "运行中" else "未运行"}。",
+                    )
+                    if (device != null) {
+                        TextButton(
+                            onClick = { onSetRemoteMonitoring(!remoteMonitoring) },
+                        ) {
+                            Text(if (remoteMonitoring) "停止远程待命" else "开启远程待命")
+                        }
+                    } else {
+                        Text("绑定设备后可开启远程待命。")
+                    }
+                    Text(
+                        "屏幕捕获（OCR）：仅在具体 OCR 任务开始时由 Android 系统逐次询问；不能登录时预先授权或永久保活。",
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { permissionOnboardingVisible = false }) {
+                    Text("完成")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { permissionOnboardingVisible = false }) {
+                    Text("稍后")
+                }
+            },
+        )
     }
 
     selectedRemoteRun?.let { request ->

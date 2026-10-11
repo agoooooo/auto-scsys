@@ -39,6 +39,12 @@ internal fun shouldPromptForRemoteScreenCapture(
     requiresScreenCapture(capabilities) &&
     (status == "pending" || (status == "running" && !runId.isNullOrBlank()))
 
+internal fun shouldShowPermissionOnboarding(
+    userId: String?,
+    loading: Boolean,
+    alreadyShownForUser: Boolean,
+): Boolean = !userId.isNullOrBlank() && !loading && !alreadyShownForUser
+
 internal fun requiresAccessibility(capabilities: List<String>): Boolean =
     capabilities.any { capability ->
         capability.contains("无障碍", ignoreCase = true) ||

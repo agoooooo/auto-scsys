@@ -134,6 +134,15 @@ class TaskActionPolicyTest {
     }
 
     @Test
+    fun permissionOnboardingAppearsOnceForSignedInUserAfterLoading() {
+        assertTrue(shouldShowPermissionOnboarding("user-1", loading = false, alreadyShownForUser = false))
+        assertFalse(shouldShowPermissionOnboarding("user-1", loading = true, alreadyShownForUser = false))
+        assertFalse(shouldShowPermissionOnboarding("user-1", loading = false, alreadyShownForUser = true))
+        assertFalse(shouldShowPermissionOnboarding(null, loading = false, alreadyShownForUser = false))
+        assertFalse(shouldShowPermissionOnboarding("", loading = false, alreadyShownForUser = false))
+    }
+
+    @Test
     fun logoutBecomesAvailableAfterPermissionIsDeniedOrRunFinishes() {
         assertFalse(canLogoutDuringRun("running"))
         assertFalse(canLogoutDuringRun("awaiting_permission"))
