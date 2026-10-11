@@ -500,7 +500,17 @@ private fun FlowPilotScreen(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text("已绑定设备", style = MaterialTheme.typography.titleMedium)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("已绑定设备", style = MaterialTheme.typography.titleMedium)
+                            StatusBadge(
+                                label = deviceStatusLabel(device.status),
+                                status = device.status,
+                            )
+                        }
                         Text("${device.name} · ${device.model}")
                         Text("设备 ID：${device.id}", style = MaterialTheme.typography.bodySmall)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -663,10 +673,23 @@ private fun FlowPilotScreen(
                                     modifier = Modifier.padding(12.dp),
                                     verticalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
-                                    Text(
-                                        "${run.taskName} · ${runStatusLabel(run.status)}",
-                                        style = MaterialTheme.typography.titleSmall,
-                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            run.taskName,
+                                            modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.titleSmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        StatusBadge(
+                                            label = runStatusLabel(run.status),
+                                            status = run.status,
+                                        )
+                                    }
                                     Text(
                                         "版本：${run.version} · ${formatServerRunTime(run.startedAt)}",
                                         style = MaterialTheme.typography.bodySmall,
@@ -687,8 +710,23 @@ private fun FlowPilotScreen(
                                 modifier = Modifier.padding(16.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Text("最近一次运行", style = MaterialTheme.typography.titleMedium)
-                                Text("${runStatus.taskName.orEmpty()} · ${runStatusLabel(runStatus.status)}")
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text("最近一次运行", style = MaterialTheme.typography.titleMedium)
+                                    StatusBadge(
+                                        label = runStatusLabel(runStatus.status),
+                                        status = runStatus.status,
+                                    )
+                                }
+                                Text(
+                                    runStatus.taskName.orEmpty(),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                                 runVersionLabel(runStatus.taskVersion)?.let { version ->
                                     Text(version, style = MaterialTheme.typography.bodySmall)
                                 }
@@ -1068,4 +1106,11 @@ private fun sourceLabel(source: String): String = when (source) {
     "admin" -> "管理员发布"
     "user" -> "用户脚本"
     else -> source.ifBlank { "未知来源" }
+}
+
+private fun deviceStatusLabel(status: String): String = when (status) {
+    "online", "active" -> "在线"
+    "offline" -> "离线"
+    "disabled" -> "已停用"
+    else -> "未知"
 }
