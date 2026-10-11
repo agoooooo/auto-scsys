@@ -163,7 +163,7 @@ internal class TaskExecutionService : Service() {
             }
             store.update(runId, taskName, status, summary)
             notifyRunStatusChanged()
-            setTaskNotification("$taskName：${statusLabel(status)}", ongoing = false)
+            setTaskNotification("$taskName：${runStatusLabel(status)}", ongoing = false)
             stopForeground(STOP_FOREGROUND_DETACH)
             stopSelf(startId)
         }
@@ -278,12 +278,6 @@ internal class TaskExecutionService : Service() {
             @Suppress("DEPRECATION")
             getParcelableExtra(key)
         }
-
-    private fun statusLabel(status: String): String = when (status) {
-        "success" -> "已完成"
-        "stopped" -> "已停止"
-        else -> "失败"
-    }
 
     companion object {
         const val ACTION_EXECUTE = "com.flowpilot.android.action.EXECUTE_TASK"

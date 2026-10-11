@@ -576,7 +576,7 @@ private fun FlowPilotScreen(
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 Text("最近一次运行", style = MaterialTheme.typography.titleMedium)
-                                Text("${runStatus.taskName.orEmpty()} · ${runStatus.status}")
+                                Text("${runStatus.taskName.orEmpty()} · ${runStatusLabel(runStatus.status)}")
                                 Text(runStatus.summary.orEmpty())
                                 if (runStatus.log.isNotBlank()) {
                                     Text("运行日志", style = MaterialTheme.typography.titleSmall)
