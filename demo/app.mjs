@@ -20,7 +20,7 @@ import {
   login,
   readSession,
 } from "./api-client.mjs";
-import { toCsv } from "./csv.mjs";
+import { mapUsersForCsv, toCsv, userCsvColumns } from "./csv.mjs";
 
 let state = structuredClone(initialDemoState);
 let session = readSession();
@@ -189,10 +189,7 @@ function renderOverview() {
 }
 
 function userRows() {
-  const filtered = state.users.filter((user) => {
-    const matchesQuery = `${user.name} ${user.email}`.toLowerCase().includes(userQuery.toLowerCase());
-    return matchesQuery && (userFilter === "all" || user.status === userFilter);
-  });
+  const filtered = filteredUsers();
   if (!filtered.length) return `<tr><td colspan="6"><div class="empty-state">没有找到匹配的用户</div></td></tr>`;
   return filtered.map((user, index) => {
     const count = state.devices.filter((device) => device.userId === user.id && device.status !== "disabled").length;
@@ -205,6 +202,14 @@ function userRows() {
   }).join("");
 }
 
+function filteredUsers() {
+  const query = userQuery.trim().toLocaleLowerCase();
+  return state.users.filter((user) => {
+    const matchesQuery = `${user.name} ${user.email}`.toLocaleLowerCase().includes(query);
+    return matchesQuery && (userFilter === "all" || user.status === userFilter);
+  });
+}
+
 function renderUsers() {
   const actions = `<button class="primary-button" data-action="new-user"><span class="button-icon">＋</span>添加用户</button>`;
   return `${pageHeading("用户管理", "管理账号状态、设备额度和用户访问权限。", actions)}
@@ -215,7 +220,7 @@ function renderUsers() {
       </select><button class="secondary-button" data-action="export-users">↓ 导出</button></div>
     </div>
     <section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>用户</th><th>状态</th><th>设备使用量</th><th>创建日期</th><th>账号类型</th><th></th></tr></thead><tbody>${userRows()}</tbody></table></div>
-      <div class="table-footer"><span>显示 ${state.users.filter((user) => (user.name + user.email).toLowerCase().includes(userQuery.toLowerCase()) && (userFilter === "all" || user.status === userFilter)).length} 位用户</span><div class="pagination"><button class="current">1</button><button aria-label="下一页">→</button></div></div></section>`;
+      <div class="table-footer"><span>显示 ${filteredUsers().length} 位用户</span><div class="pagination"><button class="current">1</button><button aria-label="下一页">→</button></div></div></section>`;
 }
 
 function renderDevices() {
@@ -358,6 +363,18 @@ function downloadActivityCsv() {
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   showToast(`已导出 ${rows.length} 条运行记录`);
+}
+
+function downloadUsersCsv() {
+  const rows = mapUsersForCsv(filteredUsers(), state.devices);
+  const blob = new Blob([toCsv(rows, userCsvColumns)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "flowpilot-users.csv";
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast(`已导出 ${rows.length} 位用户`);
 }
 
 function renderAudit() {
@@ -904,7 +921,7 @@ document.addEventListener("click", async (event) => {
   }
   else if (action === "task-info") showToast("任务版本会经过校验后下发至授权设备（演示）");
   else if (action === "export-activity") downloadActivityCsv();
-  else if (action === "export-users") showToast("用户数据导出暂不可用");
+  else if (action === "export-users") downloadUsersCsv();
 });
 
 document.addEventListener("submit", async (event) => {
