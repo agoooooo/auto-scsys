@@ -64,6 +64,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -170,6 +174,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         handleRemoteIntent(intent)
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                while (isActive) {
+                    delay(FOREGROUND_HEARTBEAT_INTERVAL_MILLIS)
+                    flowPilotViewModel.refreshRemoteRuns()
+                }
+            }
+        }
         setContent {
             MaterialTheme(colorScheme = FlowPilotColorScheme) {
                 Surface(
@@ -316,6 +328,7 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_REMOTE_TASK_NAME = "remote_task_name"
         const val EXTRA_REMOTE_TASK_VERSION = "remote_task_version"
         const val EXTRA_REMOTE_DEVICE_ID = "remote_device_id"
+        private const val FOREGROUND_HEARTBEAT_INTERVAL_MILLIS = 60_000L
     }
 }
 
