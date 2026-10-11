@@ -936,8 +936,16 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                       (SELECT id FROM runs WHERE remote_run_id=r.id LIMIT 1) AS run_id
                FROM remote_runs r JOIN tasks t ON t.id=r.task_id
                JOIN users u ON u.id=r.requested_by
-               WHERE r.device_id=? AND r.status IN ('pending','running') ORDER BY r.created_at""",
-            (device["id"],),
+               WHERE r.device_id=? AND (
+                   r.status IN ('pending','running')
+                   OR r.id IN (
+                       SELECT id FROM remote_runs
+                       WHERE device_id=? AND status='expired'
+                       ORDER BY created_at DESC LIMIT 50
+                   )
+               )
+               ORDER BY r.created_at""",
+            (device["id"], device["id"]),
         )
         return [{
             "id": row["id"], "task_id": row["task_id"], "task": row["task_name"], "version": row["version"],

@@ -32,7 +32,7 @@ FLOWPILOT_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32)
 - `GET/POST /tasks`、`PATCH /tasks/{id}`（管理员暂停/恢复）、`GET /tasks/{id}/versions`、`POST /tasks/{id}/versions`、`PATCH /tasks/{id}/versions/{version}/activate`
 - `GET /tasks/{id}/grants`、`POST/DELETE /tasks/{id}/grants/{user_id}`（管理员管理任务访问权限）
 - `GET /devices/{id}/tasks/{task_id}/versions/{version}/content`
-- `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`PATCH /remote-runs/{id}`；设备轮询结果包含待确认请求和已授权但仍在运行的请求及其 `run_id`
+- `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`PATCH /remote-runs/{id}`；设备轮询结果包含待确认请求、运行中的请求及最近 50 条过期请求，方便设备端显示过期状态；运行中的请求包含 `run_id`
 - `POST /runs/{id}`、`GET /runs`
 - `GET/POST/DELETE /run-authorizations`、`GET /admin/audit`
 

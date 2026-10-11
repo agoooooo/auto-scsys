@@ -735,7 +735,9 @@ def test_expired_requests_cannot_be_approved(client):
     request = client.post("/remote-runs", headers=auth(admin), json={"task_id": "t-001", "device_id": "d-001"}).json()
     with api._connect(client.app.state.db_path) as db:
         db.execute("UPDATE remote_runs SET expires_at=? WHERE id=?", (int(time.time()) - 1, request["id"]))
-    assert client.get("/devices/d-001/remote-runs", headers=auth(user)).json() == []
+    polled = client.get("/devices/d-001/remote-runs", headers=auth(user))
+    assert polled.status_code == 200
+    assert [(item["id"], item["status"]) for item in polled.json()] == [(request["id"], "expired")]
     response = client.patch(
         f"/remote-runs/{request['id']}",
         headers=auth(user),
