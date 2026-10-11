@@ -91,6 +91,7 @@ internal class TaskExecutionService : Service() {
         var status = "failure"
         var summary = "任务未能完成"
         var capture: ScreenCaptureSession? = null
+        var ownsCaptureSession = false
         var api: ApiClient? = null
         var activeSession: StoredSession? = null
         var heartbeatJob: Job? = null
@@ -133,10 +134,17 @@ internal class TaskExecutionService : Service() {
             require(task.id.isNotBlank() && task.version.isNotBlank()) { "任务或版本信息不完整" }
             val resultCode = intent.getIntExtra(EXTRA_CAPTURE_RESULT_CODE, 0)
             val resultData = intent.parcelableExtra<Intent>(EXTRA_CAPTURE_RESULT_DATA)
-            if (resultData != null) {
-                capture = ScreenCaptureSession(this, resultCode, resultData)
-            }
             val declaredCapabilities = intent.getStringArrayExtra(EXTRA_TASK_CAPABILITIES)?.toList().orEmpty()
+            if (requiresScreenCapture(declaredCapabilities)) {
+                val standbyCapture = OcrStandbyService.captureSession()
+                if (standbyCapture != null) {
+                    capture = standbyCapture
+                } else {
+                    capture = resultData?.let { ScreenCaptureSession(this, resultCode, it) }
+                        ?: throw IllegalStateException("OCR 待命会话已结束，请重新授权屏幕捕获")
+                    ownsCaptureSession = true
+                }
+            }
             if (capture != null && !DouyinAccessibilityService.isEnabled(this)) {
                 throw IllegalStateException("请先在系统设置中启用 FlowPilot 自动化操作服务")
             }
@@ -169,7 +177,7 @@ internal class TaskExecutionService : Service() {
         } finally {
             heartbeatJob?.cancelAndJoin()
             try {
-                capture?.close()
+                if (ownsCaptureSession) capture?.close()
             } catch (exception: Exception) {
                 if (status == "success") {
                     status = "failure"

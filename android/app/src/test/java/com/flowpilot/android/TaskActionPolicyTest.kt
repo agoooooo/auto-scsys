@@ -123,6 +123,27 @@ class TaskActionPolicyTest {
     }
 
     @Test
+    fun activeOcrStandbyReusesCaptureWithoutAnotherSystemPrompt() {
+        val ocr = listOf("OCR 文字识别")
+        assertTrue(requiresNewScreenCaptureAuthorization(ocr, captureSessionActive = false))
+        assertFalse(requiresNewScreenCaptureAuthorization(ocr, captureSessionActive = true))
+        assertFalse(
+            requiresNewScreenCaptureAuthorization(
+                listOf("无障碍操作"),
+                captureSessionActive = false,
+            ),
+        )
+    }
+
+    @Test
+    fun ocrStandbyCannotStartWhileTaskIsRunningOrAwaitingCapturePermission() {
+        assertTrue(canStartOcrStandby(null))
+        assertTrue(canStartOcrStandby("success"))
+        assertFalse(canStartOcrStandby("running"))
+        assertFalse(canStartOcrStandby("awaiting_permission"))
+    }
+
+    @Test
     fun foregroundPromptSelectsUnacknowledgedScreenCaptureRequests() {
         val ocr = listOf("屏幕捕获", "OCR")
         assertTrue(shouldPromptForRemoteScreenCapture("pending", null, ocr, false))
@@ -131,6 +152,24 @@ class TaskActionPolicyTest {
         assertFalse(shouldPromptForRemoteScreenCapture("success", "run-1", ocr, false))
         assertFalse(shouldPromptForRemoteScreenCapture("pending", null, listOf("无障碍"), false))
         assertFalse(shouldPromptForRemoteScreenCapture("pending", null, ocr, true))
+        assertFalse(
+            shouldPromptForRemoteScreenCapture(
+                "running",
+                "run-1",
+                ocr,
+                false,
+                captureSessionActive = true,
+            ),
+        )
+        assertTrue(
+            shouldPromptForRemoteScreenCapture(
+                "pending",
+                null,
+                ocr,
+                false,
+                captureSessionActive = true,
+            ),
+        )
     }
 
     @Test

@@ -36,6 +36,10 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
         <service
+            android:name=".OcrStandbyService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+        <service
             android:name=".TaskExecutionService"
             android:exported="false"
             android:foregroundServiceType="dataSync|mediaProjection" />

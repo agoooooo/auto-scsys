@@ -81,14 +81,20 @@ internal class RemoteRunMonitorService : Service() {
                         }.pendingRemoteRuns(session.token, deviceId)
                     }
                     requests.forEach { request ->
-                        if (requiresScreenCapture(request.capabilities)) {
+                        val requiresCapture = requiresScreenCapture(request.capabilities)
+                        val captureReady = OcrStandbyService.isActive(this@RemoteRunMonitorService)
+                        if (requiresCapture && !captureReady) {
                             cancelRemoteNotification(request.id)
                         } else if (request.status == "pending") {
-                            showRemoteNotification(
-                                request,
-                                "需要首次授权：${request.taskName}",
-                                "由${request.requestedBy}发起；授权后可为此设备及后续版本自动运行",
-                            )
+                            if (requiresCapture) {
+                                cancelRemoteNotification(request.id)
+                            } else {
+                                showRemoteNotification(
+                                    request,
+                                    "需要首次授权：${request.taskName}",
+                                    "由${request.requestedBy}发起；授权后可为此设备及后续版本自动运行",
+                                )
+                            }
                         } else if (shouldNotifyPreauthorizedRun(
                                 request.status,
                                 request.runId,

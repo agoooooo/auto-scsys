@@ -29,11 +29,13 @@ internal class ScreenCaptureSession(
     context: Context,
     resultCode: Int,
     resultData: Intent,
+    private val onProjectionStopped: () -> Unit = {},
 ) : Closeable {
     private val thread = HandlerThread("flowpilot-screen-capture").apply { start() }
     private val handler = Handler(thread.looper)
     private val request = AtomicReference<CaptureRequest?>()
     private val projectionStopped = AtomicBoolean(false)
+    private val closed = AtomicBoolean(false)
     private val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
     private val projection: MediaProjection
     private val imageReader: ImageReader
@@ -55,6 +57,7 @@ internal class ScreenCaptureSession(
                     stopped.error.set(IllegalStateException("Android 屏幕捕获授权已停止"))
                     stopped.latch.countDown()
                 }
+                onProjectionStopped()
             }
         }, handler)
         virtualDisplay = projection.createVirtualDisplay(
@@ -131,6 +134,7 @@ internal class ScreenCaptureSession(
     }
 
     override fun close() {
+        if (!closed.compareAndSet(false, true)) return
         request.getAndSet(null)?.let { pending ->
             pending.error.set(IllegalStateException("屏幕捕获会话已结束"))
             pending.latch.countDown()

@@ -74,18 +74,32 @@ class MainActivity : ComponentActivity() {
     private val flowPilotViewModel: FlowPilotViewModel by viewModels()
     private val notificationPermissionGranted = mutableStateOf(false)
     private var startMonitoringAfterNotificationGrant = false
+    private var startOcrStandbyAfterNotificationGrant = false
+    private var pendingOcrStandbyStart = false
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         notificationPermissionGranted.value = granted || Build.VERSION.SDK_INT < 33
         val shouldStartMonitoring = startMonitoringAfterNotificationGrant
+        val shouldStartOcrStandby = startOcrStandbyAfterNotificationGrant
         startMonitoringAfterNotificationGrant = false
+        startOcrStandbyAfterNotificationGrant = false
         if (granted && shouldStartMonitoring) startRemoteMonitoring()
+        else if (granted && shouldStartOcrStandby) requestOcrStandbyCapturePermission()
         else if (!granted) flowPilotViewModel.showError("未授予通知权限，无法显示远程待命和运行状态")
     }
     private val screenCapturePermission = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
+        if (pendingOcrStandbyStart) {
+            pendingOcrStandbyStart = false
+            if (result.resultCode != Activity.RESULT_OK || result.data == null) {
+                flowPilotViewModel.showError("未授予屏幕捕获权限，持续 OCR 待命未开启")
+                return@registerForActivityResult
+            }
+            OcrStandbyService.start(this, result.resultCode, result.data!!)
+            return@registerForActivityResult
+        }
         val pending = pendingExecution
         pendingExecution = null
         if (pending == null) return@registerForActivityResult
@@ -168,12 +182,23 @@ class MainActivity : ComponentActivity() {
 
     private val accessibilityEnabled = mutableStateOf(false)
     private val remoteMonitoring = mutableStateOf(false)
+    private val ocrStandbyActive = mutableStateOf(false)
     private val remoteIntentId = mutableStateOf<String?>(null)
     private var pendingExecution: PendingExecution? = null
     private val runStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            flowPilotViewModel.refreshRunStatus()
-            flowPilotViewModel.refreshRunHistory()
+            when (intent?.action) {
+                OcrStandbyService.ACTION_STATE_CHANGED -> {
+                    ocrStandbyActive.value = OcrStandbyService.isActive(this@MainActivity)
+                    OcrStandbyService.consumeLastError(this@MainActivity)?.let(
+                        flowPilotViewModel::showError,
+                    )
+                }
+                else -> {
+                    flowPilotViewModel.refreshRunStatus()
+                    flowPilotViewModel.refreshRunHistory()
+                }
+            }
         }
     }
 
@@ -200,9 +225,11 @@ class MainActivity : ComponentActivity() {
                         accessibilityEnabled = accessibilityEnabled.value,
                         notificationPermissionGranted = notificationPermissionGranted.value,
                         remoteMonitoring = remoteMonitoring.value,
+                        ocrStandbyActive = ocrStandbyActive.value,
                         onRequestNotificationPermission = {
                             requestNotificationPermission()
                         },
+                        onSetOcrStandby = ::setOcrStandby,
                         onRunTask = ::beginExecution,
                         onDecideRemoteRun = ::decideRemoteRun,
                         onClearRemoteTarget = { remoteIntentId.value = null },
@@ -213,6 +240,7 @@ class MainActivity : ComponentActivity() {
                         onRememberLoginInfoChanged = flowPilotViewModel::setRememberLoginInfo,
                         onLogout = {
                             RemoteRunMonitorService.stop(this)
+                            OcrStandbyService.stop(this)
                             flowPilotViewModel.logout()
                         },
                         onStopTask = { TaskExecutionService.stop(this) },
@@ -236,6 +264,8 @@ class MainActivity : ComponentActivity() {
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
                 android.content.pm.PackageManager.PERMISSION_GRANTED
         remoteMonitoring.value = RemoteRunMonitorService.isMonitoring(this)
+        ocrStandbyActive.value = OcrStandbyService.isActive(this)
+        OcrStandbyService.consumeLastError(this)?.let(flowPilotViewModel::showError)
         flowPilotViewModel.refreshRunStatus()
         flowPilotViewModel.refreshRunHistory()
         flowPilotViewModel.refreshRemoteRuns()
@@ -246,7 +276,10 @@ class MainActivity : ComponentActivity() {
         ContextCompat.registerReceiver(
             this,
             runStatusReceiver,
-            IntentFilter(TaskExecutionService.ACTION_RUN_STATUS_CHANGED),
+            IntentFilter().apply {
+                addAction(TaskExecutionService.ACTION_RUN_STATUS_CHANGED)
+                addAction(OcrStandbyService.ACTION_STATE_CHANGED)
+            },
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
     }
@@ -287,8 +320,12 @@ class MainActivity : ComponentActivity() {
                 flowPilotViewModel.showError("当前账号尚未绑定此设备")
                 return
             }
-            if (requiresScreenCapture(task.capabilities)) {
+            if (requiresNewScreenCaptureAuthorization(task.capabilities, ocrStandbyActive.value)) {
                 beginScreenCaptureExecution(task, runId, remoteRequestId)
+                return
+            }
+            if (requiresScreenCapture(task.capabilities)) {
+                beginExecutionWithOcrStandby(task, runId, remoteRequestId)
                 return
             }
             try {
@@ -315,7 +352,11 @@ class MainActivity : ComponentActivity() {
             flowPilotViewModel.showError("请先启用 FlowPilot 自动化操作服务，再运行需要点击界面的任务")
             return
         }
-        beginScreenCaptureExecution(task, runId, remoteRequestId)
+        if (requiresScreenCapture(task.capabilities) && ocrStandbyActive.value) {
+            beginExecutionWithOcrStandby(task, runId, remoteRequestId)
+        } else {
+            beginScreenCaptureExecution(task, runId, remoteRequestId)
+        }
     }
 
     private fun beginScreenCaptureExecution(
@@ -337,6 +378,57 @@ class MainActivity : ComponentActivity() {
         pendingExecution = PendingExecution(task, runId, remoteRequestId)
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         screenCapturePermission.launch(manager.createScreenCaptureIntent())
+    }
+
+    private fun beginExecutionWithOcrStandby(
+        task: AvailableTask,
+        runId: String?,
+        remoteRequestId: String?,
+    ) {
+        lifecycleScope.launch {
+            var activeRunId = runId
+            try {
+                val device = flowPilotViewModel.state.value.device
+                    ?: throw IllegalStateException("当前账号尚未绑定此设备")
+                if (activeRunId == null) activeRunId = flowPilotViewModel.createLocalRun(task)
+                TaskExecutionService.start(
+                    context = this@MainActivity,
+                    task = task,
+                    runId = activeRunId,
+                    captureResultCode = null,
+                    captureResultData = null,
+                    deviceId = device.id,
+                )
+                remoteRequestId?.let {
+                    RemoteRunMonitorService.markRequestHandled(this@MainActivity, it)
+                }
+                flowPilotViewModel.refreshRunStatus()
+                flowPilotViewModel.refreshRunHistory()
+            } catch (exception: Exception) {
+                val message = "无法使用持续 OCR 会话启动任务：${exception.message ?: "未知错误"}"
+                val reportError = activeRunId?.let { failedRunId ->
+                    runCatching { flowPilotViewModel.failRun(failedRunId, message) }.exceptionOrNull()
+                }
+                remoteRequestId?.let {
+                    RemoteRunMonitorService.markRequestHandled(this@MainActivity, it)
+                }
+                val finalMessage = if (reportError == null) {
+                    message
+                } else {
+                    "$message；失败状态同步失败：${reportError.message ?: "服务器不可用"}"
+                }
+                RunStatusStore(this@MainActivity).update(
+                    activeRunId.orEmpty(),
+                    task.name,
+                    task.version,
+                    "failure",
+                    finalMessage,
+                )
+                flowPilotViewModel.showError(finalMessage)
+                flowPilotViewModel.refreshRunStatus()
+                flowPilotViewModel.refreshRunHistory()
+            }
+        }
     }
 
     private fun decideRemoteRun(request: RemoteRun, approve: Boolean, preauthorize: Boolean) {
@@ -394,6 +486,34 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun setOcrStandby(enabled: Boolean) {
+        if (!enabled) {
+            OcrStandbyService.stop(this)
+            ocrStandbyActive.value = false
+            return
+        }
+        if (!canStartOcrStandby(RunStatusStore(this).snapshot().status)) {
+            flowPilotViewModel.showError("当前任务运行中，完成或停止任务后再开启持续 OCR 待命")
+            return
+        }
+        if (OcrStandbyService.isActive(this)) {
+            ocrStandbyActive.value = true
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 33 && !notificationPermissionGranted.value) {
+            startOcrStandbyAfterNotificationGrant = true
+            requestNotificationPermission()
+            return
+        }
+        requestOcrStandbyCapturePermission()
+    }
+
+    private fun requestOcrStandbyCapturePermission() {
+        pendingOcrStandbyStart = true
+        val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        screenCapturePermission.launch(manager.createScreenCaptureIntent())
+    }
+
     private fun setRemoteMonitoring(enabled: Boolean) {
         if (!enabled) {
             RemoteRunMonitorService.stop(this)
@@ -436,7 +556,9 @@ private fun FlowPilotScreen(
     accessibilityEnabled: Boolean,
     notificationPermissionGranted: Boolean,
     remoteMonitoring: Boolean,
+    ocrStandbyActive: Boolean,
     onRequestNotificationPermission: () -> Unit,
+    onSetOcrStandby: (Boolean) -> Unit,
     onRunTask: (AvailableTask, String?, String?) -> Unit,
     onDecideRemoteRun: (RemoteRun, Boolean, Boolean) -> Unit,
     onClearRemoteTarget: () -> Unit,
@@ -479,15 +601,16 @@ private fun FlowPilotScreen(
             permissionOnboardingVisible = true
         }
     }
-    LaunchedEffect(user?.id, device?.id) {
+    LaunchedEffect(user?.id, device?.id, ocrStandbyActive) {
         if (user != null && device != null) {
             viewModel.refreshRemoteRuns()
             viewModel.refreshRunAuthorizations()
         } else if (user != null) {
             onSetRemoteMonitoring(false)
+            if (ocrStandbyActive) onSetOcrStandby(false)
         }
     }
-    LaunchedEffect(remoteIntentId, state.remoteRuns, permissionOnboardingVisible) {
+    LaunchedEffect(remoteIntentId, state.remoteRuns, permissionOnboardingVisible, ocrStandbyActive) {
         if (permissionOnboardingVisible) return@LaunchedEffect
         if (remoteIntentId != null) {
             val request = state.remoteRuns.firstOrNull { it.id == remoteIntentId }
@@ -507,6 +630,7 @@ private fun FlowPilotScreen(
                     runId = candidate.runId,
                     capabilities = candidate.capabilities,
                     alreadyPrompted = candidate.id in promptedRemotePermissionIds,
+                    captureSessionActive = ocrStandbyActive,
                 )
             }
             if (request != null) {
@@ -793,13 +917,41 @@ private fun FlowPilotScreen(
                             )
                         }
                         Text(
-                            "待命期间会显示持续服务通知。预授权限当前任务及此设备，包含该版本和后续版本 30 天；无需逐次系统授权的任务可自动运行并可随时停止。远程 OCR 在 App 前台时弹出请求；后台收到的请求会等你打开 App 后弹出，确认后仍需通过 Android 屏幕捕获系统授权。",
+                            "待命期间会显示持续服务通知。预授权限当前任务及此设备，包含该版本和后续版本 30 天；无需逐次系统授权的任务可自动运行并可随时停止。远程 OCR 在 App 前台时弹出请求；后台收到的请求会等你打开 App 后弹出。若持续 OCR 待命已开启，确认后复用当前授权会话；否则需通过 Android 屏幕捕获系统授权。",
                         )
                         Button(
                             onClick = { onSetRemoteMonitoring(!remoteMonitoring) },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(if (remoteMonitoring) "停止远程待命" else "开启远程待命")
+                        }
+                    }
+                }
+
+                FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("持续 OCR 待命", style = MaterialTheme.typography.titleMedium)
+                            StatusBadge(
+                                label = if (ocrStandbyActive) "捕获中" else "未开启",
+                                status = if (ocrStandbyActive) "active" else "stopped",
+                            )
+                        }
+                        Text(
+                            "你可以在此主动授权屏幕捕获。待命时屏幕捕获会持续运行并显示独立的 Android 前台服务通知；确认过的远程 OCR 请求可复用本次会话，减少重复系统授权。停止待命、系统回收或撤销共享后，会话失效，后续 OCR 需要重新授权。",
+                        )
+                        Button(
+                            onClick = { onSetOcrStandby(!ocrStandbyActive) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (ocrStandbyActive) "停止持续 OCR 待命" else "授权并开启持续 OCR 待命")
                         }
                     }
                 }
@@ -1124,8 +1276,13 @@ private fun FlowPilotScreen(
                         Text("绑定设备后可开启远程待命。")
                     }
                     Text(
-                        "屏幕捕获（OCR）：仅在具体 OCR 任务开始时由 Android 系统逐次询问；不能登录时预先授权或永久保活。",
+                        "屏幕捕获（OCR）：可主动开启持续 OCR 待命并由 Android 系统授权一次；待命期间远程 OCR 可复用会话并显示持续通知。结束或系统回收后需重新授权，不能永久保活。当前状态：${if (ocrStandbyActive) "运行中" else "未运行"}。",
                     )
+                    if (device != null) {
+                        TextButton(onClick = { onSetOcrStandby(!ocrStandbyActive) }) {
+                            Text(if (ocrStandbyActive) "停止持续 OCR 待命" else "开启持续 OCR 待命")
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -1193,7 +1350,11 @@ private fun FlowPilotScreen(
                     }
                     Text(
                         if (requiresScreenCapture(request.capabilities)) {
-                            "确认后仍需通过 Android 系统屏幕捕获授权，拒绝系统授权则任务不会运行。此授权由系统控制，不能预先或静默授予。"
+                            if (ocrStandbyActive) {
+                                "持续 OCR 会话正在运行；确认后会复用当前屏幕捕获授权。会话停止或被系统回收时，任务将无法继续。"
+                            } else {
+                                "确认后还需通过 Android 系统屏幕捕获授权；拒绝系统授权则任务不会运行。也可先开启持续 OCR 待命以复用当前会话。"
+                            }
                         } else {
                             "授权后，后续不需要逐次系统授权的远程版本会自动在可见前台服务中运行并可停止。"
                         },

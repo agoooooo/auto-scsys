@@ -27,6 +27,14 @@ internal fun requiresScreenCapture(capabilities: List<String>): Boolean =
             capability.contains("读屏", ignoreCase = true)
     }
 
+internal fun requiresNewScreenCaptureAuthorization(
+    capabilities: List<String>,
+    captureSessionActive: Boolean,
+): Boolean = requiresScreenCapture(capabilities) && !captureSessionActive
+
+internal fun canStartOcrStandby(runStatus: String?): Boolean =
+    runStatus !in setOf("running", "awaiting_permission")
+
 internal fun canAutoRunRemote(capabilities: List<String>): Boolean =
     !requiresScreenCapture(capabilities)
 
@@ -35,8 +43,10 @@ internal fun shouldPromptForRemoteScreenCapture(
     runId: String?,
     capabilities: List<String>,
     alreadyPrompted: Boolean,
+    captureSessionActive: Boolean = false,
 ): Boolean = !alreadyPrompted &&
     requiresScreenCapture(capabilities) &&
+    !(captureSessionActive && status == "running" && !runId.isNullOrBlank()) &&
     (status == "pending" || (status == "running" && !runId.isNullOrBlank()))
 
 internal fun shouldShowPermissionOnboarding(
