@@ -642,9 +642,39 @@ private fun FlowPilotScreen(
                                     modifier = Modifier.padding(16.dp),
                                     verticalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
-                                    Text(request.taskName, style = MaterialTheme.typography.titleMedium)
-                                    Text("版本 ${request.version} · ${if (request.status == "pending") "等待确认" else "已预授权"}")
-                                    Text("来源：${sourceLabel(request.source)}")
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            request.taskName,
+                                            modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.titleMedium,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        StatusBadge(
+                                            label = runStatusLabel(request.status),
+                                            status = request.status,
+                                        )
+                                    }
+                                    Text(
+                                        "版本 ${request.version} · 来源 ${sourceLabel(request.source)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text(
+                                        "请求人：${request.requestedBy}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    if (request.capabilities.isNotEmpty()) {
+                                        Text(
+                                            "声明能力 · ${request.capabilities.joinToString(" · ")}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
                                     if (request.status == "pending") {
                                         Button(onClick = { selectedRemoteRun = request }) {
                                             Text("查看并确认")
