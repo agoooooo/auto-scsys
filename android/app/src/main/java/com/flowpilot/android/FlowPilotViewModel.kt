@@ -22,6 +22,8 @@ internal data class AppUiState(
     val device: BoundDevice? = null,
     val tasks: List<AvailableTask> = emptyList(),
     val remoteRuns: List<RemoteRun> = emptyList(),
+    val runHistory: List<RunRecord> = emptyList(),
+    val runHistoryError: String? = null,
     val scriptReview: ScriptReview? = null,
     val loading: Boolean = false,
     val error: String? = null,
@@ -91,6 +93,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                 try {
                     loadExistingDevice(client, login.token, login.user)
                     _state.value = _state.value.copy(loading = false)
+                    refreshRunHistory()
                 } catch (exception: Exception) {
                     _state.value = _state.value.copy(
                         loading = false,
@@ -133,6 +136,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                     device = device,
                     tasks = tasks,
                 )
+                refreshRunHistory()
             } catch (exception: Exception) {
                 _state.value = _state.value.copy(
                     loading = false,
@@ -245,6 +249,32 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         _state.value = _state.value.copy(runStatus = RunStatusStore(getApplication()).snapshot())
     }
 
+    fun refreshRunHistory() {
+        val current = _state.value
+        val userId = current.user?.id ?: return
+        if (current.token == null) return
+        viewModelScope.launch {
+            try {
+                val session = withContext(Dispatchers.IO) { freshSession() }
+                val runs = withContext(Dispatchers.IO) {
+                    ApiClient(session.apiBaseUrl).listRuns(session.token)
+                }
+                if (_state.value.user?.id != userId) return@launch
+                _state.value = _state.value.copy(
+                    token = session.token,
+                    tokenExpiresAt = session.tokenExpiresAt,
+                    runHistory = runs,
+                    runHistoryError = null,
+                )
+            } catch (exception: Exception) {
+                if (_state.value.user?.id != userId) return@launch
+                _state.value = _state.value.copy(
+                    runHistoryError = "运行记录同步失败：${exception.message ?: "服务器不可用"}",
+                )
+            }
+        }
+    }
+
     suspend fun createLocalRun(task: AvailableTask): String = withContext(Dispatchers.IO) {
         val session = freshSession()
         val device = requireNotNull(_state.value.device) { "当前账号尚未绑定此设备" }
@@ -320,6 +350,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                 _state.value = _state.value.copy(user = user, token = token, tokenExpiresAt = expiresAt)
                 loadExistingDevice(client, token, user)
                 _state.value = _state.value.copy(loading = false)
+                refreshRunHistory()
             } catch (exception: Exception) {
                 sessionStore.clear()
                 val remembered = sessionStore.readRememberedLogin()

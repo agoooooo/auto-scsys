@@ -30,10 +30,12 @@ internal data class RemoteRun(
 internal data class RunRecord(
     val id: String,
     val taskId: String,
+    val taskName: String,
     val version: String,
     val deviceId: String,
     val status: String,
     val startedAt: String,
+    val resultSummary: String,
 )
 
 internal data class DownloadedScript(val filename: String, val source: String, val sha256: String)
@@ -201,10 +203,12 @@ internal class ApiClient(baseUrl: String) {
             RunRecord(
                 id = item.optString("id"),
                 taskId = item.optString("task_id"),
+                taskName = item.optString("task_name"),
                 version = item.optString("version"),
                 deviceId = item.optString("device_id"),
                 status = item.optString("status"),
                 startedAt = item.optString("started_at"),
+                resultSummary = item.optString("result_summary"),
             )
         }
 

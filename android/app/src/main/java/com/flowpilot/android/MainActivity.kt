@@ -71,10 +71,12 @@ class MainActivity : ComponentActivity() {
         if (result.resultCode != Activity.RESULT_OK || result.data == null) {
             if (pending.runId != null) {
                 lifecycleScope.launch {
-                    runCatching {
+                    try {
                         flowPilotViewModel.failRun(pending.runId, "用户未授予 Android 屏幕捕获权限")
-                    }.onFailure {
-                        flowPilotViewModel.showError("屏幕捕获被拒绝；运行结果同步失败：${it.message}")
+                    } catch (exception: Exception) {
+                        flowPilotViewModel.showError("屏幕捕获被拒绝；运行结果同步失败：${exception.message}")
+                    } finally {
+                        flowPilotViewModel.refreshRunHistory()
                     }
                 }
             }
@@ -119,6 +121,7 @@ class MainActivity : ComponentActivity() {
                 )
                 douyinIntent?.let(::startActivity)
                 flowPilotViewModel.refreshRunStatus()
+                flowPilotViewModel.refreshRunHistory()
             } catch (exception: Exception) {
                 val original = exception.message ?: "无法启动任务"
                 val reportError = runId?.let { id ->
@@ -136,6 +139,7 @@ class MainActivity : ComponentActivity() {
                     original,
                 )
                 flowPilotViewModel.refreshRunStatus()
+                flowPilotViewModel.refreshRunHistory()
             }
         }
     }
@@ -147,6 +151,7 @@ class MainActivity : ComponentActivity() {
     private val runStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             flowPilotViewModel.refreshRunStatus()
+            flowPilotViewModel.refreshRunHistory()
         }
     }
 
@@ -191,6 +196,7 @@ class MainActivity : ComponentActivity() {
         accessibilityEnabled.value = DouyinAccessibilityService.isEnabled(this)
         remoteMonitoring.value = RemoteRunMonitorService.isMonitoring(this)
         flowPilotViewModel.refreshRunStatus()
+        flowPilotViewModel.refreshRunHistory()
         flowPilotViewModel.refreshRemoteRuns()
     }
 
@@ -573,6 +579,37 @@ private fun FlowPilotScreen(
                                         ) {
                                             Text("继续已授权任务")
                                         }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Text("运行历史（${state.runHistory.size}）", style = MaterialTheme.typography.titleLarge)
+                if (state.runHistory.isEmpty()) {
+                    Text(state.runHistoryError ?: "暂无运行记录。")
+                } else {
+                    state.runHistoryError?.let { error ->
+                        Text(error, color = MaterialTheme.colorScheme.error)
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        visibleRunHistory(state.runHistory).forEach { run ->
+                            Card(modifier = Modifier.fillMaxWidth()) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Text(
+                                        "${run.taskName} · ${runStatusLabel(run.status)}",
+                                        style = MaterialTheme.typography.titleSmall,
+                                    )
+                                    Text(
+                                        "版本：${run.version} · ${formatServerRunTime(run.startedAt)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                    run.resultSummary.takeIf(String::isNotBlank)?.let { summary ->
+                                        Text(summary, style = MaterialTheme.typography.bodySmall)
                                     }
                                 }
                             }
