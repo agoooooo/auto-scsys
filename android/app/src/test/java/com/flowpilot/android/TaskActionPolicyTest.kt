@@ -101,6 +101,14 @@ class TaskActionPolicyTest {
     }
 
     @Test
+    fun remoteApprovalRequiresAccessibilityAndAnIdleDevice() {
+        assertTrue(remoteRunCanBeApproved(accessibilityEnabled = true, runStatus = null))
+        assertFalse(remoteRunCanBeApproved(accessibilityEnabled = false, runStatus = null))
+        assertFalse(remoteRunCanBeApproved(accessibilityEnabled = true, runStatus = "running"))
+        assertFalse(remoteRunCanBeApproved(accessibilityEnabled = true, runStatus = "awaiting_permission"))
+    }
+
+    @Test
     fun logoutBecomesAvailableAfterPermissionIsDeniedOrRunFinishes() {
         assertFalse(canLogoutDuringRun("running"))
         assertFalse(canLogoutDuringRun("awaiting_permission"))

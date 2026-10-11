@@ -252,13 +252,24 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun beginExecution(task: AvailableTask, runId: String?, remoteRequestId: String?) {
-        if (!accessibilityEnabled.value) {
-            flowPilotViewModel.showError("请先启用 FlowPilot 自动化操作服务，再运行需要点击界面的任务")
-            return
-        }
         val currentStatus = RunStatusStore(this).snapshot().status
         if (currentStatus == "running" || currentStatus == "awaiting_permission") {
             flowPilotViewModel.showError("当前已有任务运行，请先停止或等待完成")
+            runId?.let { reportRemoteRunFailure(it, "设备上已有任务运行，本次远程任务未启动") }
+            return
+        }
+        if (!accessibilityEnabled.value) {
+            flowPilotViewModel.showError("请先启用 FlowPilot 自动化操作服务，再运行需要点击界面的任务")
+            runId?.let {
+                RunStatusStore(this).update(
+                    it,
+                    task.name,
+                    task.version,
+                    "failure",
+                    "未启用无障碍服务，远程任务未启动",
+                )
+                reportRemoteRunFailure(it, "未启用无障碍服务，远程任务未启动")
+            }
             return
         }
         RunStatusStore(this).update(
@@ -275,6 +286,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun decideRemoteRun(request: RemoteRun, approve: Boolean, preauthorize: Boolean) {
+        if (approve && !remoteRunCanBeApproved(
+                accessibilityEnabled.value,
+                RunStatusStore(this).snapshot().status,
+            )
+        ) {
+            flowPilotViewModel.showError(
+                if (!accessibilityEnabled.value) {
+                    "请先启用无障碍服务，再确认远程任务"
+                } else {
+                    "当前已有任务运行，请先停止或等待完成"
+                },
+            )
+            return
+        }
         RemoteRunMonitorService.markRequestHandled(this, request.id)
         lifecycleScope.launch {
             try {
@@ -286,6 +311,20 @@ class MainActivity : ComponentActivity() {
                 flowPilotViewModel.refreshRunAuthorizations()
             } catch (exception: Exception) {
                 flowPilotViewModel.showError(exception.message ?: "无法处理远程运行请求")
+            }
+        }
+    }
+
+    private fun reportRemoteRunFailure(runId: String, message: String) {
+        lifecycleScope.launch {
+            try {
+                flowPilotViewModel.failRun(runId, message)
+                flowPilotViewModel.refreshRunHistory()
+                flowPilotViewModel.refreshRemoteRuns()
+            } catch (exception: Exception) {
+                flowPilotViewModel.showError(
+                    "$message；失败状态同步失败：${exception.message ?: "服务器不可用"}",
+                )
             }
         }
     }

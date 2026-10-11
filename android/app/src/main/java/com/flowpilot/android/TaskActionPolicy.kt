@@ -11,3 +11,8 @@ internal fun canExecuteTaskScript(
     confirmationChecked: Boolean,
     accessibilityEnabled: Boolean,
 ): Boolean = scriptReviewed && confirmationChecked && accessibilityEnabled
+
+internal fun remoteRunCanBeApproved(
+    accessibilityEnabled: Boolean,
+    runStatus: String?,
+): Boolean = accessibilityEnabled && runStatus !in setOf("running", "awaiting_permission")
