@@ -67,11 +67,11 @@ Keep backup destinations on protected storage; this database contains account da
 - `GET/POST /tasks/{id}/publications`、`DELETE /tasks/{id}/publications/{publication_id}`（管理员将指定版本分发给具体设备或撤销分发）
 - `GET /devices/{id}/tasks/{task_id}/versions/{version}/content`
 - `POST /devices/{id}/publications/{publication_id}/accept`（设备用户确认接收指定脚本版本）
-- `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`PATCH /remote-runs/{id}`；只有普通用户可为自己的设备创建远程运行请求。设备轮询结果包含待处理请求、运行中的请求及最近 50 条过期请求，方便设备端显示过期状态；运行中的请求包含 `run_id`
+- `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`PATCH /remote-runs/{id}`；只有普通用户可为自己的设备创建远程运行请求。新请求一律保持待处理状态，Android 客户端须在服务端重新校验并批准后才会建立运行记录；历史预授权不会自动启动当前客户端的请求。设备轮询结果包含待处理请求、运行中的请求及最近 50 条过期请求，方便设备端显示过期状态；运行中的请求包含 `run_id`
 - `POST /runs/{id}`、`GET /runs`
 - `GET/POST/DELETE /run-authorizations`、`GET /admin/audit`
 
-管理员将已发布版本分发到具体设备后，设备用户先看到版本来源、更新说明和能力列表；确认接收后，服务端才允许该设备同步和下载该版本。服务端对运行请求和下载分别校验账号、设备、任务授权及已确认的版本。请求由 Android 客户端在服务端鉴权后自动批准并启动，不需要逐次任务确认或有限预授权；这不等同于授予 Android 系统权限。请求需要的无障碍能力必须已启用；OCR/屏幕捕获仍要求 Android 系统授权。如果设备已主动开启持续 OCR 前台服务且会话有效，可在会话期间复用授权，否则客户端须先通过系统授权后运行。会话结束、系统回收或撤销共享后，必须重新授权。运行 API 只记录客户端回报状态，不在服务端或浏览器里执行 Python。
+管理员将已发布版本分发到具体设备后，设备用户先看到版本来源、更新说明和能力列表；确认接收后，服务端才允许该设备同步和下载该版本。服务端对运行请求和下载分别校验账号、设备、任务授权及已确认的版本。Android 客户端在服务端鉴权后自动批准并启动新请求，不需要逐次任务确认或有限预授权；旧预授权记录不会绕过当前客户端的设备端批准流程。这不等同于授予 Android 系统权限。请求需要的无障碍能力必须已启用；OCR/屏幕捕获仍要求 Android 系统授权。如果设备已主动开启持续 OCR 前台服务且会话有效，可在会话期间复用授权，否则客户端须先通过系统授权后运行。会话结束、系统回收或撤销共享后，必须重新授权。运行 API 只记录客户端回报状态，不在服务端或浏览器里执行 Python。
 
 远程运行只能由普通用户发起到自己名下的设备；管理员可以分发脚本和查看记录，但不能直接启动其他用户设备上的任务。
 

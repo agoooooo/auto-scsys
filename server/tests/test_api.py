@@ -1047,18 +1047,20 @@ def test_only_users_can_request_remote_runs_for_their_own_devices(client):
     assert requested.json()["status"] == "pending"
 
 
-def test_device_can_poll_preauthorized_remote_run_until_execution_finishes(client):
-    admin = login(client, "admin@example.com", "admin-demo")
+def test_device_can_poll_remote_run_until_execution_finishes(client):
     user = login(client)
     request = client.post(
         "/remote-runs",
         headers=auth(user),
         json={"task_id": "t-001", "device_id": "d-001"},
     ).json()
+    waiting = client.get("/devices/d-001/remote-runs", headers=auth(user)).json()[0]
+    assert waiting["status"] == "pending"
+    assert waiting["run_id"] is None
     approved = client.patch(
         f"/remote-runs/{request['id']}",
         headers=auth(user),
-        json={"decision": "approve", "preauthorize": True},
+        json={"decision": "approve"},
     ).json()
 
     polled = client.get("/devices/d-001/remote-runs", headers=auth(user))
@@ -1159,7 +1161,7 @@ def test_device_rejects_concurrent_remote_and_local_runs(client):
     ).status_code == 200
 
 
-def test_preauthorization_covers_current_and_future_versions_on_one_device(client):
+def test_legacy_preauthorization_does_not_auto_start_current_remote_runs(client):
     admin = login(client, "admin@example.com", "admin-demo")
     user = login(client)
     first = client.post("/remote-runs", headers=auth(user), json={"task_id": "t-001", "device_id": "d-001"}).json()
@@ -1179,9 +1181,16 @@ def test_preauthorization_covers_current_and_future_versions_on_one_device(clien
         json={"status": "success", "result_summary": "完成"},
     ).status_code == 200
     next_run = client.post("/remote-runs", headers=auth(user), json={"task_id": "t-001", "device_id": "d-001"}).json()
-    assert next_run["status"] == "running"
+    assert next_run["status"] == "pending"
+    assert next_run["run_id"] is None
+    assert client.get("/run-authorizations", headers=auth(user)).json()
+    next_approved = client.patch(
+        f"/remote-runs/{next_run['id']}",
+        headers=auth(user),
+        json={"decision": "approve"},
+    ).json()
     assert client.post(
-        f"/runs/{next_run['run_id']}",
+        f"/runs/{next_approved['run_id']}",
         headers=auth(user),
         json={"status": "success", "result_summary": "完成"},
     ).status_code == 200
@@ -1200,10 +1209,15 @@ def test_preauthorization_covers_current_and_future_versions_on_one_device(clien
         headers=auth(user),
         json={"task_id": "t-001", "device_id": "d-001"},
     ).json()
-    assert future_run["status"] == "running"
+    assert future_run["status"] == "pending"
+    future_approved = client.patch(
+        f"/remote-runs/{future_run['id']}",
+        headers=auth(user),
+        json={"decision": "approve"},
+    ).json()
 
     assert client.post(
-        f"/runs/{future_run['run_id']}",
+        f"/runs/{future_approved['run_id']}",
         headers=auth(user),
         json={"status": "success", "result_summary": "完成"},
     ).status_code == 200
@@ -1214,7 +1228,7 @@ def test_preauthorization_covers_current_and_future_versions_on_one_device(clien
     assert client.delete(f"/run-authorizations/{grants[0]['id']}", headers=auth(user)).status_code == 404
 
 
-def test_all_version_preauthorization_applies_to_future_versions_and_is_revocable(client):
+def test_legacy_all_version_preauthorization_does_not_bypass_device_approval(client):
     admin = login(client, "admin@example.com", "admin-demo")
     user = login(client)
     created = client.post(
@@ -1245,9 +1259,14 @@ def test_all_version_preauthorization_applies_to_future_versions_and_is_revocabl
     )
     assert remote_run.status_code == 201
     assert remote_run.json()["version"] == "v1.8.0"
-    assert remote_run.json()["status"] == "running"
+    assert remote_run.json()["status"] == "pending"
+    approved = client.patch(
+        f"/remote-runs/{remote_run.json()['id']}",
+        headers=auth(user),
+        json={"decision": "approve"},
+    ).json()
     assert client.post(
-        f"/runs/{remote_run.json()['run_id']}",
+        f"/runs/{approved['run_id']}",
         headers=auth(user),
         json={"status": "success", "result_summary": "完成"},
     ).status_code == 200

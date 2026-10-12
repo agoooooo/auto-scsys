@@ -1306,29 +1306,8 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             (request_id, task["id"], task["active_version"], body.device_id, user["id"], utc_now(), expires_at),
         )
         _expire_requests(db)
-        grants = db.execute(
-            """SELECT version,all_versions FROM run_authorizations WHERE task_id=? AND device_id=?
-               AND user_id=? AND revoked_at IS NULL AND expires_at>?""",
-            (task["id"], body.device_id, device["user_id"], now),
-        ).fetchall()
-        active_version_key = _version_key(task["active_version"])
-        grant = next(
-            (
-                row
-                for row in grants
-                if row["version"] == task["active_version"]
-                or (row["all_versions"] and active_version_key >= _version_key(row["version"]))
-            ),
-            None,
-        )
-        run_id = None
-        status = "pending"
-        if grant:
-            pending = db.execute("SELECT * FROM remote_runs WHERE id=?", (request_id,)).fetchone()
-            run_id = _start_run(db, pending)
-            status = "running"
         audit(db, user["id"], "remote_run.requested", "remote_run", request_id)
-        return {"id": request_id, "task_id": task["id"], "version": task["active_version"], "device_id": body.device_id, "status": status, "created_at": utc_now(), "expires_at": expires_at, "run_id": run_id}
+        return {"id": request_id, "task_id": task["id"], "version": task["active_version"], "device_id": body.device_id, "status": "pending", "created_at": utc_now(), "expires_at": expires_at, "run_id": None}
 
     @app.post("/devices/{device_id}/runs", status_code=201)
     def start_local_run(device_id: str, body: LocalRunInput, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
