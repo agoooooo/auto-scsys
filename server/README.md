@@ -2,7 +2,7 @@
 
 这是 FlowPilot 的 FastAPI 服务端。默认开发模式在本机使用 SQLite，并预置演示账号、设备和任务；生产部署可使用 PostgreSQL 和 S3 兼容对象存储。遗留的有限预授权数据和 API 为旧客户端保留，不参与当前 Android 客户端的远程运行判断。脚本上传后只做 `.py` 格式、大小和 SHA-256 校验，不会执行脚本。
 
-**这不代表服务已具备所有生产运营保障。**登录接口有实例内失败次数限制，但仍需边缘/API 网关分布式限流、账号恢复、加密异地备份与恢复演练、监控告警和安全评审。Docker Compose 提供 PostgreSQL、MinIO、API、Web 和自动 HTTPS 反向代理，适合单机/小型受控部署起步；应按组织要求配置独立托管数据库与对象存储、密钥管理和备份。脚本内容经 API 授权后从对象存储读取/写入，并由 API 核对 SHA-256；目前 API 代理最多 2 MiB 的脚本内容，而不是向浏览器或设备签发预签名 URL。Android 客户端必须使用 HTTPS API 地址。
+**这不代表服务已具备所有生产运营保障。**登录接口有实例内失败次数限制，但仍需边缘/API 网关分布式限流、账号恢复、加密异地备份与恢复演练、监控告警和安全评审。Docker Compose 提供 PostgreSQL、MinIO、API、Web 和自动 HTTPS 反向代理，适合单机/小型受控部署起步；应按组织要求配置独立托管数据库与对象存储、密钥管理和备份。生产 Web 上传及 Android 下载使用短时预签名 URL；API 在上传完成时核验内容大小及 SHA-256。SQLite 开发及兼容接口仍通过 API 上传/下载，单脚本限制为 2 MiB。Android 客户端必须使用 HTTPS API 地址。
 
 ## 本地启动
 
@@ -27,7 +27,7 @@ FLOWPILOT_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32)
 
 ## Docker production deployment
 
-Compose runs PostgreSQL, MinIO, the API, static web console, and Caddy. Point both domain names at the host and allow inbound TCP 80/443 for automatic HTTPS certificates. Create a private environment file from the template, set strong unique credentials (the PostgreSQL URL password must be URI-encoded), and start the stack:
+Compose runs PostgreSQL, MinIO, the API, static web console, and Caddy. Point the API, web-console, and object-storage domain names at the host and allow inbound TCP 80/443 for automatic HTTPS certificates. Create a private environment file from the template, set strong unique credentials (the PostgreSQL URL password must be URI-encoded), and start the stack:
 
 ```bash
 cp .env.example .env
@@ -36,17 +36,17 @@ chmod 600 .env
 docker compose up -d --build
 ```
 
-The PostgreSQL and MinIO volumes persist independently; Compose does not publish their ports to the host. The API requires a stable token secret (32+ characters), exact HTTPS console CORS origin, and known-demo-account-free database; it disables demo seeding and API documentation. Once the stack is healthy, initialize the first administrator interactively:
+The PostgreSQL and MinIO volumes persist independently; Compose does not publish their ports to the host. The API requires a stable token secret (32+ characters), exact HTTPS console CORS origin, and known-demo-account-free database; it disables demo seeding and API documentation. The browser uploads scripts directly to the private bucket via 5-minute presigned URLs; the API verifies object size and SHA-256 before publishing. Android downloads through authorized 5-minute presigned URLs and verifies the SHA-256 before execution. The object domain must route to MinIO without rewriting the request path or `Host`; Compose's Caddy route preserves both. Once the stack is healthy, initialize the first administrator interactively:
 
 ```bash
 docker compose exec api python -m server.bootstrap_admin
 ```
 
-Configure the Android app with `https://<FLOWPILOT_API_DOMAIN>`. The web console is at `https://<FLOWPILOT_WEB_DOMAIN>`; enter the API domain on its login screen. Check `docker compose ps` and `https://<FLOWPILOT_API_DOMAIN>/health/ready` after deployment. `docker compose down` preserves named volumes; do not use `down -v` unless intentionally destroying the database, scripts, and TLS state.
+Configure the Android app with `https://<FLOWPILOT_API_DOMAIN>`. The web console is at `https://<FLOWPILOT_WEB_DOMAIN>`; enter the API domain on its login screen. Presigned URLs use `https://<FLOWPILOT_S3_DOMAIN>`. Check `docker compose ps` and `https://<FLOWPILOT_API_DOMAIN>/health/ready` after deployment. `docker compose down` preserves named volumes; do not use `down -v` unless intentionally destroying the database, scripts, and TLS state.
 
 ## Production-mode startup guard
 
-For non-Compose deployments set a PostgreSQL URL via `FLOWPILOT_DATABASE_URL`, a stable `FLOWPILOT_TOKEN_SECRET`, and exact HTTPS `FLOWPILOT_CORS_ORIGINS`; configure `FLOWPILOT_S3_BUCKET`, `FLOWPILOT_S3_REGION`, `FLOWPILOT_S3_ACCESS_KEY`, `FLOWPILOT_S3_SECRET_KEY`, and optionally `FLOWPILOT_S3_ENDPOINT_URL` for an S3-compatible service. `FLOWPILOT_DB_PATH` remains available for SQLite development and compatibility. Production disables demo CORS origins, OpenAPI/Swagger/ReDoc, and demo account seeding; startup also rejects known demo accounts. The bootstrap command prompts for an admin name, email, and 12+ character password without echoing the password. It refuses to run when the database already contains any user and must only be run once against a fresh database.
+For non-Compose deployments set a PostgreSQL URL via `FLOWPILOT_DATABASE_URL`, a stable `FLOWPILOT_TOKEN_SECRET`, and exact HTTPS `FLOWPILOT_CORS_ORIGINS`; configure `FLOWPILOT_S3_BUCKET`, `FLOWPILOT_S3_REGION`, `FLOWPILOT_S3_ACCESS_KEY`, `FLOWPILOT_S3_SECRET_KEY`, and optionally `FLOWPILOT_S3_ENDPOINT_URL` / `FLOWPILOT_S3_PUBLIC_ENDPOINT_URL` for an S3-compatible service. Configure bucket CORS to allow the exact web-console origin for `PUT` uploads, or set `FLOWPILOT_S3_CORS_ORIGINS` and run `python -m server.init_storage` with bucket-administration permission. `FLOWPILOT_DB_PATH` remains available for SQLite development and compatibility. Production disables demo CORS origins, OpenAPI/Swagger/ReDoc, and demo account seeding; startup also rejects known demo accounts. The bootstrap command prompts for an admin name, email, and 12+ character password without echoing the password. It refuses to run when the database already contains any user and must only be run once against a fresh database.
 
 ## Backup and restore operations
 
@@ -77,9 +77,11 @@ Back up the MinIO object volume independently (or use a managed S3 provider with
 - `GET/POST /devices`、`PATCH/DELETE /devices/{id}`、`POST /devices/{id}/sync`、`POST /devices/{id}/heartbeat`（只有设备所属用户可同步或发送心跳）
 - `POST /devices/{id}/runs`（设备用户确认后上报本地启动）
 - `GET/POST /tasks`、`PATCH /tasks/{id}`（管理员暂停/恢复）、`GET /tasks/{id}/versions`、`POST /tasks/{id}/versions`、`PATCH /tasks/{id}/versions/{version}/activate`
+- `POST /tasks/{id}/versions/upload-url`、`POST /tasks/{id}/versions/complete-upload`（生产对象存储直传及服务端内容校验）
 - `GET /tasks/{id}/grants`、`POST/DELETE /tasks/{id}/grants/{user_id}`（管理员管理任务访问权限）
 - `GET/POST /tasks/{id}/publications`、`DELETE /tasks/{id}/publications/{publication_id}`（管理员将指定版本分发给具体设备或撤销分发）
-- `GET /devices/{id}/tasks/{task_id}/versions/{version}/content`
+- `GET /devices/{id}/tasks/{task_id}/versions/{version}/content-url`（授权后签发 5 分钟脚本下载地址；SQLite 返回直连兼容模式）
+- `GET /devices/{id}/tasks/{task_id}/versions/{version}/content`（SQLite/旧客户端兼容下载）
 - `POST /devices/{id}/publications/{publication_id}/accept`（设备用户确认接收指定脚本版本）
 - `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`PATCH /remote-runs/{id}`；只有普通用户可为自己的设备创建远程运行请求。新请求一律保持待处理状态，Android 客户端须在服务端重新校验并批准后才会建立运行记录；历史预授权不会自动启动当前客户端的请求。设备轮询结果包含待处理请求、运行中的请求及最近 50 条过期请求，方便设备端显示过期状态；运行中的请求包含 `run_id`
 - `POST /runs/{id}`、`GET /runs`

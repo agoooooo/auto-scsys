@@ -247,6 +247,22 @@ def test_production_mode_requires_explicit_persistent_config(tmp_path, monkeypat
         create_app("relative.sqlite3")
 
 
+def test_production_postgresql_requires_s3_script_storage(monkeypatch):
+    monkeypatch.setenv("FLOWPILOT_ENV", "production")
+    monkeypatch.setenv("FLOWPILOT_TOKEN_SECRET", "production-secret-that-is-long-enough")
+    monkeypatch.setenv("FLOWPILOT_CORS_ORIGINS", "https://console.example.com")
+    for key in (
+        "FLOWPILOT_S3_BUCKET",
+        "FLOWPILOT_S3_ENDPOINT_URL",
+        "FLOWPILOT_S3_PUBLIC_ENDPOINT_URL",
+        "FLOWPILOT_S3_ACCESS_KEY",
+        "FLOWPILOT_S3_SECRET_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    with pytest.raises(ValueError, match="requires an S3-compatible"):
+        create_app("postgresql://user:password@db/flowpilot")
+
+
 def test_production_mode_disables_demo_seed_and_api_docs(tmp_path, monkeypatch):
     database = tmp_path / "production.sqlite3"
     monkeypatch.setenv("FLOWPILOT_ENV", "production")
@@ -625,6 +641,14 @@ def test_publish_script_validates_and_checks_content_hash(client):
     )
     assert downloaded.content == content
     assert downloaded.headers["x-content-sha256"] == hashlib.sha256(content).hexdigest()
+    ticket = client.get(
+        "/devices/d-001/tasks/t-002/versions/v1.0.0/content-url",
+        headers=auth(user),
+    )
+    assert ticket.status_code == 200
+    assert ticket.headers["cache-control"] == "no-store"
+    assert ticket.json()["url"] is None
+    assert ticket.json()["sha256"] == hashlib.sha256(content).hexdigest()
 
 
 def test_s3_script_storage_keeps_content_out_of_database_and_verifies_download_hash(client):
@@ -683,6 +707,103 @@ def test_s3_script_storage_keeps_content_out_of_database_and_verifies_download_h
     )
     assert corrupt.status_code == 500
     assert corrupt.json()["detail"] == "脚本存储校验失败"
+
+
+def test_presigned_script_transfer_checks_owner_size_and_digest(client):
+    class MemoryStorage:
+        def __init__(self):
+            self.objects = {}
+
+        def put(self, key, content):
+            self.objects[key] = content
+
+        def get(self, key):
+            return self.objects[key]
+
+        def get_info(self, key):
+            content = self.objects[key]
+            return len(content), content
+
+        def delete(self, key):
+            self.objects.pop(key, None)
+
+        def presign_upload(self, key, expires_seconds=300):
+            self.signed_upload_key = key
+            return f"memory://uploads/{key}", {"Content-Type": "text/x-python"}
+
+        def presign_download(self, key, filename, expires_seconds=300):
+            return f"memory://downloads/{key}"
+
+        def ensure_bucket(self):
+            pass
+
+        def configure_cors(self, origins):
+            pass
+
+        def check_ready(self):
+            pass
+
+    storage = MemoryStorage()
+    client.app.state.script_storage = storage
+    owner = login(client)
+    other_user = login(client, "zhou.ke@example.com", "user-demo")
+    task = client.post("/tasks", headers=auth(owner), json={"name": "Presigned transfer"}).json()
+    content = b"print('presigned')\n"
+    digest = hashlib.sha256(content).hexdigest()
+    request = {
+        "version": "v1.0.0",
+        "filename": "script.py",
+        "content_size": len(content),
+        "sha256": digest,
+        "notes": "test upload",
+    }
+    denied = client.post(
+        f"/tasks/{task['id']}/versions/upload-url",
+        headers=auth(other_user),
+        json=request,
+    )
+    assert denied.status_code == 404
+
+    upload = client.post(
+        f"/tasks/{task['id']}/versions/upload-url",
+        headers=auth(owner),
+        json=request,
+    )
+    assert upload.status_code == 201
+    storage.objects[storage.signed_upload_key] = content
+    completed = client.post(
+        f"/tasks/{task['id']}/versions/complete-upload",
+        headers=auth(owner),
+        json={"upload_id": upload.json()["upload_id"]},
+    )
+    assert completed.status_code == 201
+    assert completed.json()["sha256"] == digest
+    ticket = client.get(
+        f"/devices/d-001/tasks/{task['id']}/versions/v1.0.0/content-url",
+        headers=auth(owner),
+    )
+    assert ticket.status_code == 200
+    assert ticket.json()["url"] == f"memory://downloads/{storage.signed_upload_key}"
+    assert ticket.json()["sha256"] == digest
+
+    second = client.post(
+        f"/tasks/{task['id']}/versions/upload-url",
+        headers=auth(owner),
+        json={**request, "version": "v1.1.0"},
+    )
+    storage.objects[storage.signed_upload_key] = b"x" * len(content)
+    rejected = client.post(
+        f"/tasks/{task['id']}/versions/complete-upload",
+        headers=auth(owner),
+        json={"upload_id": second.json()["upload_id"]},
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"] == "上传脚本 SHA-256 校验失败"
+    with server_app._connect(client.app.state.db_path) as db:
+        assert db.execute(
+            "SELECT 1 FROM pending_script_uploads WHERE id=?",
+            (second.json()["upload_id"],),
+        ).fetchone() is None
 
 
 def test_readiness_reports_unavailable_script_storage(client):

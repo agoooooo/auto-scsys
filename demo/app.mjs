@@ -22,6 +22,7 @@ import {
   loadSnapshot,
   login,
   readSession,
+  uploadScriptVersion,
 } from "./api-client.mjs";
 import { mapUsersForCsv, toCsv, userCsvColumns } from "./csv.mjs";
 import { filterTasks } from "./task-list.mjs";
@@ -1195,13 +1196,10 @@ document.addEventListener("submit", async (event) => {
         throw new Error("请选择 2 MB 以内的非空 .py 文件");
       }
       if (session) {
-        const upload = new FormData();
-        upload.set("version", formData.get("version"));
-        upload.set("notes", formData.get("notes"));
-        upload.set("script", file);
-        await apiRequest(session, `/tasks/${encodeURIComponent(event.target.dataset.taskId)}/versions`, {
-          method: "POST",
-          formData: upload,
+        await uploadScriptVersion(session, event.target.dataset.taskId, {
+          version: formData.get("version"),
+          notes: formData.get("notes"),
+          file,
         });
         await Promise.all(formData.getAll("grant_users").map((userId) =>
           apiRequest(session, `/tasks/${encodeURIComponent(event.target.dataset.taskId)}/grants/${encodeURIComponent(userId)}`, { method: "POST", body: {} })));

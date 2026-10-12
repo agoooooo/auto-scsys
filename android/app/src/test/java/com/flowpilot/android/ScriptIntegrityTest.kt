@@ -22,4 +22,26 @@ class ScriptIntegrityTest {
             verifyScriptSha256("print('modified')", "0".repeat(64))
         }
     }
+
+    @Test
+    fun acceptsSignedDownloadWithoutChecksumResponseHeaderWhenBodyMatchesTicket() {
+        val source = "print('signed download')"
+        val hash = MessageDigest.getInstance("SHA-256")
+            .digest(source.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
+        verifyDownloadedScriptSha256(source, hash, null)
+    }
+
+    @Test
+    fun rejectsSignedDownloadWhenObjectChecksumHeaderDiffersFromTicket() {
+        val source = "print('signed download')"
+        val hash = MessageDigest.getInstance("SHA-256")
+            .digest(source.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
+        assertThrows(IOException::class.java) {
+            verifyDownloadedScriptSha256(source, hash, "0".repeat(64))
+        }
+    }
 }

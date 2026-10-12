@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import os
 
 from server.storage import create_script_storage
 
@@ -13,6 +14,12 @@ def main() -> None:
     for attempt in range(30):
         try:
             storage.ensure_bucket()
+            origins = [
+                origin.strip()
+                for origin in os.environ.get("FLOWPILOT_S3_CORS_ORIGINS", "").split(",")
+                if origin.strip()
+            ]
+            storage.configure_cors(origins)
             return
         except Exception as error:
             last_error = error

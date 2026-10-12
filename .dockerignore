@@ -1,0 +1,9 @@
+.git
+.venv
+**/__pycache__
+.pytest_cache
+android
+.env
+server/flowpilot.sqlite3
+server/flowpilot.sqlite3-shm
+server/flowpilot.sqlite3-wal

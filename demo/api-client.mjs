@@ -52,6 +52,46 @@ export async function createRemoteRunRequest(session, taskId, deviceId, fetchImp
   }, fetchImpl);
 }
 
+export async function uploadScriptVersion(session, taskId, { version, notes, file }, fetchImpl = fetch) {
+  if (!globalThis.crypto?.subtle) throw new Error("当前浏览器不支持安全的 SHA-256 校验");
+  const bytes = await file.arrayBuffer();
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  const sha256 = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const path = `/tasks/${encodeURIComponent(taskId)}/versions`;
+  const upload = await apiRequest(session, `${path}/upload-url`, {
+    method: "POST",
+    body: {
+      version,
+      filename: file.name,
+      content_size: file.size,
+      sha256,
+      notes,
+    },
+  }, fetchImpl);
+  if (upload.mode === "api") {
+    const formData = new FormData();
+    formData.set("version", version);
+    formData.set("notes", notes);
+    formData.set("script", file);
+    return apiRequest(session, path, { method: "POST", formData }, fetchImpl);
+  }
+  let response;
+  try {
+    response = await fetchImpl(upload.upload_url, {
+      method: "PUT",
+      headers: upload.headers,
+      body: bytes,
+    });
+  } catch (error) {
+    throw new Error(`脚本上传失败：${error.message}`);
+  }
+  if (!response.ok) throw new Error(`对象存储上传失败（HTTP ${response.status}）`);
+  return apiRequest(session, `${path}/complete-upload`, {
+    method: "POST",
+    body: { upload_id: upload.upload_id },
+  }, fetchImpl);
+}
+
 export async function login(baseUrl, email, password) {
   let parsedBaseUrl;
   try {

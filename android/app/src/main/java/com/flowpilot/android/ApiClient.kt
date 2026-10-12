@@ -195,18 +195,27 @@ internal class ApiClient(baseUrl: String) {
 
     fun downloadScript(token: String, deviceId: String, task: AvailableTask): DownloadedScript {
         if (task.version.isBlank()) throw IOException("任务没有可运行版本")
-        val response = exchange(
-            "/devices/$deviceId/tasks/${encodePathSegment(task.id)}/versions/${encodePathSegment(task.version)}/content",
-            token = token,
-        )
+        val contentPath =
+            "/devices/$deviceId/tasks/${encodePathSegment(task.id)}/versions/${encodePathSegment(task.version)}/content"
+        val ticket = JSONObject(request("$contentPath-url", token = token))
+        val expectedHash = ticket.optString("sha256")
+            .takeIf(String::isNotBlank) ?: throw IOException("脚本响应缺少完整性校验信息")
+        val signedUrl = ticket.opt("url")
+            .takeIf { it != null && it != JSONObject.NULL }
+            ?.toString()
+            .orEmpty()
+        val response = if (signedUrl.isNotBlank()) {
+            exchange(signedUrl, absoluteUrl = true)
+        } else {
+            exchange(contentPath, token = token)
+        }
         if (response.status !in 200..299) throw response.error()
-        val expectedHash = response.headers["x-content-sha256"]
-            ?: throw IOException("脚本响应缺少完整性校验信息")
+        val responseHash = response.headers["x-content-sha256"]
+            ?: response.headers["x-amz-meta-sha256"]
         val source = response.body.toString(Charsets.UTF_8)
-        verifyScriptSha256(source, expectedHash)
+        verifyDownloadedScriptSha256(source, expectedHash, responseHash)
         return DownloadedScript(
-            filename = response.headers["content-disposition"]?.substringAfter("filename=")?.trim('"')
-                ?.takeIf(String::isNotBlank) ?: task.name,
+            filename = ticket.optString("filename", task.name).ifBlank { task.name },
             source = source,
             sha256 = expectedHash.lowercase(),
         )
@@ -292,8 +301,9 @@ internal class ApiClient(baseUrl: String) {
         method: String = "GET",
         token: String? = null,
         payload: JSONObject? = null,
+        absoluteUrl: Boolean = false,
     ): ApiResponse {
-        val connection = URL("$baseUrl$path").openConnection() as HttpURLConnection
+        val connection = URL(if (absoluteUrl) path else "$baseUrl$path").openConnection() as HttpURLConnection
         try {
             connection.requestMethod = method
             connection.connectTimeout = 10_000
@@ -373,6 +383,13 @@ internal fun verifyScriptSha256(source: String, expectedHash: String) {
     ) {
         throw IOException("脚本完整性校验失败，已拒绝运行")
     }
+}
+
+internal fun verifyDownloadedScriptSha256(source: String, expectedHash: String, responseHash: String?) {
+    if (responseHash != null && !responseHash.equals(expectedHash, ignoreCase = true)) {
+        throw IOException("脚本完整性校验失败，已拒绝运行")
+    }
+    verifyScriptSha256(source, expectedHash)
 }
 
 private fun JSONArray?.orEmpty(): JSONArray = this ?: JSONArray()

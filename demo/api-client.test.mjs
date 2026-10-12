@@ -8,6 +8,7 @@ import {
   login,
   readSession,
   saveSession,
+  uploadScriptVersion,
 } from "./api-client.mjs";
 
 function memoryStorage() {
@@ -85,6 +86,71 @@ test("remote-run submission posts the selected task and device", async () => {
     device_id: "device-2",
   });
   assert.deepEqual(response, { id: "request-1", status: "pending" });
+});
+
+test("script publishing uploads directly to the signed object URL and finalizes metadata", async () => {
+  const requests = [];
+  const session = { baseUrl: "https://api.example.test", token: "access-token" };
+  const bytes = new TextEncoder().encode("print('signed')\n");
+  const file = {
+    name: "hello.py",
+    size: bytes.length,
+    arrayBuffer: async () => bytes.buffer,
+  };
+  const result = await uploadScriptVersion(session, "task/1", {
+    version: "v1.0.0",
+    notes: "release notes",
+    file,
+  }, async (url, options) => {
+    requests.push({ url, options });
+    if (url.endsWith("/upload-url")) {
+      return new Response(JSON.stringify({
+        upload_id: "upload-1",
+        upload_url: "https://objects.example.test/presigned",
+        headers: { "Content-Type": "text/x-python" },
+      }), { status: 201 });
+    }
+    if (url === "https://objects.example.test/presigned") {
+      assert.equal(options.method, "PUT");
+      assert.equal(options.headers["Content-Type"], "text/x-python");
+      assert.deepEqual(new Uint8Array(options.body), bytes);
+      return new Response(null, { status: 200 });
+    }
+    return new Response(JSON.stringify({ version: "v1.0.0" }), { status: 201 });
+  });
+  assert.equal(requests[0].url, "https://api.example.test/tasks/task%2F1/versions/upload-url");
+  assert.equal(requests[0].options.headers.Authorization.startsWith("Bearer "), true);
+  const payload = JSON.parse(requests[0].options.body);
+  assert.equal(payload.filename, "hello.py");
+  assert.equal(payload.content_size, bytes.length);
+  assert.equal(payload.sha256.length, 64);
+  assert.equal(requests[2].url, "https://api.example.test/tasks/task%2F1/versions/complete-upload");
+  assert.deepEqual(JSON.parse(requests[2].options.body), { upload_id: "upload-1" });
+  assert.deepEqual(result, { version: "v1.0.0" });
+});
+
+test("script publishing falls back to the authenticated API for local SQLite development", async () => {
+  const requests = [];
+  const blob = new Blob(["print('local')\n"], { type: "text/x-python" });
+  Object.defineProperty(blob, "name", { value: "local.py" });
+  const result = await uploadScriptVersion({
+    baseUrl: "http://localhost:8001",
+    token: "access-token",
+  }, "task-1", {
+    version: "v1.0.0",
+    notes: "",
+    file: blob,
+  }, async (url, options) => {
+    requests.push({ url, options });
+    if (url.endsWith("/upload-url")) {
+      return new Response(JSON.stringify({ mode: "api" }), { status: 201 });
+    }
+    return new Response(JSON.stringify({ version: "v1.0.0" }), { status: 201 });
+  });
+  assert.equal(requests[1].url, "http://localhost:8001/tasks/task-1/versions");
+  assert.equal(requests[1].options.body instanceof FormData, true);
+  assert.equal(requests[1].options.headers["Content-Type"], undefined);
+  assert.deepEqual(result, { version: "v1.0.0" });
 });
 
 test("snapshot loading maps API resources and requests only online devices", async () => {

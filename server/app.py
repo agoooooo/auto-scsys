@@ -21,7 +21,7 @@ import psycopg
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from server.database import POSTGRES_SCHEMES, connect_database
@@ -164,6 +164,19 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
                 created_at TEXT NOT NULL,
                 UNIQUE(task_id, version)
             );
+            CREATE TABLE IF NOT EXISTS pending_script_uploads (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL REFERENCES tasks(id),
+                user_id TEXT NOT NULL REFERENCES users(id),
+                version TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                storage_key TEXT NOT NULL UNIQUE,
+                content_size INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                notes TEXT NOT NULL,
+                expires_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_pending_upload_expiry ON pending_script_uploads(expires_at);
             CREATE TABLE IF NOT EXISTS task_grants (
                 task_id TEXT NOT NULL REFERENCES tasks(id),
                 user_id TEXT NOT NULL REFERENCES users(id),
@@ -429,6 +442,18 @@ class RunUpdate(BaseModel):
     result_summary: str = Field(default="", max_length=500)
 
 
+class ScriptUploadRequest(BaseModel):
+    version: str = Field(max_length=32)
+    filename: str = Field(max_length=180)
+    content_size: int = Field(ge=1, le=MAX_SCRIPT_BYTES)
+    sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
+    notes: str = Field(default="", max_length=500)
+
+
+class ScriptUploadCompletion(BaseModel):
+    upload_id: str
+
+
 def create_app(db_path: str | Path | None = None, token_secret: bytes | None = None) -> FastAPI:
     environment = os.environ.get("FLOWPILOT_ENV", "development").strip().lower()
     if environment not in {"development", "test", "production"}:
@@ -459,6 +484,12 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             else Path(configured_db_path or DEFAULT_DB_PATH)
         )
     script_storage = create_script_storage(required=False)
+    if (
+        environment == "production"
+        and str(database_path).startswith(POSTGRES_SCHEMES)
+        and not script_storage
+    ):
+        raise ValueError("Production PostgreSQL requires an S3-compatible script storage configuration")
 
     configured_secret = token_secret
     if configured_secret is None and os.environ.get("FLOWPILOT_TOKEN_SECRET"):
@@ -1218,6 +1249,123 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             storage.put(storage_key, content)
         return {"id": version_id, "task_id": task_id, "version": version, "filename": filename, "size": len(content), "sha256": digest, "notes": notes[:500]}
 
+    @app.post("/tasks/{task_id}/versions/upload-url", status_code=201)
+    def create_script_upload_url(
+        task_id: str,
+        body: ScriptUploadRequest,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        storage: ScriptStorage | None = app.state.script_storage
+        task = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task or (user["role"] != "admin" and task["owner_id"] != user["id"]):
+            raise HTTPException(status_code=404, detail="任务不存在")
+        if not VERSION_PATTERN.fullmatch(body.version):
+            raise HTTPException(status_code=422, detail="版本号格式应为 v1.0.0")
+        filename = Path(body.filename.replace("\\", "/")).name
+        if (
+            not filename.lower().endswith(".py")
+            or len(filename) > 180
+            or any(ord(character) < 32 or ord(character) == 127 for character in filename)
+        ):
+            raise HTTPException(status_code=422, detail="脚本文件名无效")
+        if db.execute(
+            "SELECT 1 FROM task_versions WHERE task_id=? AND version=?",
+            (task_id, body.version),
+        ).fetchone():
+            raise HTTPException(status_code=409, detail="该任务版本号已存在")
+        if not storage:
+            return {"mode": "api"}
+        upload_id = str(uuid.uuid4())
+        storage_key = f"scripts/{task_id}/{upload_id}.py"
+        upload_url, headers = storage.presign_upload(storage_key)
+        expires_at = int(time.time()) + 300
+        db.execute(
+            """INSERT INTO pending_script_uploads(
+                   id,task_id,user_id,version,filename,storage_key,content_size,sha256,notes,expires_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (
+                upload_id, task_id, user["id"], body.version, filename, storage_key,
+                body.content_size, body.sha256.lower(), body.notes[:500], expires_at,
+            ),
+        )
+        return {
+            "upload_id": upload_id,
+            "upload_url": upload_url,
+            "headers": headers,
+            "expires_at": expires_at,
+        }
+
+    @app.post("/tasks/{task_id}/versions/complete-upload", status_code=201)
+    def complete_script_upload(
+        task_id: str,
+        body: ScriptUploadCompletion,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        storage: ScriptStorage | None = app.state.script_storage
+        if not storage:
+            raise HTTPException(status_code=503, detail="对象存储上传未配置")
+        pending = db.execute(
+            """SELECT * FROM pending_script_uploads
+               WHERE id=? AND task_id=? AND user_id=?""",
+            (body.upload_id, task_id, user["id"]),
+        ).fetchone()
+        if not pending:
+            raise HTTPException(status_code=404, detail="上传请求不存在")
+        if pending["expires_at"] < int(time.time()):
+            storage.delete(pending["storage_key"])
+            db.execute("DELETE FROM pending_script_uploads WHERE id=?", (body.upload_id,))
+            db.commit()
+            raise HTTPException(status_code=410, detail="脚本上传地址已过期")
+        content_size, content = storage.get_info(pending["storage_key"])
+        if content_size != pending["content_size"] or len(content) != pending["content_size"]:
+            storage.delete(pending["storage_key"])
+            db.execute("DELETE FROM pending_script_uploads WHERE id=?", (body.upload_id,))
+            db.commit()
+            raise HTTPException(status_code=422, detail="上传脚本大小与申请不一致")
+        if not hmac.compare_digest(hashlib.sha256(content).hexdigest(), pending["sha256"]):
+            storage.delete(pending["storage_key"])
+            db.execute("DELETE FROM pending_script_uploads WHERE id=?", (body.upload_id,))
+            db.commit()
+            raise HTTPException(status_code=422, detail="上传脚本 SHA-256 校验失败")
+        version_id = str(uuid.uuid4())
+        task = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        insert_result = db.execute(
+            """INSERT INTO task_versions(
+                   id,task_id,version,filename,content,storage_key,content_size,sha256,notes,created_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(task_id,version) DO NOTHING""",
+            (
+                version_id, task_id, pending["version"], pending["filename"], b"",
+                pending["storage_key"], pending["content_size"], pending["sha256"],
+                pending["notes"], utc_now(),
+            ),
+        )
+        if insert_result.rowcount == 0:
+            storage.delete(pending["storage_key"])
+            db.execute("DELETE FROM pending_script_uploads WHERE id=?", (body.upload_id,))
+            db.commit()
+            raise HTTPException(status_code=409, detail="该任务版本号已存在")
+        if task["status"] != "paused":
+            db.execute(
+                "UPDATE tasks SET status='published',active_version=? WHERE id=?",
+                (pending["version"], task_id),
+            )
+        else:
+            db.execute("UPDATE tasks SET active_version=? WHERE id=?", (pending["version"], task_id))
+        db.execute(
+            "INSERT INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?) ON CONFLICT DO NOTHING",
+            (task_id, task["owner_id"], utc_now()),
+        )
+        db.execute("DELETE FROM pending_script_uploads WHERE id=?", (body.upload_id,))
+        audit(db, user["id"], "task.version_published", "task_version", version_id)
+        return {
+            "id": version_id, "task_id": task_id, "version": pending["version"],
+            "filename": pending["filename"], "size": pending["content_size"],
+            "sha256": pending["sha256"], "notes": pending["notes"],
+        }
+
     @app.post("/devices/{device_id}/sync")
     def sync_device(device_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         device = _device_for_user(db, device_id, user)
@@ -1328,6 +1476,37 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                 "X-Content-SHA256": row["sha256"],
                 "Cache-Control": "no-store",
             },
+        )
+
+    @app.get("/devices/{device_id}/tasks/{task_id}/versions/{version}/content-url")
+    def create_script_download_url(
+        device_id: str,
+        task_id: str,
+        version: str,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        device = _device_for_user(db, device_id, user)
+        task = _task_for_user(db, task_id, {"id": device["user_id"], "role": "user"})
+        _ensure_device_has_task_version(db, task, device, version)
+        row = db.execute(
+            "SELECT filename,storage_key,sha256 FROM task_versions WHERE task_id=? AND version=?",
+            (task_id, version),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="脚本版本不存在")
+        storage: ScriptStorage | None = app.state.script_storage
+        url = storage.presign_download(row["storage_key"], filename=row["filename"]) if (
+            storage and row["storage_key"]
+        ) else None
+        return JSONResponse(
+            {
+                "url": url,
+                "filename": row["filename"],
+                "sha256": row["sha256"],
+                "expires_in": 300 if url else None,
+            },
+            headers={"Cache-Control": "no-store"},
         )
 
     @app.post("/remote-runs", status_code=201)

@@ -16,6 +16,7 @@ def test_production_compose_configuration_is_valid():
         {
             "FLOWPILOT_API_DOMAIN": "api.example.test",
             "FLOWPILOT_WEB_DOMAIN": "console.example.test",
+            "FLOWPILOT_S3_DOMAIN": "objects.example.test",
             "FLOWPILOT_POSTGRES_DB": "flowpilot",
             "FLOWPILOT_POSTGRES_USER": "flowpilot",
             "FLOWPILOT_POSTGRES_PASSWORD": "compose-validation-password",
