@@ -1,0 +1,7 @@
+{$FLOWPILOT_API_DOMAIN} {
+    reverse_proxy api:8001
+}
+
+{$FLOWPILOT_WEB_DOMAIN} {
+    reverse_proxy web:80
+}

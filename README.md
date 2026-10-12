@@ -1,6 +1,6 @@
 # FlowPilot
 
-FlowPilot is an Android automation prototype with a local FastAPI service, browser-based admin demo, and a native Android client. The Android app can run user-reviewed Python task versions and use explicitly authorized OCR/accessibility capabilities; the browser and API remain demo systems and are not production-ready.
+FlowPilot is an Android automation prototype with a FastAPI service, browser-based admin console, and a native Android client. The Android app can run user-reviewed Python task versions and use explicitly authorized OCR/accessibility capabilities. Local development defaults to SQLite; production deployments can use PostgreSQL, S3-compatible script storage, and the Docker Compose stack.
 
 ## Requirements
 
@@ -28,7 +28,7 @@ Set `FLOWPILOT_API_HOST`, `FLOWPILOT_WEB_HOST`, `FLOWPILOT_API_PORT`, or `FLOWPI
 
 **Network safety:** LAN binding does not make this suitable for the public internet. The local database has known demo accounts, the service has no TLS, and this is not a production deployment. Only use it on a trusted network; do not configure router port forwarding or expose it to the internet. Allow inbound TCP ports 8000 and 8001 in the machine's firewall only for the trusted LAN if necessary. The app issues a fresh random token secret on each start unless one is configured, so existing tokens expire after a restart.
 
-The API has a fail-closed `FLOWPILOT_ENV=production` startup guard, interactive first-admin bootstrap (`python -m server.bootstrap_admin`), and SQLite backup/verify/restore commands (`python -m server.database_backup`). These are deployment safeguards, not production readiness: the prototype still uses local SQLite/script storage and lacks production account recovery, full API rate limiting, scheduled encrypted off-host backups, monitoring, and a production security review. It is not ready for public production deployment.
+For a Compose deployment with PostgreSQL, MinIO object storage, Caddy HTTPS, and the Web/API services, follow [`server/README.md`](server/README.md#docker-production-deployment). Configure backup/restore, account recovery, edge rate limits, monitoring, and security review according to your production requirements; Docker support alone does not supply those operational controls.
 
 ## Tests
 

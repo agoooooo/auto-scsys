@@ -5,6 +5,8 @@ import getpass
 import os
 import sys
 
+import psycopg
+
 from server.app import create_initial_admin
 
 
@@ -12,9 +14,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Create the first administrator in a fresh FlowPilot database.")
     parser.parse_args()
 
-    database_path = os.environ.get("FLOWPILOT_DB_PATH", "").strip()
+    database_path = os.environ.get("FLOWPILOT_DATABASE_URL", "").strip() or os.environ.get("FLOWPILOT_DB_PATH", "").strip()
     if not database_path:
-        print("Set FLOWPILOT_DB_PATH to the target database before creating the initial administrator.", file=sys.stderr)
+        print("Set FLOWPILOT_DATABASE_URL or FLOWPILOT_DB_PATH before creating the initial administrator.", file=sys.stderr)
         return 2
 
     name = input("Administrator name: ").strip()
@@ -27,7 +29,7 @@ def main() -> int:
 
     try:
         user_id = create_initial_admin(database_path, name, email, password)
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, psycopg.Error) as error:
         print(f"Administrator was not created: {error}", file=sys.stderr)
         return 1
     print(f"Initial administrator created: {email} ({user_id})")

@@ -627,6 +627,77 @@ def test_publish_script_validates_and_checks_content_hash(client):
     assert downloaded.headers["x-content-sha256"] == hashlib.sha256(content).hexdigest()
 
 
+def test_s3_script_storage_keeps_content_out_of_database_and_verifies_download_hash(client):
+    class MemoryStorage:
+        def __init__(self):
+            self.objects = {}
+
+        def put(self, key, content):
+            self.objects[key] = content
+
+        def get(self, key):
+            return self.objects[key]
+
+        def delete(self, key):
+            self.objects.pop(key, None)
+
+        def ensure_bucket(self):
+            pass
+
+        def check_ready(self):
+            pass
+
+    storage = MemoryStorage()
+    client.app.state.script_storage = storage
+    owner = login(client)
+    task = client.post("/tasks", headers=auth(owner), json={"name": "Stored outside the database"}).json()
+    content = b"print('object storage')\n"
+    published = client.post(
+        f"/tasks/{task['id']}/versions",
+        headers=auth(owner),
+        data={"version": "v1.0.0"},
+        files={"script": ("object.py", content, "text/x-python")},
+    )
+    assert published.status_code == 201
+    with server_app._connect(client.app.state.db_path) as db:
+        version = db.execute(
+            "SELECT content,storage_key,content_size FROM task_versions WHERE id=?",
+            (published.json()["id"],),
+        ).fetchone()
+    assert version["content"] == b""
+    assert version["storage_key"] in storage.objects
+    assert version["content_size"] == len(content)
+
+    downloaded = client.get(
+        f"/devices/d-001/tasks/{task['id']}/versions/v1.0.0/content",
+        headers=auth(owner),
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.content == content
+    assert downloaded.headers["x-content-sha256"] == hashlib.sha256(content).hexdigest()
+
+    storage.objects[version["storage_key"]] = b"tampered"
+    corrupt = client.get(
+        f"/devices/d-001/tasks/{task['id']}/versions/v1.0.0/content",
+        headers=auth(owner),
+    )
+    assert corrupt.status_code == 500
+    assert corrupt.json()["detail"] == "脚本存储校验失败"
+
+
+def test_readiness_reports_unavailable_script_storage(client):
+    from botocore.exceptions import ClientError
+
+    class UnavailableStorage:
+        def check_ready(self):
+            raise ClientError({"Error": {"Code": "ServiceUnavailable"}}, "HeadBucket")
+
+    client.app.state.script_storage = UnavailableStorage()
+    unavailable = client.get("/health/ready")
+    assert unavailable.status_code == 503
+    assert unavailable.json()["detail"] == "script storage unavailable"
+
+
 def test_admin_can_list_grant_and_revoke_task_access(client):
     admin = login(client, "admin@example.com", "admin-demo")
     chen = login(client)
@@ -977,6 +1048,15 @@ def test_task_version_can_be_activated_without_changing_immutable_content(client
         event["action"] == "task.version_activated" and event["actor"] == "陈晓"
         for event in client.get("/admin/audit", headers=auth(admin)).json()
     )
+
+
+def test_seeded_script_versions_report_actual_content_sizes(client):
+    user = login(client)
+    versions = client.get("/tasks/t-001/versions", headers=auth(user))
+    assert versions.status_code == 200
+    by_version = {version["version"]: version for version in versions.json()}
+    assert by_version["v1.7.0"]["size"] == server_app.DEMO_OCR_SCRIPT_PATH.stat().st_size
+    assert by_version["v1.6.0"]["size"] > 0
 
 
 def test_existing_database_migrates_active_version_and_authorization_scope(client):

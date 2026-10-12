@@ -17,10 +17,15 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import quote, urlsplit
 
+import psycopg
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+
+from server.database import POSTGRES_SCHEMES, connect_database
+from server.storage import ScriptStorage, create_script_storage
 
 
 DEFAULT_DB_PATH = Path(__file__).with_name("flowpilot.sqlite3")
@@ -102,24 +107,18 @@ def _content_disposition(filename: str) -> str:
 
 
 @contextmanager
-def _connect(db_path: Path):
-    connection = sqlite3.connect(db_path, timeout=10, check_same_thread=False)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    try:
+def _connect(db_path: str | Path):
+    with connect_database(db_path) as connection:
         yield connection
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
 
 
-def _initialize_database(db_path: Path, seed_demo: bool = True) -> None:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
+    is_postgres = str(db_path).startswith(POSTGRES_SCHEMES)
+    if not is_postgres:
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with _connect(db_path) as db:
-        db.executescript(
+        db.begin_immediate()
+        schema = (
             """
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
@@ -157,7 +156,9 @@ def _initialize_database(db_path: Path, seed_demo: bool = True) -> None:
                 task_id TEXT NOT NULL REFERENCES tasks(id),
                 version TEXT NOT NULL,
                 filename TEXT NOT NULL,
-                content BLOB NOT NULL,
+                content BLOB,
+                storage_key TEXT,
+                content_size INTEGER NOT NULL DEFAULT 0,
                 sha256 TEXT NOT NULL,
                 notes TEXT NOT NULL,
                 created_at TEXT NOT NULL,
@@ -231,25 +232,37 @@ def _initialize_database(db_path: Path, seed_demo: bool = True) -> None:
             CREATE INDEX IF NOT EXISTS idx_remote_device ON remote_runs(device_id, status, expires_at);
             """
         )
-        task_columns = {row["name"] for row in db.execute("PRAGMA table_info(tasks)")}
+        if is_postgres:
+            schema = schema.replace("BLOB", "BYTEA").replace("COLLATE NOCASE", "")
+        db.executescript(schema)
+        task_columns = db.table_columns("tasks")
         if "active_version" not in task_columns:
             db.execute("ALTER TABLE tasks ADD COLUMN active_version TEXT")
-        authorization_columns = {row["name"] for row in db.execute("PRAGMA table_info(run_authorizations)")}
+        version_columns = db.table_columns("task_versions")
+        if "storage_key" not in version_columns:
+            db.execute("ALTER TABLE task_versions ADD COLUMN storage_key TEXT")
+        if "content_size" not in version_columns:
+            db.execute("ALTER TABLE task_versions ADD COLUMN content_size INTEGER NOT NULL DEFAULT 0")
+        authorization_columns = db.table_columns("run_authorizations")
         if "all_versions" not in authorization_columns:
             db.execute("ALTER TABLE run_authorizations ADD COLUMN all_versions INTEGER NOT NULL DEFAULT 0")
         if seed_demo and db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
             _seed_database(db)
+        db.execute("UPDATE task_versions SET content_size=length(content) WHERE content_size=0 AND content IS NOT NULL")
         db.execute(
             """UPDATE tasks SET active_version=(
-                   SELECT version FROM task_versions WHERE task_id=tasks.id ORDER BY rowid DESC LIMIT 1
+                   SELECT version FROM task_versions WHERE task_id=tasks.id
+                   ORDER BY created_at DESC,version DESC LIMIT 1
                ) WHERE active_version IS NULL
                  AND EXISTS (SELECT 1 FROM task_versions WHERE task_id=tasks.id)"""
         )
 
 
 def create_initial_admin(db_path: str | Path, name: str, email: str, password: str) -> str:
-    database_path = Path(db_path)
-    if not database_path.is_absolute():
+    database_path = str(db_path)
+    if database_path.startswith(POSTGRES_SCHEMES):
+        pass
+    elif not Path(database_path).is_absolute():
         raise ValueError("管理员初始化数据库路径必须是绝对路径")
     normalized_email = email.strip().lower()
     normalized_name = name.strip()
@@ -261,11 +274,12 @@ def create_initial_admin(db_path: str | Path, name: str, email: str, password: s
         raise ValueError("管理员密码必须为 12–256 个字符")
 
     _initialize_database(database_path, seed_demo=False)
-    os.chmod(database_path, 0o600)
+    if not database_path.startswith(POSTGRES_SCHEMES):
+        os.chmod(database_path, 0o600)
     user_id = str(uuid.uuid4())
     salt = secrets.token_bytes(16)
     with _connect(database_path) as db:
-        db.execute("BEGIN IMMEDIATE")
+        db.begin_immediate()
         if db.execute("SELECT 1 FROM users LIMIT 1").fetchone():
             raise ValueError("数据库已有用户；不能通过此命令创建或重置管理员")
         db.execute(
@@ -420,19 +434,31 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     if environment not in {"development", "test", "production"}:
         raise ValueError("FLOWPILOT_ENV must be development, test, or production")
 
-    configured_db_path = db_path or os.environ.get("FLOWPILOT_DB_PATH")
+    configured_db_path = (
+        db_path
+        or os.environ.get("FLOWPILOT_DATABASE_URL")
+        or os.environ.get("FLOWPILOT_DB_PATH")
+    )
     if environment == "production":
         if not configured_db_path:
-            raise ValueError("Production requires an explicit FLOWPILOT_DB_PATH")
-        database_path = Path(configured_db_path)
-        if not database_path.is_absolute() or database_path == DEFAULT_DB_PATH:
-            raise ValueError("Production FLOWPILOT_DB_PATH must be an explicit absolute persistent path")
+            raise ValueError("Production requires FLOWPILOT_DATABASE_URL or FLOWPILOT_DB_PATH")
+        if str(configured_db_path).startswith(POSTGRES_SCHEMES):
+            database_path: str | Path = str(configured_db_path)
+        else:
+            database_path = Path(configured_db_path)
+            if not database_path.is_absolute() or database_path == DEFAULT_DB_PATH:
+                raise ValueError("Production FLOWPILOT_DB_PATH must be an explicit absolute persistent path")
         if not os.environ.get("FLOWPILOT_TOKEN_SECRET"):
             raise ValueError("Production requires FLOWPILOT_TOKEN_SECRET")
         if not os.environ.get("FLOWPILOT_CORS_ORIGINS"):
             raise ValueError("Production requires explicit HTTPS FLOWPILOT_CORS_ORIGINS")
     else:
-        database_path = Path(configured_db_path or DEFAULT_DB_PATH)
+        database_path = (
+            str(configured_db_path)
+            if configured_db_path and str(configured_db_path).startswith(POSTGRES_SCHEMES)
+            else Path(configured_db_path or DEFAULT_DB_PATH)
+        )
+    script_storage = create_script_storage(required=False)
 
     configured_secret = token_secret
     if configured_secret is None and os.environ.get("FLOWPILOT_TOKEN_SECRET"):
@@ -453,7 +479,8 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                 ).fetchone()
             if demo_accounts:
                 raise RuntimeError("Production database contains demo accounts; use a fresh database and bootstrap a production administrator")
-            os.chmod(database_path, 0o600)
+            if not str(database_path).startswith(POSTGRES_SCHEMES):
+                os.chmod(database_path, 0o600)
         yield
 
     app = FastAPI(
@@ -465,6 +492,8 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         openapi_url=None if environment == "production" else "/openapi.json",
     )
     app.state.db_path = database_path
+    app.state.script_storage = script_storage
+    app.state.database_backend = "postgresql" if str(database_path).startswith(POSTGRES_SCHEMES) else "sqlite"
     app.state.token_secret = secret
     app.state.environment = environment
     configured_origins = [
@@ -623,9 +652,15 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         try:
             with _connect(database_path) as db:
                 db.execute("SELECT 1 FROM users LIMIT 1").fetchone()
-        except (OSError, sqlite3.Error) as error:
+        except (OSError, sqlite3.Error, psycopg.Error) as error:
             LOGGER.exception("Readiness check failed")
             raise HTTPException(status_code=503, detail="database unavailable") from error
+        if app.state.script_storage:
+            try:
+                app.state.script_storage.check_ready()
+            except (BotoCoreError, ClientError) as error:
+                LOGGER.exception("Script storage readiness check failed")
+                raise HTTPException(status_code=503, detail="script storage unavailable") from error
         return {"status": "ok"}
 
     @app.post("/auth/login")
@@ -641,7 +676,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         now = int(time.time())
         attempt_keys = (account_key, source_key)
 
-        user = db.execute("SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
+        user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         credentials_valid = bool(
             user
             and user["status"] == "active"
@@ -651,7 +686,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             )
         )
         if not credentials_valid:
-            db.execute("BEGIN IMMEDIATE")
+            db.begin_immediate()
             for attempt_key, failure_limit in zip(
                 attempt_keys,
                 (LOGIN_FAILURE_LIMIT, LOGIN_SOURCE_FAILURE_LIMIT),
@@ -697,7 +732,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             )
             db.commit()
             raise HTTPException(status_code=401, detail="邮箱或密码错误")
-        db.execute("BEGIN IMMEDIATE")
+        db.begin_immediate()
         db.execute("DELETE FROM auth_login_attempts WHERE attempt_key=?", (account_key,))
         db.commit()
         token = _token_encode({"sub": user["id"], "exp": int(time.time()) + TOKEN_TTL_SECONDS}, secret)
@@ -849,7 +884,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
 
     def _task_dict(db: sqlite3.Connection, row: sqlite3.Row) -> dict:
         versions = db.execute(
-            "SELECT version,filename,sha256,notes,created_at FROM task_versions WHERE task_id=? ORDER BY rowid DESC",
+            "SELECT version,filename,sha256,notes,created_at FROM task_versions WHERE task_id=? ORDER BY created_at DESC,version DESC",
             (row["id"],),
         ).fetchall()
         return {
@@ -900,7 +935,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     def list_task_versions(task_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         _task_for_user(db, task_id, user, require_published=False)
         rows = db.execute(
-            "SELECT version,filename,length(content) AS size,sha256,notes,created_at FROM task_versions WHERE task_id=? ORDER BY rowid DESC",
+            "SELECT version,filename,content_size AS size,sha256,notes,created_at FROM task_versions WHERE task_id=? ORDER BY created_at DESC,version DESC",
             (task_id,),
         )
         return [dict(row) for row in rows]
@@ -964,7 +999,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             raise HTTPException(status_code=404, detail="用户不存在")
         if target["status"] != "active":
             raise HTTPException(status_code=409, detail="不能向已停用用户授权任务")
-        db.execute("INSERT OR IGNORE INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?)", (task_id, user_id, utc_now()))
+        db.execute("INSERT INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?) ON CONFLICT DO NOTHING", (task_id, user_id, utc_now()))
         audit(db, user["id"], "task.granted", "task", task_id)
         return {"task_id": task_id, "user_id": user_id}
 
@@ -1039,7 +1074,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                 (publication_id, task_id, body.version, device["id"], user["id"], now),
             )
         db.execute(
-            "INSERT OR IGNORE INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?)",
+            "INSERT INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?) ON CONFLICT DO NOTHING",
             (task_id, device["user_id"], now),
         )
         audit(db, user["id"], "task.publication_created", "task_publication", publication_id)
@@ -1156,11 +1191,14 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             raise HTTPException(status_code=413, detail="Python 脚本必须非空且不超过 2 MB")
         digest = hashlib.sha256(content).hexdigest()
         version_id = str(uuid.uuid4())
+        storage: ScriptStorage | None = app.state.script_storage
+        storage_key = f"scripts/{task_id}/{version_id}.py" if storage else None
+        stored_content = b"" if storage else content
         try:
             db.execute(
-                """INSERT INTO task_versions(id,task_id,version,filename,content,sha256,notes,created_at)
-                   VALUES(?,?,?,?,?,?,?,?)""",
-                (version_id, task_id, version, filename, content, digest, notes[:500], utc_now()),
+                """INSERT INTO task_versions(id,task_id,version,filename,content,storage_key,content_size,sha256,notes,created_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (version_id, task_id, version, filename, stored_content, storage_key, len(content), digest, notes[:500], utc_now()),
             )
         except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="该任务版本号已存在") from exc
@@ -1172,10 +1210,12 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         else:
             db.execute("UPDATE tasks SET active_version=? WHERE id=?", (version, task_id))
         db.execute(
-            "INSERT OR IGNORE INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?)",
+            "INSERT INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?) ON CONFLICT DO NOTHING",
             (task_id, task["owner_id"], utc_now()),
         )
         audit(db, user["id"], "task.version_published", "task_version", version_id)
+        if storage and storage_key:
+            storage.put(storage_key, content)
         return {"id": version_id, "task_id": task_id, "version": version, "filename": filename, "size": len(content), "sha256": digest, "notes": notes[:500]}
 
     @app.post("/devices/{device_id}/sync")
@@ -1267,13 +1307,21 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         task = _task_for_user(db, task_id, {"id": device["user_id"], "role": "user"})
         _ensure_device_has_task_version(db, task, device, version)
         row = db.execute(
-            "SELECT filename,content,sha256 FROM task_versions WHERE task_id=? AND version=?",
+            "SELECT filename,content,storage_key,sha256 FROM task_versions WHERE task_id=? AND version=?",
             (task_id, version),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="脚本版本不存在")
+        script_content = (
+            app.state.script_storage.get(row["storage_key"])
+            if row["storage_key"] and app.state.script_storage
+            else row["content"]
+        )
+        if hashlib.sha256(script_content).hexdigest() != row["sha256"]:
+            LOGGER.error("Stored script checksum mismatch for task %s version %s", task_id, version)
+            raise HTTPException(status_code=500, detail="脚本存储校验失败")
         return Response(
-            content=row["content"],
+            content=script_content,
             media_type="text/x-python",
             headers={
                 "Content-Disposition": _content_disposition(row["filename"]),
