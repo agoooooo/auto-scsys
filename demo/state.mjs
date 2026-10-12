@@ -167,6 +167,10 @@ export function remoteRunSystemConsentNotice(capabilities = []) {
     : null;
 }
 
+export function canInitiateRemoteRun(role) {
+  return role !== "admin";
+}
+
 export function remoteRunFollowUpView(role) {
   return role === "admin" ? "admin" : "mobile";
 }

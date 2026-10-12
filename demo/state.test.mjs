@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   addUser,
   authorizationCoversVersion,
+  canInitiateRemoteRun,
   createRemoteRun,
   expireRemoteRuns,
   finishRun,
@@ -142,6 +143,9 @@ test("remote runs start automatically after request validation and record comple
 });
 
 test("remote-run follow-up does not show admins a phone preview for another user's device", () => {
+  assert.equal(canInitiateRemoteRun("admin"), false);
+  assert.equal(canInitiateRemoteRun("user"), true);
+  assert.equal(canInitiateRemoteRun(undefined), true);
   assert.equal(remoteRunFollowUpView("admin"), "admin");
   assert.equal(remoteRunFollowUpView("user"), "mobile");
   assert.equal(remoteRunFollowUpView(undefined), "mobile");

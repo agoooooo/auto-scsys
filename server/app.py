@@ -1285,7 +1285,11 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     @app.post("/remote-runs", status_code=201)
     def create_remote_run(body: RemoteRunInput, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         _refresh_device_statuses(db)
+        if user["role"] != "user":
+            raise HTTPException(status_code=403, detail="只有普通用户可以为自己的设备发起远程运行")
         device = _device_for_user(db, body.device_id, user)
+        if device["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="只能为自己的设备发起远程运行")
         if device["status"] != "online":
             raise HTTPException(status_code=409, detail="只能向在线设备发起运行请求")
         _ensure_device_idle(db, device["id"])
