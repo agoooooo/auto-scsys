@@ -979,44 +979,50 @@ private fun ControllerScreen(
                     }
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        orderedDevices.forEach { device ->
-                            val selected = device.id in state.selectedDeviceIds
-                            val online = device.status == "online"
-                            Card(
-                                onClick = { onToggleDeviceSelection(device.id) },
-                                enabled = !state.loading && online,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (selected) {
-                                        MaterialTheme.colorScheme.primaryContainer
-                                    } else {
-                                        Color.White
-                                    },
-                                    disabledContainerColor = Color.White,
-                                ),
-                                border = if (selected) {
-                                    BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
-                                } else {
-                                    null
-                                },
+                        groupControllerDevices(state.devices).forEach { group ->
+                            Row(
+                                Modifier.fillMaxWidth().padding(top = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Row(
-                                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
+                                Text(group.label, style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    group.devices.size.toString(),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            group.devices.forEach { device ->
+                                val selected = device.id in state.selectedDeviceIds
+                                val online = device.status == "online"
+                                Card(
+                                    onClick = { onToggleDeviceSelection(device.id) },
+                                    enabled = !state.loading && online,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (selected) {
+                                            MaterialTheme.colorScheme.primaryContainer
+                                        } else {
+                                            Color.White
+                                        },
+                                        disabledContainerColor = Color.White,
+                                    ),
+                                    border = if (selected) {
+                                        BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                                    } else {
+                                        null
+                                    },
                                 ) {
-                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                        Text(device.name, style = MaterialTheme.typography.titleSmall)
-                                        Text(device.model, style = MaterialTheme.typography.bodySmall)
-                                        Text("ID ${device.id.take(8)}", style = MaterialTheme.typography.labelSmall)
-                                    }
-                                    Column(horizontalAlignment = Alignment.End) {
-                                        Text(
-                                            controllerDeviceStatusLabel(device.status),
-                                            color = if (online) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            style = MaterialTheme.typography.labelMedium,
-                                        )
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                            Text(device.name, style = MaterialTheme.typography.titleSmall)
+                                            Text(device.model, style = MaterialTheme.typography.bodySmall)
+                                            Text("ID ${device.id.take(8)}", style = MaterialTheme.typography.labelSmall)
+                                        }
                                         Checkbox(
                                             checked = selected,
                                             onCheckedChange = { onToggleDeviceSelection(device.id) },
@@ -1054,9 +1060,26 @@ private fun ControllerScreen(
                         Text("暂无已发布任务。", modifier = Modifier.padding(18.dp))
                     }
                 } else {
-                    ControllerCard(Modifier.fillMaxWidth()) {
-                        Column {
-                            availableTasks.forEachIndexed { index, taskItem ->
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        availableTasks.forEach { taskItem ->
+                            val selected = taskItem.id in state.selectedTaskIds
+                            Card(
+                                onClick = { onToggleTaskSelection(taskItem.id) },
+                                enabled = !state.loading,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (selected) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        Color.White
+                                    },
+                                ),
+                                border = if (selected) {
+                                    BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                                } else {
+                                    null
+                                },
+                            ) {
                                 Column(
                                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -1071,7 +1094,7 @@ private fun ControllerScreen(
                                             )
                                         }
                                         Checkbox(
-                                            checked = taskItem.id in state.selectedTaskIds,
+                                            checked = selected,
                                             onCheckedChange = { onToggleTaskSelection(taskItem.id) },
                                             enabled = !state.loading,
                                         )
@@ -1080,7 +1103,6 @@ private fun ControllerScreen(
                                         Text(taskItem.description, style = MaterialTheme.typography.bodySmall)
                                     }
                                 }
-                                if (index < availableTasks.lastIndex) HorizontalDivider()
                             }
                         }
                     }

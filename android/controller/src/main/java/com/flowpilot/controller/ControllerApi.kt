@@ -311,12 +311,38 @@ internal data class ControllerDispatchTarget(
     val task: ControllerTask,
 )
 
+internal data class ControllerDeviceGroup(
+    val status: String,
+    val label: String,
+    val devices: List<ControllerDevice>,
+)
+
 internal fun orderControllerDevices(devices: List<ControllerDevice>): List<ControllerDevice> =
     devices.sortedWith(
         compareByDescending<ControllerDevice> { it.status == "online" }
             .thenBy { it.name.lowercase(Locale.ROOT) }
             .thenBy { it.id },
     )
+
+internal fun groupControllerDevices(devices: List<ControllerDevice>): List<ControllerDeviceGroup> {
+    val groups = listOf(
+        "online" to "在线设备",
+        "offline" to "离线设备",
+        "disabled" to "已停用",
+    ).mapNotNull { (status, label) ->
+        orderControllerDevices(devices.filter { it.status == status })
+            .takeIf { it.isNotEmpty() }
+            ?.let { ControllerDeviceGroup(status, label, it) }
+    }
+    val otherDevices = orderControllerDevices(devices.filter {
+        it.status != "online" && it.status != "offline" && it.status != "disabled"
+    })
+    return groups + if (otherDevices.isEmpty()) {
+        emptyList()
+    } else {
+        listOf(ControllerDeviceGroup("unknown", "其他状态", otherDevices))
+    }
+}
 
 internal fun buildControllerDispatchTargets(
     devices: List<ControllerDevice>,

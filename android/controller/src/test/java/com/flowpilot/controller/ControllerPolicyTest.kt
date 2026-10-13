@@ -83,6 +83,29 @@ class ControllerPolicyTest {
     }
 
     @Test
+    fun deviceGroupsAreOrderedByAvailabilityAndOmitEmptyGroups() {
+        val devices = listOf(
+            ControllerDevice("other", "Other", "model", "maintenance"),
+            ControllerDevice("disabled", "Disabled", "model", "disabled"),
+            ControllerDevice("offline", "Offline", "model", "offline"),
+            ControllerDevice("online", "Online", "model", "online"),
+        )
+
+        assertEquals(
+            listOf("在线设备", "离线设备", "已停用", "其他状态"),
+            groupControllerDevices(devices).map(ControllerDeviceGroup::label),
+        )
+        assertEquals(
+            listOf(1, 1, 1, 1),
+            groupControllerDevices(devices).map { it.devices.size },
+        )
+        assertEquals(
+            listOf("在线设备"),
+            groupControllerDevices(listOf(devices.last())).map(ControllerDeviceGroup::label),
+        )
+    }
+
+    @Test
     fun signedInNavigationHasDispatchRunsAndAccountDestinations() {
         assertEquals(
             listOf("设备", "任务", "运行", "我的"),
