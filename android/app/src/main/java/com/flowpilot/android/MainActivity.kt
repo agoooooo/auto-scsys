@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -21,6 +22,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -77,6 +79,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -95,6 +98,12 @@ internal enum class DeviceAppDestination(val label: String) {
     TASKS("任务"),
     RUNS("运行"),
     ACCOUNT("我的"),
+}
+
+internal enum class DeviceAppAccountPage(val title: String) {
+    HOME("我的"),
+    PROFILE("个人资料"),
+    SECURITY("账号与安全"),
 }
 
 class MainActivity : ComponentActivity() {
@@ -764,9 +773,22 @@ private fun FlowPilotScreen(
     var selectedDestinationName by rememberSaveable {
         mutableStateOf(DeviceAppDestination.DEVICE.name)
     }
+    var accountPageName by rememberSaveable(user?.id) {
+        mutableStateOf(DeviceAppAccountPage.HOME.name)
+    }
     val selectedDestination = DeviceAppDestination.entries.firstOrNull {
         it.name == selectedDestinationName
     } ?: DeviceAppDestination.DEVICE
+    val accountPage = DeviceAppAccountPage.entries.firstOrNull {
+        it.name == accountPageName
+    } ?: DeviceAppAccountPage.HOME
+    BackHandler(
+        enabled = user != null &&
+            selectedDestination == DeviceAppDestination.ACCOUNT &&
+            accountPage != DeviceAppAccountPage.HOME,
+    ) {
+        accountPageName = DeviceAppAccountPage.HOME.name
+    }
     LaunchedEffect(state.notice) {
         if (state.notice != null) {
             registering = false
@@ -859,9 +881,18 @@ private fun FlowPilotScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
+                if (selectedDestination == DeviceAppDestination.ACCOUNT &&
+                    accountPage != DeviceAppAccountPage.HOME
+                ) {
+                    TextButton(onClick = { accountPageName = DeviceAppAccountPage.HOME.name }) {
+                        Text("‹ 返回")
+                    }
+                }
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        when (selectedDestination) {
+                        if (selectedDestination == DeviceAppDestination.ACCOUNT) {
+                            accountPage.title
+                        } else when (selectedDestination) {
                             DeviceAppDestination.DEVICE -> "设备"
                             DeviceAppDestination.TASKS -> "任务"
                             DeviceAppDestination.RUNS -> "运行"
@@ -870,7 +901,13 @@ private fun FlowPilotScreen(
                         style = MaterialTheme.typography.headlineSmall,
                     )
                     Text(
-                        when (selectedDestination) {
+                        if (selectedDestination == DeviceAppDestination.ACCOUNT) {
+                            when (accountPage) {
+                                DeviceAppAccountPage.HOME -> "个人信息与账号设置"
+                                DeviceAppAccountPage.PROFILE -> "管理姓名与邮箱"
+                                DeviceAppAccountPage.SECURITY -> "修改登录密码"
+                            }
+                        } else when (selectedDestination) {
                             DeviceAppDestination.DEVICE -> "设备状态、连接和运行权限"
                             DeviceAppDestination.TASKS -> "已分配任务与待确认发布"
                             DeviceAppDestination.RUNS -> "远程请求、运行状态与执行记录"
@@ -879,9 +916,6 @@ private fun FlowPilotScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-                TextButton(onClick = { showHelp = true }) {
-                    Text("帮助")
                 }
             }
         }
@@ -1113,27 +1147,6 @@ private fun FlowPilotScreen(
                 }
             }
         } else {
-            if (selectedDestination == DeviceAppDestination.ACCOUNT) Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column {
-                    Text(user.name, style = MaterialTheme.typography.titleLarge)
-                    Text(user.email, style = MaterialTheme.typography.bodyMedium)
-                }
-                TextButton(onClick = onLogout, enabled = !state.loading && canLogout) {
-                    Text("退出")
-                }
-            }
-            if (selectedDestination == DeviceAppDestination.ACCOUNT && !canLogout) {
-                Text(
-                    "任务结束前暂不能退出，以确保运行状态可以同步。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
             if (selectedDestination == DeviceAppDestination.DEVICE) {
               if (device == null) {
                 FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
@@ -1619,88 +1632,156 @@ private fun FlowPilotScreen(
         }
 
         if (selectedDestination == DeviceAppDestination.ACCOUNT) {
-            FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text("个人资料", style = MaterialTheme.typography.titleMedium)
-                    OutlinedTextField(
-                        value = profileName,
-                        onValueChange = { profileName = it },
-                        label = { Text("姓名") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = profileEmail,
-                        onValueChange = { profileEmail = it },
-                        label = { Text("邮箱") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = profileCurrentPassword,
-                        onValueChange = { profileCurrentPassword = it },
-                        label = { Text("当前密码（修改邮箱时需要）") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Button(
-                        onClick = {
-                            viewModel.updateAccountProfile(profileName, profileEmail, profileCurrentPassword)
-                            profileCurrentPassword = ""
-                        },
-                        enabled = !state.loading && profileName.isNotBlank() && profileEmail.isNotBlank(),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("保存资料")
+            when (accountPage) {
+                DeviceAppAccountPage.HOME -> {
+                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .clickable { accountPageName = DeviceAppAccountPage.PROFILE.name }
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        ) {
+                            Surface(
+                                modifier = Modifier.size(56.dp),
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        user?.name?.firstOrNull()?.toString()?.uppercase().orEmpty().ifBlank { "我" },
+                                        color = MaterialTheme.colorScheme.primary,
+                                        style = MaterialTheme.typography.headlineSmall,
+                                    )
+                                }
+                            }
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(user?.name.orEmpty(), style = MaterialTheme.typography.titleLarge)
+                                Text(
+                                    user?.email.orEmpty(),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                        Column {
+                            DeviceAccountRow(
+                                title = "个人资料",
+                                detail = "姓名、邮箱",
+                                onClick = { accountPageName = DeviceAppAccountPage.PROFILE.name },
+                            )
+                            HorizontalDivider(Modifier.padding(start = 16.dp))
+                            DeviceAccountRow(
+                                title = "账号与安全",
+                                detail = "修改登录密码",
+                                onClick = { accountPageName = DeviceAppAccountPage.SECURITY.name },
+                            )
+                        }
+                    }
+                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                        DeviceAccountRow(
+                            title = "帮助与关于",
+                            onClick = { showHelp = true },
+                        )
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = onLogout,
+                            enabled = !state.loading && canLogout,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("退出登录")
+                        }
+                        if (!canLogout) {
+                            Text(
+                                "任务结束前暂不能退出，以确保运行状态可以同步。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
-            }
-            FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text("修改密码", style = MaterialTheme.typography.titleMedium)
-                    OutlinedTextField(
-                        value = accountCurrentPassword,
-                        onValueChange = { accountCurrentPassword = it },
-                        label = { Text("当前密码") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = accountNewPassword,
-                        onValueChange = { accountNewPassword = it },
-                        label = { Text("新密码（至少 12 位）") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Button(
-                        onClick = {
-                            viewModel.changeAccountPassword(accountCurrentPassword, accountNewPassword)
-                            accountCurrentPassword = ""
-                            accountNewPassword = ""
-                        },
-                        enabled = !state.loading && accountCurrentPassword.isNotBlank() &&
-                            accountNewPassword.length >= 12,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("更新密码")
+                DeviceAppAccountPage.PROFILE -> {
+                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            OutlinedTextField(
+                                value = profileName,
+                                onValueChange = { profileName = it },
+                                label = { Text("姓名") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = profileEmail,
+                                onValueChange = { profileEmail = it },
+                                label = { Text("邮箱") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = profileCurrentPassword,
+                                onValueChange = { profileCurrentPassword = it },
+                                label = { Text("当前密码（修改邮箱时需要）") },
+                                visualTransformation = PasswordVisualTransformation(),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Button(
+                                onClick = {
+                                    viewModel.updateAccountProfile(profileName, profileEmail, profileCurrentPassword)
+                                    profileCurrentPassword = ""
+                                },
+                                enabled = !state.loading && profileName.isNotBlank() && profileEmail.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("保存")
+                            }
+                        }
                     }
                 }
-            }
-            TextButton(
-                onClick = onLogout,
-                enabled = !state.loading && canLogout,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("退出登录")
+                DeviceAppAccountPage.SECURITY -> {
+                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            OutlinedTextField(
+                                value = accountCurrentPassword,
+                                onValueChange = { accountCurrentPassword = it },
+                                label = { Text("当前密码") },
+                                visualTransformation = PasswordVisualTransformation(),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = accountNewPassword,
+                                onValueChange = { accountNewPassword = it },
+                                label = { Text("新密码（至少 12 位）") },
+                                visualTransformation = PasswordVisualTransformation(),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Button(
+                                onClick = {
+                                    viewModel.changeAccountPassword(accountCurrentPassword, accountNewPassword)
+                                    accountCurrentPassword = ""
+                                    accountNewPassword = ""
+                                },
+                                enabled = !state.loading && accountCurrentPassword.isNotBlank() &&
+                                    accountNewPassword.length >= 12,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("更新密码")
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -1728,7 +1809,10 @@ private fun FlowPilotScreen(
               DeviceAppDestination.entries.forEach { destination ->
                   NavigationBarItem(
                       selected = selectedDestination == destination,
-                      onClick = { selectedDestinationName = destination.name },
+                      onClick = {
+                          selectedDestinationName = destination.name
+                          accountPageName = DeviceAppAccountPage.HOME.name
+                      },
                       icon = { DeviceAppNavigationIcon(destination, selectedDestination == destination) },
                       label = { Text(destination.label) },
                       colors = NavigationBarItemDefaults.colors(
@@ -1893,6 +1977,33 @@ private fun ScriptContent(source: String) {
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
             )
         }
+    }
+}
+
+@Composable
+private fun DeviceAccountRow(
+    title: String,
+    detail: String? = null,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 15.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            detail?.let {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
