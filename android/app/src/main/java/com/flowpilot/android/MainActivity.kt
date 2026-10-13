@@ -18,6 +18,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
@@ -59,10 +60,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -774,8 +775,8 @@ private fun FlowPilotScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 18.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(horizontal = 20.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         FlowPilotBrandHeader()
 
@@ -791,7 +792,7 @@ private fun FlowPilotScreen(
                 ) {
                     Text("连接服务并登录", style = MaterialTheme.typography.titleLarge)
                     Text(
-                        "Android 自动化客户端 · 演示环境",
+                        "Android 自动化客户端",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1477,33 +1478,21 @@ private fun FlowPilotBrandHeader() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = 2.dp),
+            .padding(bottom = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Row(
-                modifier = Modifier.height(26.dp),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                verticalAlignment = Alignment.Bottom,
+        Row(horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(
+                modifier = Modifier.width(42.dp).height(42.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFF101B35),
             ) {
-                listOf(13.dp, 22.dp, 17.dp).forEachIndexed { index, height ->
-                    Box(
-                        modifier = Modifier
-                            .width(6.dp)
-                            .height(height)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(
-                                FlowPilotPalette.Purple.copy(
-                                    alpha = when (index) {
-                                        0 -> 0.62f
-                                        2 -> 0.8f
-                                        else -> 1f
-                                    },
-                                ),
-                            ),
-                    )
-                }
+                Image(
+                    painter = painterResource(R.drawable.ic_flowpilot_mark),
+                    contentDescription = "FlowPilot",
+                    modifier = Modifier.padding(7.dp),
+                )
             }
             Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Row {
@@ -1518,12 +1507,12 @@ private fun FlowPilotBrandHeader() {
             }
         }
         Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
+            shape = RoundedCornerShape(10.dp),
+            color = FlowPilotPalette.PurpleSoft,
         ) {
             Text(
-                "演示环境",
-                modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                "ANDROID",
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
             )
@@ -1539,10 +1528,10 @@ private fun FlowPilotHero(title: String, subtitle: String) {
             .clip(RoundedCornerShape(18.dp))
             .background(
                 Brush.linearGradient(
-                    listOf(Color(0xFF7968ED), Color(0xFF574BD0)),
+                    listOf(Color(0xFF263B73), Color(0xFF5545D1)),
                 ),
             )
-            .padding(horizontal = 20.dp, vertical = 19.dp),
+            .padding(horizontal = 22.dp, vertical = 22.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
@@ -1572,9 +1561,9 @@ private fun FlowPilotCard(
 ) {
     Card(
         modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         content = content,
     )
