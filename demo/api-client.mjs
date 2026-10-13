@@ -56,6 +56,31 @@ export async function createRemoteRunRequest(session, taskId, deviceId, fetchImp
   }, fetchImpl);
 }
 
+export async function waitForRemoteRun(session, requestId, {
+  fetchImpl = fetch,
+  pollIntervalMs = 5000,
+  maxWaitMs = 30 * 60 * 1000,
+  sleep = (duration) => new Promise((resolve) => setTimeout(resolve, duration)),
+  onStatus = () => {},
+} = {}) {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() <= deadline) {
+    const request = await apiRequest(
+      session,
+      `/remote-runs/${encodeURIComponent(requestId)}`,
+      {},
+      fetchImpl,
+    );
+    onStatus(request);
+    if (["success", "failure", "stopped", "rejected", "expired"].includes(request.status)) {
+      return request;
+    }
+    if (Date.now() + pollIntervalMs > deadline) break;
+    await sleep(pollIntervalMs);
+  }
+  return null;
+}
+
 export async function uploadScriptVersion(session, taskId, { version, notes, file }, fetchImpl = fetch) {
   if (!globalThis.crypto?.subtle) throw new Error("当前浏览器不支持安全的 SHA-256 校验");
   const bytes = await file.arrayBuffer();

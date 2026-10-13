@@ -92,7 +92,7 @@ The helper intentionally does not create the destination, encrypt, upload, rotat
 - `GET /devices/{id}/tasks/{task_id}/versions/{version}/content-url`（授权后签发 5 分钟脚本下载地址；SQLite 返回直连兼容模式）
 - `GET /devices/{id}/tasks/{task_id}/versions/{version}/content`（SQLite/旧客户端兼容下载）
 - `POST /devices/{id}/publications/{publication_id}/accept`（设备用户确认接收指定脚本版本）
-- `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`PATCH /remote-runs/{id}`；只有普通用户可为自己的设备创建远程运行请求。新请求一律保持待处理状态，Android 客户端须在服务端重新校验并批准后才会建立运行记录；历史预授权不会自动启动当前客户端的请求。设备轮询结果包含待处理请求、运行中的请求及最近 50 条过期请求，方便设备端显示过期状态；运行中的请求包含 `run_id`
+- `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`GET /remote-runs/{id}`、`PATCH /remote-runs/{id}`；只有普通用户可为自己的设备创建远程运行请求。新请求一律保持待处理状态，Android 客户端须在服务端重新校验并批准后才会建立运行记录；历史预授权不会自动启动当前客户端的请求。设备轮询结果包含待处理请求、运行中的请求及最近 50 条过期请求，方便设备端显示过期状态；运行中的请求包含 `run_id`。Web 创建请求后会轮询该状态接口，直至显示成功、失败、停止或过期；设备只向服务端上报固定的安全诊断摘要，不会上传任意脚本异常或屏幕内容
 - `POST /runs/{id}`、`GET /runs`
 - `GET/POST/DELETE /run-authorizations`、`GET /admin/audit`
 

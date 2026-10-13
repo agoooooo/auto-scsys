@@ -1344,10 +1344,17 @@ def test_remote_run_confirmation_rejection_and_run_record(client):
     completed = client.post(
         f"/runs/{run_id}",
         headers=auth(user),
-        json={"status": "success", "result_summary": "OCR result"},
+        json={"status": "failure", "result_summary": "设备未安装抖音或抖音极速版"},
     )
     assert completed.status_code == 200
-    assert client.get("/runs", headers=auth(admin)).json()[0]["result_summary"] == "OCR result"
+    assert client.get("/runs", headers=auth(admin)).json()[0]["result_summary"] == "设备未安装抖音或抖音极速版"
+    status = client.get(f"/remote-runs/{request_id}", headers=auth(user))
+    assert status.status_code == 200
+    assert status.json()["status"] == "failure"
+    assert status.json()["run_status"] == "failure"
+    assert status.json()["result_summary"] == "设备未安装抖音或抖音极速版"
+    other_user = login(client, "zhou.ke@example.com", "user-demo")
+    assert client.get(f"/remote-runs/{request_id}", headers=auth(other_user)).status_code == 404
 
     rejected_request = client.post("/remote-runs", headers=auth(user), json={"task_id": "t-001", "device_id": "d-002"}).json()
     rejected = client.patch(

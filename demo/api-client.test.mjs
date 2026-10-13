@@ -10,6 +10,7 @@ import {
   revokeSession,
   saveSession,
   uploadScriptVersion,
+  waitForRemoteRun,
 } from "./api-client.mjs";
 
 function memoryStorage() {
@@ -101,6 +102,31 @@ test("remote-run submission posts the selected task and device", async () => {
     device_id: "device-2",
   });
   assert.deepEqual(response, { id: "request-1", status: "pending" });
+});
+
+test("remote-run monitoring polls until completion and returns the safe result", async () => {
+  const statuses = [
+    { id: "request-1", status: "running", result_summary: "" },
+    { id: "request-1", status: "failure", result_summary: "设备未安装抖音或抖音极速版" },
+  ];
+  const paths = [];
+  const observed = [];
+  const result = await waitForRemoteRun(
+    { baseUrl: "http://localhost:8001", token: "access-token" },
+    "request-1",
+    {
+      pollIntervalMs: 1,
+      sleep: async () => {},
+      onStatus: (status) => observed.push(status.status),
+      fetchImpl: async (url) => {
+        paths.push(new URL(url).pathname);
+        return new Response(JSON.stringify(statuses.shift()), { status: 200 });
+      },
+    },
+  );
+  assert.deepEqual(paths, ["/remote-runs/request-1", "/remote-runs/request-1"]);
+  assert.deepEqual(observed, ["running", "failure"]);
+  assert.equal(result.result_summary, "设备未安装抖音或抖音极速版");
 });
 
 test("script publishing uploads directly to the signed object URL and finalizes metadata", async () => {

@@ -24,6 +24,7 @@ import {
   readSession,
   revokeSession,
   uploadScriptVersion,
+  waitForRemoteRun,
 } from "./api-client.mjs";
 import { mapUsersForCsv, toCsv, userCsvColumns } from "./csv.mjs";
 import { filterTasks } from "./task-list.mjs";
@@ -1193,6 +1194,36 @@ document.addEventListener("submit", async (event) => {
           await refreshFromApi();
         } catch (error) {
           showToast(`请求已发送，但状态刷新失败：${error.message}`);
+        }
+        if (request.id) {
+          void waitForRemoteRun(session, request.id, {
+            onStatus: (status) => {
+              if (status.status === "running" && request.status !== "running") {
+                request.status = "running";
+                showToast(`${deviceName} 已开始执行任务`);
+              }
+            },
+          }).then(async (result) => {
+            if (!result) {
+              showToast(`${deviceName} 的运行状态暂未确认，可稍后刷新查看`);
+              return;
+            }
+            const statusMessage = {
+              success: result.result_summary || "任务完成",
+              failure: result.result_summary || "任务执行失败，请查看设备端运行记录",
+              stopped: result.result_summary || "任务已停止",
+              rejected: "设备拒绝了运行请求",
+              expired: "设备未能在有效期内处理请求，请确认 App 在线",
+            }[result.status] ?? `设备请求状态：${result.status}`;
+            try {
+              await refreshFromApi();
+            } catch {
+              // The terminal status is still available in the polled response.
+            }
+            showToast(`${deviceName}：${statusMessage}`);
+          }).catch((error) => {
+            showToast(`请求已发送，但无法追踪执行状态：${error.message}`);
+          });
         }
       }
     } catch (error) {

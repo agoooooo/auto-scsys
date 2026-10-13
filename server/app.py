@@ -1714,6 +1714,30 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             "capabilities": json.loads(row["capabilities_json"]),
         } for row in rows]
 
+    @app.get("/remote-runs/{request_id}")
+    def get_remote_run(request_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
+        _expire_requests(db)
+        request = db.execute(
+            """SELECT r.*,run.id AS run_id,run.status AS run_status,
+                      run.result_summary AS result_summary
+               FROM remote_runs r
+               LEFT JOIN runs run ON run.remote_run_id=r.id
+               WHERE r.id=?""",
+            (request_id,),
+        ).fetchone()
+        if not request:
+            raise HTTPException(status_code=404, detail="运行请求不存在")
+        _device_for_user(db, request["device_id"], user)
+        return {
+            "id": request["id"],
+            "device_id": request["device_id"],
+            "status": request["status"],
+            "run_id": request["run_id"],
+            "run_status": request["run_status"],
+            "result_summary": request["result_summary"] or "",
+            "expires_at": request["expires_at"],
+        }
+
     @app.patch("/remote-runs/{request_id}")
     def decide_remote_run(request_id: str, body: RemoteRunDecision, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         _expire_requests(db)

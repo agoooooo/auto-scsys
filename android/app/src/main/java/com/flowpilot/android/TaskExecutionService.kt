@@ -187,11 +187,7 @@ internal class TaskExecutionService : Service() {
             val reporter = api ?: activeSession?.let { ApiClient(it.apiBaseUrl) }
             if (reporter != null && activeSession != null && runId.isNotBlank()) {
                 try {
-                    val serverSummary = when (status) {
-                        "success" -> "任务完成"
-                        "stopped" -> "任务已停止"
-                        else -> "任务执行失败"
-                    }
+                    val serverSummary = RunResultSummary.forServer(status, summary)
                     val reportSession = freshSession()
                     withContext(Dispatchers.IO) {
                         reporter.updateRun(reportSession.token, runId, status, serverSummary)
