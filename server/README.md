@@ -2,7 +2,7 @@
 
 这是 FlowPilot 的 FastAPI 服务端。默认开发模式在本机使用 SQLite，并预置演示账号、设备和任务；生产部署可使用 PostgreSQL 和 S3 兼容对象存储。遗留的有限预授权数据和 API 为旧客户端保留，不参与当前 Android 客户端的远程运行判断。脚本上传后只做 `.py` 格式、大小和 SHA-256 校验，不会执行脚本。
 
-**当前实现尚不代表已具备全部生产运营保障。**登录失败限制目前依赖数据库窗口计数，不替代边缘/API 网关限流；仍需账号恢复、管理员 MFA、加密异地备份与恢复演练、监控告警和安全评审。登录创建 30 天绝对有效的服务端会话，访问令牌每小时过期并可在会话有效期间续期；用户退出会撤销当前会话，管理员可撤销普通用户所有会话，停用账号也会撤销其会话。生产 Web 上传及 Android 下载使用短时预签名 URL；API 在上传完成时核验内容大小及 SHA-256。SQLite 开发及兼容接口仍通过 API 上传/下载，单脚本限制为 2 MiB。Android Release 客户端必须使用 HTTPS API 地址。
+**当前实现尚不代表已具备全部生产运营保障。**登录及密码重置失败限制目前依赖数据库窗口计数，不替代边缘/API 网关限流；管理员 MFA、加密异地备份与恢复演练、监控告警和安全评审仍待落实。邮箱密码找回接口已实现，但只有完整配置 SMTP 后才开放；未配置时会明确返回 `503`。验证码仅保存服务端 HMAC 摘要、10 分钟有效、最多尝试 5 次，成功后撤销所有现有会话。登录创建 30 天绝对有效的服务端会话，访问令牌每小时过期并可在会话有效期间续期；用户退出会撤销当前会话，管理员可撤销普通用户所有会话，停用账号也会撤销其会话。生产 Web 上传及 Android 下载使用短时预签名 URL；API 在上传完成时核验内容大小及 SHA-256。SQLite 开发及兼容接口仍通过 API 上传/下载，单脚本限制为 2 MiB。Android Release 客户端必须使用 HTTPS API 地址。
 
 ## Deployment phases
 
@@ -33,7 +33,7 @@ FLOWPILOT_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32)
 | 普通用户 | `chen.xiao@example.com` | `user-demo` |
 | 普通用户 | `zhou.ke@example.com` | `user-demo` |
 
-以上凭据只适用于本地演示数据库。token secret 未设置时服务会在每次进程启动生成新的随机密钥（重启后旧 token 失效）。迁移到 PostgreSQL 与对象存储、完善密码重置/refresh-token 生命周期、部署 HTTPS 和速率限制之前，不得把此服务暴露到公网。
+以上凭据只适用于本地演示数据库。token secret 未设置时服务会在每次进程启动生成新的随机密钥（重启后旧 token 失效）。迁移到 PostgreSQL 与对象存储、配置密码找回邮件、部署 HTTPS 和边缘速率限制之前，不得把此服务暴露到公网。
 
 ## Private staging (HTTP, loopback-only by default)
 
@@ -112,10 +112,26 @@ The helper intentionally does not create the destination, encrypt, upload, rotat
 
 `GET /health/live` is a process liveness probe and does not depend on external services. `GET /health/ready` (also available at `/health`) verifies that the configured database and (when enabled) S3 bucket are reachable; it returns `503` and logs the underlying failure if either is unavailable. Use liveness to restart a stuck process and readiness to stop routing traffic until dependencies recover.
 
+## 密码找回邮件配置
+
+密码找回仅通过服务端 API 提供，Web/Android 客户端在尚未提供重置入口前不会显示入口。未设置 SMTP 时，`POST /auth/forgot-password` 和 `POST /auth/reset-password` 返回 `503`，不会模拟成功。配置以下环境变量即可启用；所有账号恢复邮件凭据仅供 API 容器读取，不要提交到仓库：
+
+```text
+FLOWPILOT_SMTP_HOST=smtp.example.com
+FLOWPILOT_SMTP_PORT=587
+FLOWPILOT_SMTP_USERNAME=flowpilot@example.com
+FLOWPILOT_SMTP_PASSWORD=<secret from a secret manager>
+FLOWPILOT_SMTP_FROM=flowpilot@example.com
+FLOWPILOT_SMTP_USE_SSL=false
+```
+
+默认使用 SMTP STARTTLS；将 `FLOWPILOT_SMTP_USE_SSL=true` 用于隐式 TLS（通常端口 465）。邮箱请求响应不会说明账号是否存在，且按邮箱和来源地址分别限流。邮件投递失败会使刚签发的验证码立即失效并返回 `503`。服务端不提供自助找回 UI，直到邮件服务完成配置和验证。
+
 ## 已实现接口
 
 - `POST /auth/register`（公开创建普通用户；姓名、唯一邮箱和至少 12 位密码；不强制邮箱验证，不接受管理员角色）
 - `POST /auth/login`、`POST /auth/refresh`、`POST /auth/logout`、`POST /auth/change-password`
+- `POST /auth/forgot-password`、`POST /auth/reset-password`（需要完整配置 SMTP；6 位验证码 10 分钟有效，最多 5 次错误尝试，成功后撤销所有现有会话）
 - `GET/PATCH /me`：读取或更新当前用户个人资料；更改邮箱须提供当前密码。改密时校验当前密码并撤销该用户其他会话，当前会话保持有效。
 - `POST /auth/logout`（撤销当前服务端会话）
 - `GET/POST /users`、`PATCH /users/{id}`（管理员调整用户状态及设备数量上限）

@@ -9,10 +9,14 @@ import os
 import re
 import secrets
 import sqlite3
+import smtplib
+import ssl
 import time
 import uuid
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote, urlsplit
@@ -35,6 +39,9 @@ SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 LOGIN_FAILURE_LIMIT = 5
 LOGIN_FAILURE_WINDOW_SECONDS = 15 * 60
 LOGIN_SOURCE_FAILURE_LIMIT = 30
+PASSWORD_RESET_CODE_TTL_SECONDS = 10 * 60
+PASSWORD_RESET_MAX_ATTEMPTS = 5
+PASSWORD_RESET_WINDOW_SECONDS = 15 * 60
 REMOTE_REQUEST_TTL_SECONDS = 15 * 60
 PREAUTHORIZATION_TTL_SECONDS = 30 * 24 * 60 * 60
 DEVICE_OFFLINE_AFTER_SECONDS = 2 * 60
@@ -85,6 +92,72 @@ def _touch_device(db: sqlite3.Connection, device_id: str) -> None:
 
 def _password_hash(password: str, salt: bytes) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 180_000).hex()
+
+
+@dataclass(frozen=True)
+class SMTPSettings:
+    host: str
+    port: int
+    username: str
+    password: str
+    sender: str
+    use_ssl: bool
+
+
+def _smtp_settings_from_env() -> SMTPSettings | None:
+    names = (
+        "FLOWPILOT_SMTP_HOST",
+        "FLOWPILOT_SMTP_USERNAME",
+        "FLOWPILOT_SMTP_PASSWORD",
+        "FLOWPILOT_SMTP_FROM",
+    )
+    values = {name: os.environ.get(name, "").strip() for name in names}
+    configured = [value for value in values.values() if value]
+    if not configured:
+        return None
+    if len(configured) != len(names):
+        raise ValueError("Password recovery requires all FLOWPILOT_SMTP_HOST, USERNAME, PASSWORD, and FROM settings")
+    try:
+        port = int(os.environ.get("FLOWPILOT_SMTP_PORT", "587"))
+    except ValueError as error:
+        raise ValueError("FLOWPILOT_SMTP_PORT must be an integer") from error
+    if not 1 <= port <= 65535:
+        raise ValueError("FLOWPILOT_SMTP_PORT must be between 1 and 65535")
+    use_ssl_value = os.environ.get("FLOWPILOT_SMTP_USE_SSL", "false").strip().lower()
+    if use_ssl_value not in {"true", "false"}:
+        raise ValueError("FLOWPILOT_SMTP_USE_SSL must be true or false")
+    return SMTPSettings(
+        host=values["FLOWPILOT_SMTP_HOST"],
+        port=port,
+        username=values["FLOWPILOT_SMTP_USERNAME"],
+        password=os.environ["FLOWPILOT_SMTP_PASSWORD"],
+        sender=values["FLOWPILOT_SMTP_FROM"],
+        use_ssl=use_ssl_value == "true",
+    )
+
+
+def _send_password_reset_email(settings: SMTPSettings, recipient: str, code: str) -> None:
+    message = EmailMessage()
+    message["Subject"] = "FlowPilot 密码重置验证码"
+    message["From"] = settings.sender
+    message["To"] = recipient
+    message.set_content(
+        f"你的 FlowPilot 密码重置验证码是：{code}\n"
+        f"验证码将在 {PASSWORD_RESET_CODE_TTL_SECONDS // 60} 分钟后失效。"
+        "如果你没有申请重置密码，请忽略此邮件。"
+    )
+    context = ssl.create_default_context()
+    if settings.use_ssl:
+        with smtplib.SMTP_SSL(settings.host, settings.port, timeout=10, context=context) as server:
+            server.login(settings.username, settings.password)
+            server.send_message(message)
+    else:
+        with smtplib.SMTP(settings.host, settings.port, timeout=10) as server:
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
+            server.login(settings.username, settings.password)
+            server.send_message(message)
 
 
 def _token_encode(payload: dict, secret: bytes) -> str:
@@ -254,6 +327,22 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
                 created_at INTEGER NOT NULL,
                 expires_at INTEGER NOT NULL,
                 revoked_at INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS auth_password_reset_codes (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                code_hash TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                consumed_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_password_reset_user
+                ON auth_password_reset_codes(user_id, created_at);
+            CREATE TABLE IF NOT EXISTS auth_password_reset_limits (
+                limit_key TEXT PRIMARY KEY,
+                window_started INTEGER NOT NULL,
+                request_count INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, revoked_at);
             CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at);
@@ -434,6 +523,16 @@ class ChangePasswordInput(BaseModel):
     new_password: str = Field(min_length=12, max_length=256)
 
 
+class ForgotPasswordInput(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
+class ResetPasswordInput(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    code: str = Field(pattern=r"^\d{6}$")
+    new_password: str = Field(min_length=12, max_length=256)
+
+
 class CreateUserInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     email: str = Field(min_length=3, max_length=254)
@@ -550,6 +649,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             else Path(configured_db_path or DEFAULT_DB_PATH)
         )
     script_storage = create_script_storage(required=False)
+    smtp_settings = _smtp_settings_from_env()
     if (
         hardened_environment
         and str(database_path).startswith(POSTGRES_SCHEMES)
@@ -593,6 +693,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     app.state.database_backend = "postgresql" if str(database_path).startswith(POSTGRES_SCHEMES) else "sqlite"
     app.state.token_secret = secret
     app.state.environment = environment
+    app.state.smtp_settings = smtp_settings
     configured_origins = [
         origin.strip()
         for origin in os.environ.get("FLOWPILOT_CORS_ORIGINS", "").split(",")
@@ -996,6 +1097,196 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         )
         audit(db, user["id"], "user.password_changed", "user", user["id"])
         return {"status": "changed", "other_sessions_revoked": True}
+
+    @app.post("/auth/forgot-password", status_code=202)
+    def forgot_password(
+        body: ForgotPasswordInput,
+        request: Request,
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        settings = app.state.smtp_settings
+        if settings is None:
+            raise HTTPException(status_code=503, detail="密码找回服务尚未配置")
+        email = body.email.strip().lower()
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            raise HTTPException(status_code=422, detail="请提供有效的邮箱")
+
+        now = int(time.time())
+        source = request.client.host if request.client else "unknown"
+        rate_keys = (
+            (
+                hmac.new(secret, f"password-reset-email\0{email}".encode(), hashlib.sha256).hexdigest(),
+                5,
+            ),
+            (
+                hmac.new(secret, f"password-reset-source\0{source}".encode(), hashlib.sha256).hexdigest(),
+                30,
+            ),
+        )
+        db.begin_immediate()
+        retry_after = 0
+        for limit_key, limit in rate_keys:
+            attempt = db.execute(
+                "SELECT window_started,request_count FROM auth_password_reset_limits WHERE limit_key=?",
+                (limit_key,),
+            ).fetchone()
+            if (
+                attempt
+                and now - attempt["window_started"] < PASSWORD_RESET_WINDOW_SECONDS
+                and attempt["request_count"] >= limit
+            ):
+                retry_after = max(
+                    retry_after,
+                    attempt["window_started"] + PASSWORD_RESET_WINDOW_SECONDS - now,
+                )
+        if retry_after:
+            db.commit()
+            raise HTTPException(
+                status_code=429,
+                detail="请求过于频繁，请稍后重试",
+                headers={"Retry-After": str(retry_after)},
+            )
+        for limit_key, _ in rate_keys:
+            db.execute(
+                """INSERT INTO auth_password_reset_limits(limit_key,window_started,request_count)
+                   VALUES(?,?,1)
+                   ON CONFLICT(limit_key) DO UPDATE SET
+                     window_started=CASE
+                       WHEN auth_password_reset_limits.window_started<=? THEN excluded.window_started
+                       ELSE auth_password_reset_limits.window_started
+                     END,
+                     request_count=CASE
+                       WHEN auth_password_reset_limits.window_started<=? THEN 1
+                       ELSE auth_password_reset_limits.request_count+1
+                     END""",
+                (
+                    limit_key,
+                    now,
+                    now - PASSWORD_RESET_WINDOW_SECONDS,
+                    now - PASSWORD_RESET_WINDOW_SECONDS,
+                ),
+            )
+        db.execute(
+            "DELETE FROM auth_password_reset_limits WHERE window_started<=?",
+            (now - PASSWORD_RESET_WINDOW_SECONDS * 2,),
+        )
+        db.execute(
+            """DELETE FROM auth_password_reset_codes
+               WHERE expires_at<=? OR consumed_at<=?""",
+            (now, now - 24 * 60 * 60),
+        )
+
+        user = db.execute(
+            "SELECT id FROM users WHERE email=? AND status='active'",
+            (email,),
+        ).fetchone()
+        reset_code = None
+        reset_code_id = None
+        if user:
+            reset_code = f"{secrets.randbelow(1_000_000):06d}"
+            reset_code_id = str(uuid.uuid4())
+            code_hash = hmac.new(
+                secret,
+                f"password-reset\0{user['id']}\0{reset_code}".encode(),
+                hashlib.sha256,
+            ).hexdigest()
+            db.execute(
+                """UPDATE auth_password_reset_codes SET consumed_at=?
+                   WHERE user_id=? AND consumed_at IS NULL""",
+                (now, user["id"]),
+            )
+            db.execute(
+                """INSERT INTO auth_password_reset_codes(
+                       id,user_id,code_hash,created_at,expires_at
+                   ) VALUES(?,?,?,?,?)""",
+                (
+                    reset_code_id,
+                    user["id"],
+                    code_hash,
+                    now,
+                    now + PASSWORD_RESET_CODE_TTL_SECONDS,
+                ),
+            )
+        db.commit()
+
+        if user and reset_code:
+            try:
+                _send_password_reset_email(settings, email, reset_code)
+            except (OSError, smtplib.SMTPException) as error:
+                db.execute(
+                    "UPDATE auth_password_reset_codes SET consumed_at=? WHERE id=?",
+                    (int(time.time()), reset_code_id),
+                )
+                db.commit()
+                LOGGER.error("Password reset email delivery failed: %s", type(error).__name__)
+                raise HTTPException(status_code=503, detail="验证码邮件发送失败，请稍后重试") from error
+        return {"message": "如果该邮箱对应可用账号，已发送验证码。"}
+
+    @app.post("/auth/reset-password")
+    def reset_password(body: ResetPasswordInput, db: sqlite3.Connection = Depends(connection)):
+        if app.state.smtp_settings is None:
+            raise HTTPException(status_code=503, detail="密码找回服务尚未配置")
+        email = body.email.strip().lower()
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            raise HTTPException(status_code=422, detail="请提供有效的邮箱")
+
+        now = int(time.time())
+        db.begin_immediate()
+        user = db.execute(
+            "SELECT id FROM users WHERE email=? AND status='active'",
+            (email,),
+        ).fetchone()
+        reset = (
+            db.execute(
+                """SELECT id,code_hash,attempts FROM auth_password_reset_codes
+                   WHERE user_id=? AND consumed_at IS NULL AND expires_at>?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (user["id"], now),
+            ).fetchone()
+            if user
+            else None
+        )
+        if not reset:
+            raise HTTPException(status_code=400, detail="验证码无效或已过期")
+        if reset["attempts"] >= PASSWORD_RESET_MAX_ATTEMPTS:
+            db.execute(
+                "UPDATE auth_password_reset_codes SET consumed_at=? WHERE id=?",
+                (now, reset["id"]),
+            )
+            db.commit()
+            raise HTTPException(status_code=400, detail="验证码无效或已过期")
+
+        submitted_hash = hmac.new(
+            secret,
+            f"password-reset\0{user['id']}\0{body.code}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(submitted_hash, reset["code_hash"]):
+            db.execute(
+                "UPDATE auth_password_reset_codes SET attempts=attempts+1 WHERE id=?",
+                (reset["id"],),
+            )
+            db.commit()
+            raise HTTPException(status_code=400, detail="验证码无效或已过期")
+
+        salt = secrets.token_bytes(16)
+        db.execute(
+            "UPDATE users SET password_salt=?,password_hash=? WHERE id=?",
+            (salt, _password_hash(body.new_password, salt), user["id"]),
+        )
+        db.execute(
+            """UPDATE auth_sessions SET revoked_at=?
+               WHERE user_id=? AND revoked_at IS NULL""",
+            (now, user["id"]),
+        )
+        db.execute(
+            """UPDATE auth_password_reset_codes SET consumed_at=?
+               WHERE user_id=? AND consumed_at IS NULL""",
+            (now, user["id"]),
+        )
+        audit(db, user["id"], "user.password_reset", "user", user["id"])
+        db.commit()
+        return {"status": "changed", "sessions_revoked": True}
 
     @app.post("/auth/refresh")
     def refresh_access_token(request: Request, user: dict = Depends(current_user)):

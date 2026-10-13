@@ -35,6 +35,17 @@ def auth(token):
     return {"Authorization": f"Bearer {token}"}
 
 
+def password_recovery_client(tmp_path, monkeypatch, send_email=None):
+    monkeypatch.setenv("FLOWPILOT_SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("FLOWPILOT_SMTP_USERNAME", "flowpilot")
+    monkeypatch.setenv("FLOWPILOT_SMTP_PASSWORD", "smtp-test-password")
+    monkeypatch.setenv("FLOWPILOT_SMTP_FROM", "noreply@example.test")
+    app = create_app(tmp_path / "password-recovery.sqlite3", b"test-secret-must-be-at-least-32-bytes")
+    if send_email is not None:
+        monkeypatch.setattr(server_app, "_send_password_reset_email", send_email)
+    return TestClient(app)
+
+
 def test_login_roles_and_disabled_accounts(client):
     assert client.post("/auth/login", json={"email": "admin@example.com", "password": "wrong"}).status_code == 401
     admin = login(client, "admin@example.com", "admin-demo")
@@ -178,6 +189,214 @@ def test_password_change_verifies_current_password_and_revokes_other_sessions(cl
         event["action"] == "user.password_changed" and event["resource_id"] == "u-1001"
         for event in client.get("/admin/audit", headers=auth(admin)).json()
     )
+
+
+def test_password_recovery_is_disabled_without_smtp_configuration(client):
+    request = client.post("/auth/forgot-password", json={"email": "chen.xiao@example.com"})
+    reset = client.post(
+        "/auth/reset-password",
+        json={
+            "email": "chen.xiao@example.com",
+            "code": "123456",
+            "new_password": "replacement-password-123",
+        },
+    )
+    assert request.status_code == 503
+    assert reset.status_code == 503
+
+
+def test_smtp_configuration_is_all_or_nothing_and_validated(monkeypatch):
+    names = (
+        "FLOWPILOT_SMTP_HOST",
+        "FLOWPILOT_SMTP_PORT",
+        "FLOWPILOT_SMTP_USERNAME",
+        "FLOWPILOT_SMTP_PASSWORD",
+        "FLOWPILOT_SMTP_FROM",
+        "FLOWPILOT_SMTP_USE_SSL",
+    )
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    assert server_app._smtp_settings_from_env() is None
+
+    monkeypatch.setenv("FLOWPILOT_SMTP_HOST", "smtp.example.test")
+    with pytest.raises(ValueError, match="requires all"):
+        server_app._smtp_settings_from_env()
+
+    monkeypatch.setenv("FLOWPILOT_SMTP_USERNAME", "flowpilot")
+    monkeypatch.setenv("FLOWPILOT_SMTP_PASSWORD", "smtp-test-password")
+    monkeypatch.setenv("FLOWPILOT_SMTP_FROM", "noreply@example.test")
+    monkeypatch.setenv("FLOWPILOT_SMTP_PORT", "465")
+    monkeypatch.setenv("FLOWPILOT_SMTP_USE_SSL", "true")
+    settings = server_app._smtp_settings_from_env()
+    assert settings.port == 465
+    assert settings.use_ssl is True
+
+    monkeypatch.setenv("FLOWPILOT_SMTP_PORT", "invalid")
+    with pytest.raises(ValueError, match="must be an integer"):
+        server_app._smtp_settings_from_env()
+
+
+def test_password_recovery_sends_generic_response_and_limits_requests(tmp_path, monkeypatch):
+    messages = []
+    with password_recovery_client(
+        tmp_path,
+        monkeypatch,
+        lambda _settings, recipient, code: messages.append((recipient, code)),
+    ) as recovery:
+        known = recovery.post("/auth/forgot-password", json={"email": "CHEN.XIAO@example.com"})
+        unknown = recovery.post("/auth/forgot-password", json={"email": "unknown@example.com"})
+        assert known.status_code == unknown.status_code == 202
+        assert known.json() == unknown.json()
+        assert len(messages) == 1
+        assert messages[0][0] == "chen.xiao@example.com"
+        assert len(messages[0][1]) == 6 and messages[0][1].isdigit()
+
+        for _ in range(4):
+            assert recovery.post(
+                "/auth/forgot-password",
+                json={"email": "chen.xiao@example.com"},
+            ).status_code == 202
+        limited = recovery.post(
+            "/auth/forgot-password",
+            json={"email": "chen.xiao@example.com"},
+        )
+        assert limited.status_code == 429
+        assert "Retry-After" in limited.headers
+
+
+def test_password_recovery_resets_password_once_and_revokes_all_sessions(tmp_path, monkeypatch):
+    messages = []
+    with password_recovery_client(
+        tmp_path,
+        monkeypatch,
+        lambda _settings, recipient, code: messages.append((recipient, code)),
+    ) as recovery:
+        old_session = login(recovery)
+        another_session = login(recovery)
+        requested = recovery.post("/auth/forgot-password", json={"email": "chen.xiao@example.com"})
+        assert requested.status_code == 202
+
+        invalid = recovery.post(
+            "/auth/reset-password",
+            json={
+                "email": "chen.xiao@example.com",
+                "code": "000000" if messages[0][1] != "000000" else "000001",
+                "new_password": "replacement-password-123",
+            },
+        )
+        assert invalid.status_code == 400
+
+        changed = recovery.post(
+            "/auth/reset-password",
+            json={
+                "email": "chen.xiao@example.com",
+                "code": messages[0][1],
+                "new_password": "replacement-password-123",
+            },
+        )
+        assert changed.status_code == 200
+        assert changed.json() == {"status": "changed", "sessions_revoked": True}
+        assert recovery.get("/me", headers=auth(old_session)).status_code == 401
+        assert recovery.get("/me", headers=auth(another_session)).status_code == 401
+        assert recovery.post(
+            "/auth/login",
+            json={"email": "chen.xiao@example.com", "password": "user-demo"},
+        ).status_code == 401
+        assert recovery.post(
+            "/auth/login",
+            json={
+                "email": "chen.xiao@example.com",
+                "password": "replacement-password-123",
+            },
+        ).status_code == 200
+        reused = recovery.post(
+            "/auth/reset-password",
+            json={
+                "email": "chen.xiao@example.com",
+                "code": messages[0][1],
+                "new_password": "another-replacement-password",
+            },
+        )
+        assert reused.status_code == 400
+        admin = login(recovery, "admin@example.com", "admin-demo")
+        events = recovery.get("/admin/audit", headers=auth(admin)).json()
+        assert any(
+            event["action"] == "user.password_reset" and event["resource_id"] == "u-1001"
+            for event in events
+        )
+
+
+def test_password_recovery_locks_code_after_five_incorrect_attempts(tmp_path, monkeypatch):
+    messages = []
+    with password_recovery_client(
+        tmp_path,
+        monkeypatch,
+        lambda _settings, recipient, code: messages.append((recipient, code)),
+    ) as recovery:
+        assert recovery.post("/auth/forgot-password", json={"email": "chen.xiao@example.com"}).status_code == 202
+        for _ in range(server_app.PASSWORD_RESET_MAX_ATTEMPTS):
+            response = recovery.post(
+                "/auth/reset-password",
+                json={
+                    "email": "chen.xiao@example.com",
+                    "code": "000000" if messages[0][1] != "000000" else "000001",
+                    "new_password": "replacement-password-123",
+                },
+            )
+            assert response.status_code == 400
+        assert recovery.post(
+            "/auth/reset-password",
+            json={
+                "email": "chen.xiao@example.com",
+                "code": messages[0][1],
+                "new_password": "replacement-password-123",
+            },
+        ).status_code == 400
+
+
+def test_password_recovery_rejects_expired_code(tmp_path, monkeypatch):
+    messages = []
+    with password_recovery_client(
+        tmp_path,
+        monkeypatch,
+        lambda _settings, recipient, code: messages.append((recipient, code)),
+    ) as recovery:
+        assert recovery.post("/auth/forgot-password", json={"email": "chen.xiao@example.com"}).status_code == 202
+        with sqlite3.connect(recovery.app.state.db_path) as db:
+            db.execute(
+                "UPDATE auth_password_reset_codes SET expires_at=?",
+                (int(time.time()) - 1,),
+            )
+        expired = recovery.post(
+            "/auth/reset-password",
+            json={
+                "email": "chen.xiao@example.com",
+                "code": messages[0][1],
+                "new_password": "replacement-password-123",
+            },
+        )
+        assert expired.status_code == 400
+        assert expired.json() == {"detail": "验证码无效或已过期"}
+
+
+def test_password_recovery_mail_failure_invalidates_issued_code(tmp_path, monkeypatch):
+    def fail_delivery(_settings, _recipient, _code):
+        raise server_app.smtplib.SMTPException("mail server unavailable")
+
+    with password_recovery_client(tmp_path, monkeypatch, fail_delivery) as recovery:
+        failed_delivery = recovery.post(
+            "/auth/forgot-password",
+            json={"email": "chen.xiao@example.com"},
+        )
+        assert failed_delivery.status_code == 503
+        assert recovery.post(
+            "/auth/reset-password",
+            json={
+                "email": "chen.xiao@example.com",
+                "code": "123456",
+                "new_password": "replacement-password-123",
+            },
+        ).status_code == 400
 
 
 def test_public_registration_rejects_invalid_and_duplicate_accounts(client):

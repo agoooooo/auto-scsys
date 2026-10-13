@@ -50,7 +50,14 @@ services:
   api:
     build: .
     restart: unless-stopped
-    environment: *api_environment
+    environment:
+      <<: *api_environment
+      FLOWPILOT_SMTP_HOST: ${FLOWPILOT_SMTP_HOST:-}
+      FLOWPILOT_SMTP_PORT: ${FLOWPILOT_SMTP_PORT:-587}
+      FLOWPILOT_SMTP_USERNAME: ${FLOWPILOT_SMTP_USERNAME:-}
+      FLOWPILOT_SMTP_PASSWORD: ${FLOWPILOT_SMTP_PASSWORD:-}
+      FLOWPILOT_SMTP_FROM: ${FLOWPILOT_SMTP_FROM:-}
+      FLOWPILOT_SMTP_USE_SSL: ${FLOWPILOT_SMTP_USE_SSL:-false}
     depends_on:
       db:
         condition: service_healthy
