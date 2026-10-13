@@ -229,6 +229,14 @@ class TaskActionPolicyTest {
     }
 
     @Test
+    fun xiaomiFamilyManufacturersUseManufacturerSpecificAutoStartSettings() {
+        assertTrue(usesXiaomiAutoStartSettings("Xiaomi"))
+        assertTrue(usesXiaomiAutoStartSettings("REDMI"))
+        assertTrue(usesXiaomiAutoStartSettings("POCO"))
+        assertFalse(usesXiaomiAutoStartSettings("samsung"))
+    }
+
+    @Test
     fun logoutBecomesAvailableAfterPermissionIsDeniedOrRunFinishes() {
         assertFalse(canLogoutDuringRun("running"))
         assertFalse(canLogoutDuringRun("awaiting_permission"))

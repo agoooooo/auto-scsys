@@ -3,6 +3,7 @@ package com.flowpilot.android
 import android.Manifest
 import android.app.Activity
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -257,6 +258,7 @@ class MainActivity : ComponentActivity() {
                             requestBatteryOptimizationExemption()
                         },
                         onOpenAppSystemSettings = ::openAppSystemSettings,
+                        onOpenManufacturerBackgroundSettings = ::openManufacturerBackgroundSettings,
                         onSetOcrStandby = ::setOcrStandby,
                         onAutoRunRemoteRequest = ::autoRunRemoteRequest,
                         onRunTask = ::beginExecution,
@@ -576,6 +578,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun openManufacturerBackgroundSettings() {
+        val intents = buildList {
+            if (usesXiaomiAutoStartSettings(Build.MANUFACTURER)) {
+                add(
+                    Intent("miui.intent.action.OP_AUTO_START")
+                        .setPackage("com.miui.securitycenter"),
+                )
+                add(
+                    Intent().setComponent(
+                        ComponentName(
+                            "com.miui.securitycenter",
+                            "com.miui.permcenter.autostart.AutoStartManagementActivity",
+                        ),
+                    ),
+                )
+            }
+            add(
+                Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", packageName, null),
+                ),
+            )
+        }
+        val intent = intents.firstOrNull { it.resolveActivity(packageManager) != null } ?: intents.last()
+        try {
+            startActivity(intent)
+        } catch (exception: Exception) {
+            flowPilotViewModel.showError(
+                "无法打开自启动/后台运行设置：${exception.message ?: "未知错误"}",
+            )
+        }
+    }
+
     private fun requestDefaultOcrStandby() {
         if (!canStartOcrStandby(RunStatusStore(this).snapshot().status)) {
             flowPilotViewModel.showError("远程待命已开启；当前任务运行中，稍后可重新开启持续 OCR 待命")
@@ -658,6 +693,7 @@ private fun FlowPilotScreen(
     onStartDefaultStandby: () -> Unit,
     onRequestBatteryOptimizationExemption: () -> Unit,
     onOpenAppSystemSettings: () -> Unit,
+    onOpenManufacturerBackgroundSettings: () -> Unit,
     onSetOcrStandby: (Boolean) -> Unit,
     onRunTask: (AvailableTask, String?, String?) -> Unit,
     onAutoRunRemoteRequest: (RemoteRun) -> Unit,
@@ -953,10 +989,16 @@ private fun FlowPilotScreen(
                                 }
                             }
                             Text(
-                                "部分手机还需在系统设置中允许 FlowPilot 自启动和后台运行；电池豁免不能阻止厂商系统强行回收应用。",
+                                "为尽量保持后台待命，请同时允许自启动、后台运行和电池设置中的“无限制”。这些厂商设置不能由 App 静默授予。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            TextButton(
+                                onClick = onOpenManufacturerBackgroundSettings,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("打开自启动/后台运行设置")
+                            }
                             TextButton(
                                 onClick = onOpenAppSystemSettings,
                                 modifier = Modifier.fillMaxWidth(),

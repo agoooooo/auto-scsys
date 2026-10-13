@@ -46,6 +46,11 @@ internal fun shouldRequestBatteryOptimizationExemption(
     alreadyExempt: Boolean,
 ): Boolean = exemptionSupported && !alreadyExempt
 
+internal fun usesXiaomiAutoStartSettings(manufacturer: String): Boolean =
+    manufacturer.contains("xiaomi", ignoreCase = true) ||
+        manufacturer.contains("redmi", ignoreCase = true) ||
+        manufacturer.contains("poco", ignoreCase = true)
+
 internal fun shouldDirectlyRunRemoteRequest(
     status: String,
     runId: String?,
