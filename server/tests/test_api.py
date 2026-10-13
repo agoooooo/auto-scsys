@@ -1018,6 +1018,61 @@ def test_admin_publication_requires_device_confirmation_and_can_be_revoked(clien
     assert client.get("/admin/audit", headers=auth(admin)).json()
 
 
+def test_task_list_reports_viewer_scoped_distinct_assigned_device_counts(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    chen = login(client)
+
+    for version in ("v1.0.0", "v1.1.0"):
+        published = client.post(
+            "/tasks/t-002/versions",
+            headers=auth(admin),
+            data={"version": version},
+            files={"script": ("shared.py", b"pass\n")},
+        )
+        assert published.status_code == 201
+    assert client.patch(
+        "/tasks/t-002",
+        headers=auth(admin),
+        json={"status": "published"},
+    ).status_code == 200
+
+    publications = []
+    for device_id, version in (
+        ("d-001", "v1.0.0"),
+        ("d-001", "v1.1.0"),
+        ("d-002", "v1.0.0"),
+        ("d-003", "v1.0.0"),
+    ):
+        response = client.post(
+            "/tasks/t-002/publications",
+            headers=auth(admin),
+            json={"device_id": device_id, "version": version},
+        )
+        assert response.status_code == 201
+        publications.append(response.json()["id"])
+    assert client.delete(
+        f"/tasks/t-002/publications/{publications[-1]}",
+        headers=auth(admin),
+    ).status_code == 200
+
+    admin_tasks = {task["id"]: task for task in client.get("/tasks", headers=auth(admin)).json()}
+    chen_tasks = {task["id"]: task for task in client.get("/tasks", headers=auth(chen)).json()}
+    assert admin_tasks["t-002"]["assigned_device_count"] == 2
+    assert chen_tasks["t-002"]["assigned_device_count"] == 2
+    assert chen_tasks["t-001"]["assigned_device_count"] == 2
+
+    assert client.patch(
+        "/devices/d-002",
+        headers=auth(admin),
+        json={"status": "disabled"},
+    ).status_code == 200
+    admin_tasks = {task["id"]: task for task in client.get("/tasks", headers=auth(admin)).json()}
+    chen_tasks = {task["id"]: task for task in client.get("/tasks", headers=auth(chen)).json()}
+    assert admin_tasks["t-002"]["assigned_device_count"] == 1
+    assert chen_tasks["t-002"]["assigned_device_count"] == 1
+    assert chen_tasks["t-001"]["assigned_device_count"] == 1
+
+
 def test_admin_can_pause_and_resume_tasks_with_access_and_run_controls(client):
     import server.app as api
 

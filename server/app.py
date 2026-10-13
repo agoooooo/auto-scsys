@@ -913,12 +913,16 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         audit(db, user["id"], "device.status_changed", "device", device_id)
         return {"id": device_id, "status": body.status}
 
-    def _task_dict(db: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    def _task_dict(
+        db: sqlite3.Connection,
+        row: sqlite3.Row,
+        viewer: dict | None = None,
+    ) -> dict:
         versions = db.execute(
             "SELECT version,filename,sha256,notes,created_at FROM task_versions WHERE task_id=? ORDER BY created_at DESC,version DESC",
             (row["id"],),
         ).fetchall()
-        return {
+        task = {
             "id": row["id"],
             "name": row["name"],
             "description": row["description"],
@@ -930,6 +934,30 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             "active_version": row["active_version"],
             "versions": [dict(item) for item in versions],
         }
+        if viewer is not None:
+            if viewer["role"] == "admin":
+                assigned_device_count = db.execute(
+                    """SELECT COUNT(DISTINCT p.device_id) FROM task_publications p
+                       JOIN devices d ON d.id=p.device_id JOIN users u ON u.id=d.user_id
+                       WHERE p.task_id=? AND p.status!='revoked'
+                         AND d.status!='disabled' AND u.status='active'""",
+                    (row["id"],),
+                ).fetchone()[0]
+            elif row["owner_id"] == viewer["id"]:
+                assigned_device_count = db.execute(
+                    "SELECT COUNT(*) FROM devices WHERE user_id=? AND status!='disabled'",
+                    (viewer["id"],),
+                ).fetchone()[0]
+            else:
+                assigned_device_count = db.execute(
+                    """SELECT COUNT(DISTINCT p.device_id) FROM task_publications p
+                       JOIN devices d ON d.id=p.device_id
+                       WHERE p.task_id=? AND d.user_id=? AND d.status!='disabled'
+                         AND p.status!='revoked'""",
+                    (row["id"], viewer["id"]),
+                ).fetchone()[0]
+            task["assigned_device_count"] = assigned_device_count
+        return task
 
     @app.get("/tasks")
     def list_tasks(user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
@@ -942,7 +970,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                    ORDER BY t.name""",
                 (user["id"], user["id"]),
             )
-        return [_task_dict(db, row) for row in rows]
+        return [_task_dict(db, row, user) for row in rows]
 
     @app.post("/tasks", status_code=201)
     def create_task(body: CreateTaskInput, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):

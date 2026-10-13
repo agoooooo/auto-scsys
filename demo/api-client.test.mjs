@@ -166,7 +166,8 @@ test("snapshot loading maps API resources and requests only online devices", asy
     "/tasks": [{
       id: "t1", name: "OCR", description: "Read screen", category: "OCR", status: "published",
       owner_id: "u1", source: "Owner", capabilities: ["OCR"],
-      active_version: "v1.0.0", versions: [{ version: "v1.0.0", filename: "task.py", sha256: "hash" }],
+      active_version: "v1.0.0", assigned_device_count: 2,
+      versions: [{ version: "v1.0.0", filename: "task.py", sha256: "hash" }],
     }],
     "/runs": [{
       id: "r1", task_id: "t1", task_name: "OCR", version: "v1.0.0", device_id: "d1",
@@ -192,6 +193,7 @@ test("snapshot loading maps API resources and requests only online devices", asy
   }, fetchStub);
   assert.equal(snapshot.devices[0].userId, "u1");
   assert.equal(snapshot.tasks[0].activeVersion, "v1.0.0");
+  assert.equal(snapshot.tasks[0].devices, 2);
   assert.equal(snapshot.runs[0].taskId, "t1");
   assert.equal(snapshot.runs[0].deviceId, "d1");
   assert.equal(snapshot.runs[0].task, "OCR");
@@ -200,7 +202,7 @@ test("snapshot loading maps API resources and requests only online devices", asy
   assert.equal(calls.includes("/devices/d2/remote-runs"), false);
 });
 
-test("admin task device counts come from distinct active publication targets", async () => {
+test("admin task device counts come from the task response without per-task publication requests", async () => {
   const calls = [];
   const payloads = {
     "/devices": [{
@@ -213,17 +215,11 @@ test("admin task device counts come from distinct active publication targets", a
     "/tasks": [{
       id: "admin-task", name: "Published task", description: "", category: "OCR",
       status: "published", owner_id: "u-admin", source: "Admin", capabilities: [],
-      active_version: "v2.0.0", versions: [{ version: "v2.0.0" }],
+      active_version: "v2.0.0", assigned_device_count: 2, versions: [{ version: "v2.0.0" }],
     }],
     "/runs": [],
     "/run-authorizations": [],
     "/users": [],
-    "/tasks/admin-task/publications": [
-      { device_id: "target-1", version: "v1.0.0", status: "accepted" },
-      { device_id: "target-1", version: "v2.0.0", status: "pending" },
-      { device_id: "target-2", version: "v2.0.0", status: "pending" },
-      { device_id: "target-3", version: "v1.0.0", status: "revoked" },
-    ],
   };
   const snapshot = await loadSnapshot({
     baseUrl: "http://localhost:8001",
@@ -236,5 +232,5 @@ test("admin task device counts come from distinct active publication targets", a
   });
 
   assert.equal(snapshot.tasks[0].devices, 2);
-  assert.ok(calls.includes("/tasks/admin-task/publications"));
+  assert.equal(calls.some((path) => path.endsWith("/publications")), false);
 });

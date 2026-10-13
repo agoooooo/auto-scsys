@@ -126,16 +126,6 @@ export async function loadSnapshot(session, fetchImpl = fetch) {
   ]);
   let users = [];
   if (session.user.role === "admin") users = await apiRequest(session, "/users", {}, fetchImpl);
-  const taskPublications = session.user.role === "admin"
-    ? await Promise.all(tasks.map(async (task) => [
-      task.id,
-      await apiRequest(session, `/tasks/${encodeURIComponent(task.id)}/publications`, {}, fetchImpl),
-    ]))
-    : [];
-  const publishedDeviceCounts = new Map(taskPublications.map(([taskId, publications]) => [
-    taskId,
-    new Set(publications.filter((publication) => publication.status !== "revoked").map((publication) => publication.device_id)).size,
-  ]));
   const deviceRequests = await Promise.all(devices.filter((device) => device.status === "online").map(async (device) => {
     const requests = await apiRequest(session, `/devices/${encodeURIComponent(device.id)}/remote-runs`, {}, fetchImpl);
     return requests.map((request) => ({ ...request, device_name: device.name }));
@@ -156,9 +146,7 @@ export async function loadSnapshot(session, fetchImpl = fetch) {
     ...task,
     activeVersion: task.active_version,
     versions: task.versions.map((item) => item.version),
-    devices: session.user.role === "admin"
-      ? publishedDeviceCounts.get(task.id) ?? 0
-      : devices.filter((device) => device.user_id === task.owner_id).length,
+    devices: task.assigned_device_count,
     lastRun: runs.find((run) => run.task_id === task.id)?.started_at ?? "尚未运行",
     successRate: 0,
     source: task.source,
