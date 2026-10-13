@@ -38,6 +38,8 @@ make test
 
 This runs the FastAPI tests and all Node.js tests without contacting Android devices. For API setup, endpoints, and current limitations, see [`server/README.md`](server/README.md).
 
+GitHub Actions runs these tests and both Android apps' JVM unit tests/Debug builds on pushes and pull requests. Instrumentation tests still require a connected Android device and are run separately using the instructions in [`android/README.md`](android/README.md).
+
 The native Android client setup, runtime bridge, permissions, and current limitations are documented in [`android/README.md`](android/README.md).
 
 For a concise handoff covering implemented features, end-to-end verification, known limitations, and blocked production work, see [`docs/开发交接.md`](docs/开发交接.md).

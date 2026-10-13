@@ -36,6 +36,7 @@ cd android
 APK 位于 `android/app/build/outputs/apk/debug/app-debug.apk`。当前配置为私有 APK，支持 `arm64-v8a` 真机和 `x86_64` 模拟器。
 独立控制端 APK 位于 `android/controller/build/outputs/apk/debug/controller-debug.apk`，包名为 `com.flowpilot.controller`。控制端详细范围和已知限制见 [`controller/README.md`](controller/README.md)。
 连接已启用 USB 或无线调试的设备后，可运行 `./gradlew :app:connectedDebugAndroidTest` 验证 Python 桥接及设备端 OCR；OCR 使用本地生成的测试图，不需要开启无障碍或屏幕捕获权限。
+GitHub Actions 会运行两个模块的 JVM 单元测试及 Debug 构建；需要连接真机/模拟器的 instrumentation tests 不在无设备的 CI job 中执行。
 
 ### 私有 APK 发布
 
