@@ -950,8 +950,8 @@ private fun FlowPilotScreen(
 
                 FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -964,16 +964,9 @@ private fun FlowPilotScreen(
                                 status = if (remoteMonitoring) "active" else "stopped",
                             )
                         }
-                        Text(
-                            "待命期间会显示持续服务通知。所有远程请求都会自动运行，无需逐项审阅或确认；任务可随时停止。若任务需要无障碍或屏幕捕获，仍须先在 Android 系统中启用或授权。持续 OCR 待命开启时可复用当前屏幕捕获授权；否则收到请求后打开 App 并按系统提示授权。",
-                        )
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                             Text(
-                                if (batteryOptimizationExempt) {
-                                    "已允许 FlowPilot 忽略电池优化，有助于在后台维持待命。"
-                                } else {
-                                    "尚未允许忽略电池优化，系统省电策略可能暂停后台待命。"
-                                },
+                                permissionStatusLabel("电池优化豁免", batteryOptimizationExempt),
                                 color = if (batteryOptimizationExempt) {
                                     MaterialTheme.colorScheme.onSurfaceVariant
                                 } else {
@@ -988,27 +981,22 @@ private fun FlowPilotScreen(
                                     Text("允许后台保活")
                                 }
                             }
-                            Text(
-                                "为尽量保持后台待命，请同时允许自启动、后台运行和电池设置中的“无限制”。这些厂商设置不能由 App 静默授予。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
                             TextButton(
                                 onClick = onOpenManufacturerBackgroundSettings,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Text("打开自启动/后台运行设置")
+                                Text("自启动/后台运行设置")
                             }
                             TextButton(
                                 onClick = onOpenAppSystemSettings,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Text("打开 FlowPilot 系统设置")
+                                Text("应用设置")
                             }
                         }
                         if (!notificationPermissionGranted) {
                             Text(
-                                "未授予通知权限，远程待命无法启动。点击下方按钮可再次请求通知权限。",
+                                permissionStatusLabel("通知权限", available = false),
                                 color = MaterialTheme.colorScheme.error,
                             )
                         }
@@ -1023,28 +1011,25 @@ private fun FlowPilotScreen(
 
                 FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("持续 OCR 待命", style = MaterialTheme.typography.titleMedium)
+                            Text("屏幕捕获权限", style = MaterialTheme.typography.titleMedium)
                             StatusBadge(
-                                label = if (ocrStandbyActive) "捕获中" else "未开启",
+                                label = if (ocrStandbyActive) "已授权" else "缺少授权",
                                 status = if (ocrStandbyActive) "active" else "stopped",
                             )
                         }
-                        Text(
-                            "登录并绑定设备后会自动请求屏幕捕获授权；也可在此重新授权。待命时屏幕捕获会持续运行并显示独立的 Android 前台服务通知；确认过的远程 OCR 请求可复用本次会话，减少重复系统授权。停止待命、系统回收或撤销共享后，会话失效，后续 OCR 需要重新授权。",
-                        )
                         Button(
                             onClick = { onSetOcrStandby(!ocrStandbyActive) },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(if (ocrStandbyActive) "停止持续 OCR 待命" else "授权并开启持续 OCR 待命")
+                            Text(if (ocrStandbyActive) "停止 OCR 待命" else "授权并开启 OCR 待命")
                         }
                     }
                 }
@@ -1052,8 +1037,8 @@ private fun FlowPilotScreen(
                 if (!accessibilityEnabled) {
                     FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                         Column(
-                            modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1061,13 +1046,13 @@ private fun FlowPilotScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text("无障碍操作", style = MaterialTheme.typography.titleMedium)
-                                StatusBadge(label = "未启用", status = "disabled")
+                                StatusBadge(
+                                    label = permissionStatusLabel("无障碍权限", available = false),
+                                    status = "disabled",
+                                )
                             }
-                            Text(
-                                "FlowPilot 仅在已启动任务时读取抖音或抖音极速版界面文字并点击脚本指定的文字。请在系统设置中手动启用；可随时关闭。",
-                            )
                             TextButton(onClick = onOpenAccessibilitySettings) {
-                                Text("打开系统无障碍设置")
+                                Text("启用无障碍权限")
                             }
                         }
                     }
@@ -1076,22 +1061,15 @@ private fun FlowPilotScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(16.dp),
+                                .padding(12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                Text("无障碍操作", style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    "本地及远程屏幕捕获均需 Android 系统授权；远程请求会在 App 前台弹窗审阅并发起授权。",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            StatusBadge(label = "已启用", status = "active")
+                            Text("无障碍操作", style = MaterialTheme.typography.titleSmall)
+                            StatusBadge(
+                                label = permissionStatusLabel("无障碍权限", available = true),
+                                status = "active",
+                            )
                         }
                     }
                 }
