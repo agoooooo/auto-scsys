@@ -27,6 +27,7 @@ import {
 import { mapUsersForCsv, toCsv, userCsvColumns } from "./csv.mjs";
 import { filterTasks } from "./task-list.mjs";
 import { filterDevices, filterUsers, paginateItems } from "./user-list.mjs";
+import { formatRunTimestamp, summarizeRuns } from "./run-metrics.mjs";
 
 let state = structuredClone(initialDemoState);
 let session = readSession();
@@ -159,35 +160,53 @@ function activityRows(items = state.activity.slice(0, 4)) {
   </div>`).join("");
 }
 
-function chartMarkup() {
+function chartLinePath(days, maxCount) {
+  return days.map((day, index) => {
+    const x = (index / (days.length - 1)) * 460;
+    const y = 105 - (day.count / maxCount) * 88;
+    return `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
+  }).join(" ");
+}
+
+function chartMarkup(summary) {
+  const maxCount = Math.max(
+    1,
+    ...summary.currentDaily.map((day) => day.count),
+    ...summary.previousDaily.map((day) => day.count),
+  );
+  const currentPath = chartLinePath(summary.currentDaily, maxCount);
+  const previousPath = chartLinePath(summary.previousDaily, maxCount);
+  const areaPath = `${currentPath} L460 116 L0 116 Z`;
   return `<div class="mini-chart">
-    <div class="chart-top"><span>过去 7 天</span><span><strong>128</strong> 次运行</span></div>
-    <svg class="chart" viewBox="0 0 460 130" role="img" aria-label="最近七天任务运行趋势">
+    <div class="chart-top"><span>近 7 天 / 前 7 天</span><span><strong>${summary.currentTotal}</strong> / ${summary.previousTotal} 次运行</span></div>
+    ${summary.currentTotal || summary.previousTotal ? `<svg class="chart" viewBox="0 0 460 130" role="img" aria-label="近七天与前七天的实际任务运行趋势">
       <defs><linearGradient id="chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#7666e9" stop-opacity=".2"/><stop offset="100%" stop-color="#7666e9" stop-opacity="0"/></linearGradient></defs>
       <path class="chart-gridline" d="M0 20H460M0 60H460M0 100H460"/>
-      <path class="chart-area" d="M0 91 C24 88 34 75 62 79 S104 62 130 70 S170 38 197 52 S238 65 263 46 S304 59 328 35 S371 52 395 27 S437 38 460 15 V115H0Z"/>
-      <path class="chart-line secondary" d="M0 103 C32 101 36 94 63 97 S104 84 130 91 S172 73 197 81 S238 85 263 69 S304 76 328 63 S371 69 395 56 S437 62 460 49"/>
-      <path class="chart-line" d="M0 91 C24 88 34 75 62 79 S104 62 130 70 S170 38 197 52 S238 65 263 46 S304 59 328 35 S371 52 395 27 S437 38 460 15"/>
+      <path class="chart-area" d="${areaPath}"/>
+      <path class="chart-line secondary" d="${previousPath}"/>
+      <path class="chart-line" d="${currentPath}"/>
     </svg>
-    <div class="chart-labels"><span>周一</span><span>周二</span><span>周三</span><span>周四</span><span>周五</span><span>周六</span><span>周日</span></div>
-    <div class="chart-legend"><span><i></i>任务运行</span><span><i></i>上周同期</span></div>
+    <div class="chart-labels">${summary.currentDaily.map((day) => `<span>${escapeHtml(day.label)}</span>`).join("")}</div>
+    <div class="chart-legend"><span><i></i>近 7 天</span><span><i></i>前 7 天</span></div>` : `<div class="empty-state">近 14 天暂无运行数据</div>`}
   </div>`;
 }
 
 function renderOverview() {
   const onlineDevices = state.devices.filter((device) => device.status === "online").length;
   const activeUsers = state.users.filter((user) => user.status === "active").length;
-  return `${pageHeading("早上好，林管理员 👋", "这是你的自动化工作空间。以下是当前运行概况。", `<button class="date-pill">◷　最近 7 天　⌄</button>`)}
+  const runSummary = summarizeRuns(state.runs);
+  const successRate = runSummary.successRate === null ? "—" : `${runSummary.successRate.toFixed(1)}%`;
+  return `${pageHeading(`早上好，${escapeHtml(session?.user.name ?? "演示管理员")} 👋`, "这是你的自动化工作空间。以下是当前运行概况。", `<span class="date-pill">近 7 天</span>`)}
     <div class="stats-grid">
       <article class="stat-card"><div class="stat-top">总用户数<span class="stat-icon">♙</span></div><div class="stat-value">${state.users.length}</div><div class="stat-foot"><span class="positive">↗ ${activeUsers} 位正常</span><span>· 账号</span></div></article>
       <article class="stat-card"><div class="stat-top">已绑定设备<span class="stat-icon">▣</span></div><div class="stat-value">${state.devices.length}</div><div class="stat-foot"><span class="positive">● ${onlineDevices} 台在线</span><span>· 实时状态</span></div></article>
       <article class="stat-card"><div class="stat-top">自动化任务<span class="stat-icon">⌘</span></div><div class="stat-value">${state.tasks.length}</div><div class="stat-foot"><span class="positive">${state.tasks.filter((task) => task.status === "published").length} 个已发布</span><span>· 可用任务</span></div></article>
-      <article class="stat-card"><div class="stat-top">任务成功率<span class="stat-icon">↗</span></div><div class="stat-value">96.8<span style="font-size:13px">%</span></div><div class="stat-foot"><span class="positive">↑ 2.4%</span><span>· 较上周</span></div></article>
+      <article class="stat-card"><div class="stat-top">近 7 天成功率<span class="stat-icon">↗</span></div><div class="stat-value">${successRate}</div><div class="stat-foot">${runSummary.successRate === null ? "暂无已完成运行" : `${runSummary.currentTotal} 次运行 · 成功与失败统计`}</div></article>
     </div>
     <div class="dashboard-grid">
       <section class="panel">
         <div class="panel-header"><div><div class="panel-title">任务运行趋势</div><div class="panel-subtitle">所有设备上的自动化运行情况</div></div><button class="text-button" data-page="activity">查看记录 →</button></div>
-        ${chartMarkup()}
+        ${chartMarkup(runSummary)}
       </section>
       <section class="panel">
         <div class="panel-header"><div><div class="panel-title">最近活动</div><div class="panel-subtitle">设备和任务的最新动态</div></div><button class="text-button" data-page="activity">全部 →</button></div>
@@ -278,6 +297,8 @@ function renderDevices() {
 function renderTasks() {
   const actions = `${session ? `<button class="secondary-button" data-action="new-task">＋ 新建脚本</button>` : ""}<button class="primary-button" data-action="publish-task"><span class="button-icon">↑</span>发布新版本</button>`;
   const filtered = filterTasks(state.tasks, taskQuery, taskFilter);
+  const runSummary = summarizeRuns(state.runs);
+  const successRate = runSummary.successRate === null ? "—" : `${runSummary.successRate.toFixed(1)}%`;
   const pagination = paginateItems(filtered, taskListPage, 10);
   taskListPage = pagination.page;
   const firstShown = filtered.length ? pagination.start + 1 : 0;
@@ -286,8 +307,8 @@ function renderTasks() {
     <div class="stats-grid">
       <article class="stat-card"><div class="stat-top">任务总数<span class="stat-icon">⌘</span></div><div class="stat-value">${state.tasks.length}</div><div class="stat-foot">工作空间内的任务</div></article>
       <article class="stat-card"><div class="stat-top">已发布<span class="stat-icon">↑</span></div><div class="stat-value">${state.tasks.filter((task) => task.status === "published").length}</div><div class="stat-foot"><span class="positive">用户可获取</span></div></article>
-      <article class="stat-card"><div class="stat-top">本周运行<span class="stat-icon">▶</span></div><div class="stat-value">128</div><div class="stat-foot"><span class="positive">↑ 12%</span><span>· 较上周</span></div></article>
-      <article class="stat-card"><div class="stat-top">平均成功率<span class="stat-icon">✓</span></div><div class="stat-value">96.8%</div><div class="stat-foot">按最近运行统计</div></article>
+      <article class="stat-card"><div class="stat-top">近 7 天运行<span class="stat-icon">▶</span></div><div class="stat-value">${runSummary.currentTotal}</div><div class="stat-foot">${runSummary.currentTotal - runSummary.previousTotal > 0 ? "+" : ""}${runSummary.currentTotal - runSummary.previousTotal} 次 · 较前 7 天</div></article>
+      <article class="stat-card"><div class="stat-top">近 7 天成功率<span class="stat-icon">✓</span></div><div class="stat-value">${successRate}</div><div class="stat-foot">${runSummary.successRate === null ? "暂无已完成运行" : "成功与失败运行统计"}</div></article>
     </div>
     <div class="toolbar">
       <label class="search-box"><span>⌕</span><input id="task-search" type="search" placeholder="搜索任务、版本、能力…" value="${escapeHtml(taskQuery)}" /></label>
@@ -298,7 +319,7 @@ function renderTasks() {
     <div class="eyebrow" style="margin-bottom:12px">显示 ${firstShown}–${lastShown} / ${filtered.length} 个任务（共 ${state.tasks.length} 个）</div>
     <div class="task-grid">${pagination.items.map((task, index) => `<article class="task-card">
       <div class="task-card-top"><div class="task-symbol ${index % 2 ? "mint" : ""}">${index % 2 ? "◌" : "⌕"}</div><div class="task-main"><h3>${escapeHtml(task.name)}</h3><small>${escapeHtml(task.category)}</small></div>${statusPill(task.status)}</div>
-      <p>${escapeHtml(task.description)}</p>${task.scriptFile ? `<div class="file-meta">${escapeHtml(task.scriptFile.name)} · ${Math.ceil(task.scriptFile.size / 1024)} KB · SHA-256 ${escapeHtml(task.scriptFile.sha256.slice(0, 12))}…</div>` : ""}<div class="task-card-meta"><span>当前版本<strong>${escapeHtml(task.activeVersion ?? "尚未发布")}</strong></span><span>已分配设备<strong>${task.devices} 台设备</strong></span><span>最近运行<strong>${escapeHtml(task.lastRun)}</strong></span><span>成功率<strong>${task.successRate ? `${task.successRate}%` : "—"}</strong></span></div>
+      <p>${escapeHtml(task.description)}</p>${task.scriptFile ? `<div class="file-meta">${escapeHtml(task.scriptFile.name)} · ${Math.ceil(task.scriptFile.size / 1024)} KB · SHA-256 ${escapeHtml(task.scriptFile.sha256.slice(0, 12))}…</div>` : ""}<div class="task-card-meta"><span>当前版本<strong>${escapeHtml(task.activeVersion ?? "尚未发布")}</strong></span><span>已分配设备<strong>${task.devices} 台设备</strong></span><span>最近运行<strong>${escapeHtml(formatRunTimestamp(runSummary.tasks[task.id]?.latestRun ?? task.lastRun))}</strong></span><span>近 7 天成功率<strong>${runSummary.tasks[task.id]?.successRate == null ? "—" : `${runSummary.tasks[task.id].successRate.toFixed(1)}%`}</strong></span></div>
       <div class="task-card-footer"><button class="text-button" data-action="switch-version" data-id="${escapeHtml(task.id)}">版本管理 ⌄</button>${session?.user.role === "admin" ? `<button class="text-button" data-action="manage-task-access" data-id="${escapeHtml(task.id)}">访问授权</button>` : ""}${(!session || session.user.role === "admin") && ["published", "paused"].includes(task.status) ? `<button class="text-button" data-action="toggle-task-status" data-id="${escapeHtml(task.id)}">${task.status === "paused" ? "恢复发布" : "暂停任务"}</button>` : ""}${canInitiateRemoteRun(session?.user.role) ? `<button class="run-button" data-action="remote-run" data-id="${escapeHtml(task.id)}" ${task.status !== "published" ? "disabled" : ""}>▶　请求远程运行</button>` : ""}</div>
     </article>`).join("") || `<div class="empty-state">没有符合条件的任务</div>`}</div>
     <div class="table-footer"><span>显示 ${firstShown}–${lastShown} / ${filtered.length} 个任务</span><div class="pagination">
