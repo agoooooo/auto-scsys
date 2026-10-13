@@ -146,17 +146,13 @@ test("remote runs start automatically after request validation and record comple
 test("remote-run follow-up does not show admins a phone preview for another user's device", () => {
   assert.equal(canInitiateRemoteRun("admin"), false);
   assert.equal(canInitiateRemoteRun("user"), true);
-  assert.equal(canInitiateRemoteRun(undefined), true);
+  assert.equal(canInitiateRemoteRun(undefined), false);
   assert.equal(remoteRunFollowUpView("admin"), "admin");
   assert.equal(remoteRunFollowUpView("user"), "mobile");
   assert.equal(remoteRunFollowUpView(undefined), "mobile");
 });
 
-test("offline demo remote-run notice clearly says it does not reach a device", () => {
-  assert.equal(
-    remoteRunSubmissionNotice("测试手机", "running", true),
-    "离线演示：已模拟向 测试手机 发起请求，未发送到服务器或手机",
-  );
+test("remote-run notice distinguishes accepted and queued requests", () => {
   assert.equal(
     remoteRunSubmissionNotice("测试手机", "pending"),
     "已向 测试手机 发送请求，等待设备自动处理",

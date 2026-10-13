@@ -1,7 +1,6 @@
 import {
   addUser,
   canInitiateRemoteRun,
-  createRemoteRun,
   expireRemoteRuns,
   finishRun,
   initialDemoState,
@@ -323,7 +322,7 @@ function renderTasks() {
     <div class="task-grid">${pagination.items.map((task, index) => `<article class="task-card">
       <div class="task-card-top"><div class="task-symbol ${index % 2 ? "mint" : ""}">${index % 2 ? "◌" : "⌕"}</div><div class="task-main"><h3>${escapeHtml(task.name)}</h3><small>${escapeHtml(task.category)}</small></div>${statusPill(task.status)}</div>
       <p>${escapeHtml(task.description)}</p>${task.scriptFile ? `<div class="file-meta">${escapeHtml(task.scriptFile.name)} · ${Math.ceil(task.scriptFile.size / 1024)} KB · SHA-256 ${escapeHtml(task.scriptFile.sha256.slice(0, 12))}…</div>` : ""}<div class="task-card-meta"><span>当前版本<strong>${escapeHtml(task.activeVersion ?? "尚未发布")}</strong></span><span>已分配设备<strong>${task.devices} 台设备</strong></span><span>最近运行<strong>${escapeHtml(formatRunTimestamp(runSummary.tasks[task.id]?.latestRun ?? task.lastRun))}</strong></span><span>近 7 天成功率<strong>${runSummary.tasks[task.id]?.successRate == null ? "—" : `${runSummary.tasks[task.id].successRate.toFixed(1)}%`}</strong></span></div>
-      <div class="task-card-footer"><button class="text-button" data-action="switch-version" data-id="${escapeHtml(task.id)}">版本管理 ⌄</button>${session?.user.role === "admin" ? `<button class="text-button" data-action="manage-task-access" data-id="${escapeHtml(task.id)}">访问授权</button>` : ""}${(!session || session.user.role === "admin") && ["published", "paused"].includes(task.status) ? `<button class="text-button" data-action="toggle-task-status" data-id="${escapeHtml(task.id)}">${task.status === "paused" ? "恢复发布" : "暂停任务"}</button>` : ""}${canInitiateRemoteRun(session?.user.role) ? `<button class="run-button" data-action="remote-run" data-id="${escapeHtml(task.id)}" ${task.status !== "published" ? "disabled" : ""}>▶　请求远程运行</button>` : ""}</div>
+      <div class="task-card-footer"><button class="text-button" data-action="switch-version" data-id="${escapeHtml(task.id)}">版本管理 ⌄</button>${session?.user.role === "admin" ? `<button class="text-button" data-action="manage-task-access" data-id="${escapeHtml(task.id)}">访问授权</button>` : ""}${(!session || session.user.role === "admin") && ["published", "paused"].includes(task.status) ? `<button class="text-button" data-action="toggle-task-status" data-id="${escapeHtml(task.id)}">${task.status === "paused" ? "恢复发布" : "暂停任务"}</button>` : ""}${session?.user.role === "user" ? `<button class="run-button" data-action="remote-run" data-id="${escapeHtml(task.id)}" ${task.status !== "published" ? "disabled" : ""}>▶　请求远程运行</button>` : !session ? `<button class="run-button" disabled title="登录服务端后才能向手机发送任务">登录后远程运行</button>` : ""}</div>
     </article>`).join("") || `<div class="empty-state">没有符合条件的任务</div>`}</div>
     <div class="table-footer"><span>显示 ${firstShown}–${lastShown} / ${filtered.length} 个任务</span><div class="pagination">
       <button data-task-page="${pagination.page - 1}" aria-label="上一页" ${pagination.page <= 1 ? "disabled" : ""}>←</button>
@@ -683,11 +682,14 @@ function showDeviceLimitModal(userId) {
 }
 
 function showRemoteRunModal(taskId) {
+  if (!session || !canInitiateRemoteRun(session.user.role)) {
+    showToast("请先登录服务端用户账号；离线演示不能向手机派发任务");
+    return;
+  }
   const task = state.tasks.find((item) => item.id === taskId);
   const systemConsentNotice = remoteRunSystemConsentNotice(task.capabilities);
   const devices = state.devices.filter((device) =>
-    device.status === "online" &&
-    (!session || (canInitiateRemoteRun(session.user.role) && device.userId === session.user.id)))
+    device.status === "online" && device.userId === session.user.id)
     .sort((left, right) => Date.parse(right.lastActive) - Date.parse(left.lastActive));
   if (!devices.length) {
     showToast("当前没有在线设备可接收请求");
@@ -697,7 +699,6 @@ function showRemoteRunModal(taskId) {
     <div class="modal-header"><div><h2 id="modal-title">请求远程运行</h2><p>${escapeHtml(task.name)} · ${escapeHtml(task.activeVersion)}</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
     <form id="remote-run-form" data-task-id="${escapeHtml(task.id)}"><div class="modal-body">
       <div class="form-field"><label for="target-device">目标设备</label><select id="target-device" name="deviceId">${devices.map((device) => `<option value="${escapeHtml(device.id)}">${escapeHtml(device.userName)} · ${escapeHtml(device.name)} · ${escapeHtml(device.id.slice(0, 8))}</option>`).join("")}</select></div>
-      ${!session ? `<div class="form-hint">当前为离线演示模式：请求仅作界面模拟，不会发送到服务器或在手机执行。</div>` : ""}
       <div class="permission-summary"><strong>脚本来源：${escapeHtml(task.source ?? "用户脚本")}</strong><span>服务端校验账号、设备、脚本版本和请求有效期后，设备 App 会自动启动任务，无需逐次确认。</span><span>所需能力：${(task.capabilities ?? []).map(escapeHtml).join("、")}</span>${systemConsentNotice ? `<span id="remote-run-system-consent" class="form-hint">${escapeHtml(systemConsentNotice)}</span>` : ""}</div>
       <div class="form-hint">请求 15 分钟后过期；任务发布不会自动运行，只有发送远程运行请求才会启动任务。</div>
     </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit" ${systemConsentNotice ? 'aria-describedby="remote-run-system-consent"' : ""}>发送请求</button></div></form>
@@ -1168,16 +1169,10 @@ document.addEventListener("submit", async (event) => {
     try {
       const deviceId = new FormData(form).get("deviceId");
       let request;
-      if (session) {
-        request = await createRemoteRunRequest(session, taskId, deviceId);
-      } else {
-        state = createRemoteRun(state, {
-          taskId,
-          deviceId,
-          requestedBy: "林管理员",
-        });
-        request = state.remoteRuns[0];
+      if (!session || !canInitiateRemoteRun(session.user.role)) {
+        throw new Error("请先登录服务端用户账号；离线演示不能向手机派发任务");
       }
+      request = await createRemoteRunRequest(session, taskId, deviceId);
       if (remoteRunFollowUpView(session?.user.role) === "mobile") {
         currentPhoneDeviceId = deviceId;
         currentView = "mobile";
@@ -1189,7 +1184,7 @@ document.addEventListener("submit", async (event) => {
       closeModal();
       render();
       const deviceName = state.devices.find((device) => device.id === deviceId)?.name ?? "目标设备";
-      showToast(remoteRunSubmissionNotice(deviceName, request.status, !session));
+      showToast(remoteRunSubmissionNotice(deviceName, request.status));
       if (session) {
         try {
           await refreshFromApi();

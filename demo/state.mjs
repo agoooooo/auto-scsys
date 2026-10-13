@@ -168,15 +168,14 @@ export function remoteRunSystemConsentNotice(capabilities = []) {
 }
 
 export function canInitiateRemoteRun(role) {
-  return role !== "admin";
+  return role === "user";
 }
 
 export function remoteRunFollowUpView(role) {
   return role === "admin" ? "admin" : "mobile";
 }
 
-export function remoteRunSubmissionNotice(deviceName, status, isDemo = false) {
-  if (isDemo) return `离线演示：已模拟向 ${deviceName} 发起请求，未发送到服务器或手机`;
+export function remoteRunSubmissionNotice(deviceName, status) {
   return status === "running"
     ? `已向 ${deviceName} 发送请求，App 将自动处理`
     : `已向 ${deviceName} 发送请求，等待设备自动处理`;
