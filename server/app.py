@@ -470,27 +470,32 @@ class ScriptUploadCompletion(BaseModel):
 
 def create_app(db_path: str | Path | None = None, token_secret: bytes | None = None) -> FastAPI:
     environment = os.environ.get("FLOWPILOT_ENV", "development").strip().lower()
-    if environment not in {"development", "test", "production"}:
-        raise ValueError("FLOWPILOT_ENV must be development, test, or production")
+    if environment not in {"development", "test", "staging", "production"}:
+        raise ValueError("FLOWPILOT_ENV must be development, test, staging, or production")
+    hardened_environment = environment in {"staging", "production"}
 
     configured_db_path = (
         db_path
         or os.environ.get("FLOWPILOT_DATABASE_URL")
         or os.environ.get("FLOWPILOT_DB_PATH")
     )
-    if environment == "production":
+    if environment == "staging" and (
+        not configured_db_path or not str(configured_db_path).startswith(POSTGRES_SCHEMES)
+    ):
+        raise ValueError("Staging requires a PostgreSQL FLOWPILOT_DATABASE_URL")
+    if hardened_environment:
         if not configured_db_path:
-            raise ValueError("Production requires FLOWPILOT_DATABASE_URL or FLOWPILOT_DB_PATH")
+            raise ValueError(f"{environment.title()} requires FLOWPILOT_DATABASE_URL or FLOWPILOT_DB_PATH")
         if str(configured_db_path).startswith(POSTGRES_SCHEMES):
             database_path: str | Path = str(configured_db_path)
         else:
             database_path = Path(configured_db_path)
             if not database_path.is_absolute() or database_path == DEFAULT_DB_PATH:
-                raise ValueError("Production FLOWPILOT_DB_PATH must be an explicit absolute persistent path")
+                raise ValueError(f"{environment.title()} FLOWPILOT_DB_PATH must be an explicit absolute persistent path")
         if not os.environ.get("FLOWPILOT_TOKEN_SECRET"):
-            raise ValueError("Production requires FLOWPILOT_TOKEN_SECRET")
+            raise ValueError(f"{environment.title()} requires FLOWPILOT_TOKEN_SECRET")
         if not os.environ.get("FLOWPILOT_CORS_ORIGINS"):
-            raise ValueError("Production requires explicit HTTPS FLOWPILOT_CORS_ORIGINS")
+            raise ValueError(f"{environment.title()} requires explicit FLOWPILOT_CORS_ORIGINS")
     else:
         database_path = (
             str(configured_db_path)
@@ -499,11 +504,11 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         )
     script_storage = create_script_storage(required=False)
     if (
-        environment == "production"
+        hardened_environment
         and str(database_path).startswith(POSTGRES_SCHEMES)
         and not script_storage
     ):
-        raise ValueError("Production PostgreSQL requires an S3-compatible script storage configuration")
+        raise ValueError(f"{environment.title()} PostgreSQL requires an S3-compatible script storage configuration")
 
     configured_secret = token_secret
     if configured_secret is None and os.environ.get("FLOWPILOT_TOKEN_SECRET"):
@@ -511,19 +516,19 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     if configured_secret is not None and len(configured_secret) < 32:
         raise ValueError("FLOWPILOT_TOKEN_SECRET must contain at least 32 bytes")
     secret = configured_secret if configured_secret is not None else secrets.token_bytes(32)
-    if environment == "production" and token_secret is not None:
-        raise ValueError("Production token secret must be configured through FLOWPILOT_TOKEN_SECRET")
+    if hardened_environment and token_secret is not None:
+        raise ValueError(f"{environment.title()} token secret must be configured through FLOWPILOT_TOKEN_SECRET")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        _initialize_database(database_path, seed_demo=environment != "production")
-        if environment == "production":
+        _initialize_database(database_path, seed_demo=not hardened_environment)
+        if hardened_environment:
             with _connect(database_path) as db:
                 demo_accounts = db.execute(
                     "SELECT email FROM users WHERE email IN ('admin@example.com','chen.xiao@example.com','zhou.ke@example.com','yifan.xu@example.com') LIMIT 1"
                 ).fetchone()
             if demo_accounts:
-                raise RuntimeError("Production database contains demo accounts; use a fresh database and bootstrap a production administrator")
+                raise RuntimeError(f"{environment.title()} database contains demo accounts; use a fresh database and bootstrap a production administrator")
             if not str(database_path).startswith(POSTGRES_SCHEMES):
                 os.chmod(database_path, 0o600)
         yield
@@ -532,9 +537,9 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         title="FlowPilot API",
         version="0.1.0",
         lifespan=lifespan,
-        docs_url=None if environment == "production" else "/docs",
-        redoc_url=None if environment == "production" else "/redoc",
-        openapi_url=None if environment == "production" else "/openapi.json",
+        docs_url=None if hardened_environment else "/docs",
+        redoc_url=None if hardened_environment else "/redoc",
+        openapi_url=None if hardened_environment else "/openapi.json",
     )
     app.state.db_path = database_path
     app.state.script_storage = script_storage
@@ -546,13 +551,14 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         for origin in os.environ.get("FLOWPILOT_CORS_ORIGINS", "").split(",")
         if origin.strip()
     ]
-    if environment == "production":
+    if hardened_environment:
         if not configured_origins:
-            raise ValueError("Production requires at least one exact HTTPS FLOWPILOT_CORS_ORIGINS entry")
+            raise ValueError(f"{environment.title()} requires at least one exact FLOWPILOT_CORS_ORIGINS entry")
         for origin in configured_origins:
             parsed = urlsplit(origin)
+            permitted_scheme = parsed.scheme == "https" if environment == "production" else parsed.scheme in {"http", "https"}
             if (
-                parsed.scheme != "https"
+                not permitted_scheme
                 or not parsed.hostname
                 or parsed.path
                 or parsed.query
@@ -561,10 +567,11 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                 or parsed.password
                 or "*" in origin
             ):
-                raise ValueError("Production CORS origins must be exact HTTPS origins without paths or wildcards")
+                requirement = "HTTPS" if environment == "production" else "HTTP(S)"
+                raise ValueError(f"{environment.title()} CORS origins must be exact {requirement} origins without paths or wildcards")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=list(dict.fromkeys(configured_origins if environment == "production" else [
+        allow_origins=list(dict.fromkeys(configured_origins if hardened_environment else [
             "http://localhost:8000",
             "http://127.0.0.1:8000",
             "http://localhost:8765",

@@ -6,6 +6,7 @@ import stat
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -313,6 +314,87 @@ def test_production_postgresql_requires_s3_script_storage(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     with pytest.raises(ValueError, match="requires an S3-compatible"):
         create_app("postgresql://user:password@db/flowpilot")
+
+
+def test_staging_requires_postgresql_storage_and_exact_private_http_origins(monkeypatch):
+    monkeypatch.setenv("FLOWPILOT_ENV", "staging")
+    monkeypatch.setenv("FLOWPILOT_DATABASE_URL", "postgresql://user:pass@db/flowpilot")
+    monkeypatch.setenv("FLOWPILOT_TOKEN_SECRET", "staging-secret-that-is-long-enough-123")
+    monkeypatch.setenv("FLOWPILOT_CORS_ORIGINS", "http://127.0.0.1:18000")
+    monkeypatch.setenv("FLOWPILOT_S3_BUCKET", "flowpilot-staging")
+    monkeypatch.setenv("FLOWPILOT_S3_ENDPOINT_URL", "http://minio:9000")
+    monkeypatch.setenv("FLOWPILOT_S3_PUBLIC_ENDPOINT_URL", "http://127.0.0.1:19000")
+    monkeypatch.setenv("FLOWPILOT_S3_ACCESS_KEY", "staging-access")
+    monkeypatch.setenv("FLOWPILOT_S3_SECRET_KEY", "staging-secret")
+
+    app = create_app()
+    assert app.state.environment == "staging"
+    assert app.openapi_url is None
+    cors = next(middleware for middleware in app.user_middleware if middleware.cls.__name__ == "CORSMiddleware")
+    assert cors.kwargs["allow_origins"] == ["http://127.0.0.1:18000"]
+    seeded = {}
+
+    def initialize_database(_database, *, seed_demo):
+        seeded["seed_demo"] = seed_demo
+
+    @contextmanager
+    def connect(_database):
+        database = sqlite3.connect(":memory:")
+        database.execute("CREATE TABLE users (email TEXT)")
+        try:
+            yield database
+        finally:
+            database.close()
+
+    monkeypatch.setattr(server_app, "_initialize_database", initialize_database)
+    monkeypatch.setattr(server_app, "_connect", connect)
+    app.state.script_storage.check_ready = lambda: None
+    with TestClient(app) as staging_client:
+        assert staging_client.get("/health").json() == {"status": "ok"}
+        assert staging_client.get("/docs").status_code == 404
+        allowed = staging_client.options(
+            "/auth/login",
+            headers={
+                "Origin": "http://127.0.0.1:18000",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert allowed.headers["access-control-allow-origin"] == "http://127.0.0.1:18000"
+    assert seeded == {"seed_demo": False}
+
+    monkeypatch.setenv("FLOWPILOT_CORS_ORIGINS", "http://127.0.0.1:18000/path")
+    with pytest.raises(ValueError, match=r"exact HTTP\(S\) origins"):
+        create_app()
+    monkeypatch.setenv("FLOWPILOT_CORS_ORIGINS", "*")
+    with pytest.raises(ValueError, match=r"exact HTTP\(S\) origins"):
+        create_app()
+
+
+def test_staging_requires_postgresql_and_s3(monkeypatch):
+    monkeypatch.setenv("FLOWPILOT_ENV", "staging")
+    monkeypatch.setenv("FLOWPILOT_TOKEN_SECRET", "staging-secret-that-is-long-enough-123")
+    monkeypatch.setenv("FLOWPILOT_CORS_ORIGINS", "http://127.0.0.1:18000")
+    for key in (
+        "FLOWPILOT_DATABASE_URL",
+        "FLOWPILOT_DB_PATH",
+        "FLOWPILOT_S3_BUCKET",
+        "FLOWPILOT_S3_ENDPOINT_URL",
+        "FLOWPILOT_S3_PUBLIC_ENDPOINT_URL",
+        "FLOWPILOT_S3_ACCESS_KEY",
+        "FLOWPILOT_S3_SECRET_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    with pytest.raises(ValueError, match="PostgreSQL FLOWPILOT_DATABASE_URL"):
+        create_app()
+
+    with pytest.raises(ValueError, match="PostgreSQL FLOWPILOT_DATABASE_URL"):
+        create_app("/tmp/staging.sqlite3")
+
+    monkeypatch.setenv("FLOWPILOT_DATABASE_URL", "postgresql://user:pass@db/flowpilot")
+    with pytest.raises(ValueError, match="requires an S3-compatible"):
+        create_app()
 
 
 def test_production_mode_disables_demo_seed_and_api_docs(tmp_path, monkeypatch):

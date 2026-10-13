@@ -35,6 +35,31 @@ FLOWPILOT_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32)
 
 以上凭据只适用于本地演示数据库。token secret 未设置时服务会在每次进程启动生成新的随机密钥（重启后旧 token 失效）。迁移到 PostgreSQL 与对象存储、完善密码重置/refresh-token 生命周期、部署 HTTPS 和速率限制之前，不得把此服务暴露到公网。
 
+## Private staging (HTTP, loopback-only by default)
+
+Use the separate `compose.staging.yaml` to test PostgreSQL, MinIO/S3, Web/API, and script presigned transfers before configuring public domains or HTTPS. Staging runs with `FLOWPILOT_ENV=staging`: it requires PostgreSQL, S3-compatible storage, a stable test-only token secret, and exact CORS origins; it disables demo account seeding and API documentation and rejects seeded demo accounts. Host ports bind to `127.0.0.1` by default, and the Caddy/public proxy is not included.
+
+Create a private environment file with unique staging-only credentials. Generate random values locally; use URL-encoded credentials in `FLOWPILOT_DATABASE_URL` if they contain reserved characters.
+
+```bash
+cp .env.staging.example .env.staging
+chmod 600 .env.staging
+# Replace every "replace-with-..." value; use the same DB password in both settings.
+docker compose --env-file .env.staging -p flowpilot-staging -f compose.staging.yaml up -d --build
+docker compose --env-file .env.staging -p flowpilot-staging -f compose.staging.yaml ps
+curl --fail http://127.0.0.1:18001/health/ready
+```
+
+The console is `http://127.0.0.1:18000/demo/`. On its login screen, set the API address to `http://127.0.0.1:18001`; initialize a dedicated staging administrator:
+
+```bash
+docker compose --env-file .env.staging -p flowpilot-staging -f compose.staging.yaml exec api python -m server.bootstrap_admin
+```
+
+For an Android device or another trusted LAN client, explicitly set `FLOWPILOT_STAGING_BIND_ADDRESS` to the host's private LAN IP and set `FLOWPILOT_STAGING_WEB_ORIGIN` and `FLOWPILOT_STAGING_S3_PUBLIC_ENDPOINT` to that same IP with their configured ports. Restrict host firewall ingress to the intended test clients. Do not bind to `0.0.0.0`, forward router ports, connect real accounts, or expose this HTTP setup to the internet. Android staging tests require a Debug APK because Release rejects cleartext HTTP.
+
+Staging data is persisted in the `flowpilot-staging` Compose project's database and object volumes. `docker compose ... down` stops the services but preserves these volumes; deleting them is destructive. Staging does not substitute for encrypted off-host backups, production recovery drills, or the final HTTPS/CORS/domain configuration.
+
 ## Docker production deployment (final HTTPS ingress phase)
 
 This profile is for the final HTTPS ingress phase, not the earlier isolated database/object-storage integration work. Compose runs PostgreSQL, MinIO, the API, static web console, and Caddy. Point the API, web-console, and object-storage domain names at the host and allow inbound TCP 80/443 for automatic HTTPS certificates. Create a private environment file from the template, set strong unique credentials (the PostgreSQL URL password must be URI-encoded), and start the stack:
