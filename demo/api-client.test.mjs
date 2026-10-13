@@ -4,6 +4,7 @@ import {
   apiRequest,
   clearSession,
   createRemoteRunRequest,
+  defaultApiBaseUrl,
   loadSnapshot,
   login,
   readSession,
@@ -21,6 +22,18 @@ function memoryStorage() {
     removeItem: (key) => values.delete(key),
   };
 }
+
+test("API URL defaults to same-origin HTTPS proxy in production and local API in development", () => {
+  assert.equal(
+    defaultApiBaseUrl({ protocol: "https:", origin: "https://console.example.test", hostname: "console.example.test" }),
+    "https://console.example.test/api",
+  );
+  assert.equal(
+    defaultApiBaseUrl({ protocol: "http:", origin: "http://localhost:8000", hostname: "localhost" }),
+    "http://localhost:8001",
+  );
+  assert.equal(defaultApiBaseUrl({ protocol: "http:", hostname: "" }), "http://127.0.0.1:8001");
+});
 
 test("API session storage round-trips and clears the session", () => {
   const storage = memoryStorage();

@@ -44,7 +44,7 @@ The PostgreSQL and MinIO volumes persist independently; Compose does not publish
 docker compose exec api python -m server.bootstrap_admin
 ```
 
-Configure the Android app with `https://<FLOWPILOT_API_DOMAIN>`. The web console is at `https://<FLOWPILOT_WEB_DOMAIN>`; enter the API domain on its login screen. Presigned URLs use `https://<FLOWPILOT_S3_DOMAIN>`. Check `docker compose ps` and `https://<FLOWPILOT_API_DOMAIN>/health/ready` after deployment. `docker compose down` preserves named volumes; do not use `down -v` unless intentionally destroying the database, scripts, and TLS state.
+Configure the Android app with `https://<FLOWPILOT_API_DOMAIN>`. The web console is at `https://<FLOWPILOT_WEB_DOMAIN>` and uses its same-origin `/api` proxy by default; the API domain remains available as a direct login URL. Presigned URLs use `https://<FLOWPILOT_S3_DOMAIN>`. Check `docker compose ps` and `https://<FLOWPILOT_API_DOMAIN>/health/ready` after deployment. `docker compose down` preserves named volumes; do not use `down -v` unless intentionally destroying the database, scripts, and TLS state.
 
 ## Production-mode startup guard
 

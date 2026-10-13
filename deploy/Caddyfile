@@ -3,7 +3,13 @@
 }
 
 {$FLOWPILOT_WEB_DOMAIN} {
-    reverse_proxy web:80
+    handle_path /api/* {
+        reverse_proxy api:8001
+    }
+
+    handle {
+        reverse_proxy web:80
+    }
 }
 
 {$FLOWPILOT_S3_DOMAIN} {

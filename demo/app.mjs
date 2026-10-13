@@ -19,6 +19,7 @@ import {
   apiRequest,
   clearSession,
   createRemoteRunRequest,
+  defaultApiBaseUrl,
   loadSnapshot,
   login,
   readSession,
@@ -568,11 +569,11 @@ function render() {
 }
 
 function renderLogin(error = "") {
-  const defaultApiUrl = `http://${window.location.hostname || "127.0.0.1"}:8001`;
+  const defaultApiUrl = defaultApiBaseUrl(window.location);
   loginGate.innerHTML = `<div class="login-card">
     <a class="brand" href="#" aria-label="FlowPilot"><span class="brand-mark"><span></span><span></span><span></span></span><span class="brand-name">flow<span>pilot</span></span></a>
     <h1>登录 FlowPilot</h1>
-    <p>连接本地 API 管理账号、设备与任务。手机端视图供交互验证使用，不代表真实 Android 执行。</p>
+    <p>连接 FlowPilot API 管理账号、设备与任务。手机端视图供交互验证使用，不代表真实 Android 执行。</p>
     <form id="login-form">
       <div class="form-field"><label for="api-url">服务端地址</label><input id="api-url" name="baseUrl" type="url" value="${escapeHtml(defaultApiUrl)}" required /></div>
       <div class="form-field"><label for="login-email">邮箱</label><input id="login-email" name="email" type="email" autocomplete="username" required /></div>

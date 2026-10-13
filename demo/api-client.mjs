@@ -1,5 +1,10 @@
 const SESSION_KEY = "flowpilot-api-session";
 
+export function defaultApiBaseUrl(location = globalThis.window?.location) {
+  if (location?.protocol === "https:") return `${location.origin}/api`;
+  return `http://${location?.hostname || "127.0.0.1"}:8001`;
+}
+
 export function readSession(storage) {
   try {
     storage ??= globalThis.sessionStorage;
