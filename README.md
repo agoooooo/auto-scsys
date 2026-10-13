@@ -39,3 +39,5 @@ make test
 This runs the FastAPI tests and all Node.js tests without contacting Android devices. For API setup, endpoints, and current limitations, see [`server/README.md`](server/README.md).
 
 The native Android client setup, runtime bridge, permissions, and current limitations are documented in [`android/README.md`](android/README.md).
+
+For a concise handoff covering implemented features, end-to-end verification, known limitations, and blocked production work, see [`docs/开发交接.md`](docs/开发交接.md).
