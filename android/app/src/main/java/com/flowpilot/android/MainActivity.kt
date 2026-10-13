@@ -719,6 +719,7 @@ private fun FlowPilotScreen(
     var password by rememberSaveable { mutableStateOf(state.loginPassword) }
     var passwordConfirmation by rememberSaveable { mutableStateOf("") }
     var rememberLoginInfo by rememberSaveable { mutableStateOf(state.rememberLoginInfo) }
+    var showHelp by rememberSaveable { mutableStateOf(false) }
     var defaultStandbyRequestedFor by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedTask by remember { mutableStateOf<AvailableTask?>(null) }
     var confirmDeviceUnbind by rememberSaveable { mutableStateOf(false) }
@@ -791,6 +792,9 @@ private fun FlowPilotScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         FlowPilotBrandHeader()
+        TextButton(onClick = { showHelp = true }) {
+            Text("帮助与关于")
+        }
 
         if (user == null) {
             FlowPilotHero(
@@ -1507,6 +1511,29 @@ private fun FlowPilotScreen(
             dismissButton = {
                 TextButton(onClick = { confirmDeviceUnbind = false }) {
                     Text("取消")
+                }
+            },
+        )
+    }
+
+    if (showHelp) {
+        AlertDialog(
+            onDismissRequest = { showHelp = false },
+            title = { Text("受控端帮助与关于") },
+            text = {
+                Column(
+                    modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    controlledAppHelpSections(BuildConfig.VERSION_NAME).forEach { section ->
+                        Text(section.title, style = MaterialTheme.typography.titleSmall)
+                        Text(section.body, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHelp = false }) {
+                    Text("关闭")
                 }
             },
         )

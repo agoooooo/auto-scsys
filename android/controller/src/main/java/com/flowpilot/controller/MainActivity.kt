@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -509,12 +510,16 @@ private fun ControllerScreen(
     onStopRunning: () -> Unit,
     onLogout: () -> Unit,
 ) {
+    var showHelp by remember { mutableStateOf(false) }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("FlowPilot 控制端", style = MaterialTheme.typography.headlineMedium)
         Text("管理你的受控设备，并在授权范围内下发脚本任务。")
+        TextButton(onClick = { showHelp = true }) {
+            Text("帮助与关于")
+        }
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         state.message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
         if (state.session == null) {
@@ -674,6 +679,28 @@ private fun ControllerScreen(
             Spacer(Modifier.height(8.dp))
             Text("控制端仅负责派发与跟踪，不包含脚本执行运行时。停止请求由受控端轮询，并在脚本的下一个停止检查点响应。")
         }
+    }
+    if (showHelp) {
+        AlertDialog(
+            onDismissRequest = { showHelp = false },
+            title = { Text("控制端帮助与关于") },
+            text = {
+                Column(
+                    modifier = Modifier.height(420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    controllerHelpSections(BuildConfig.VERSION_NAME).forEach { section ->
+                        Text(section.title, style = MaterialTheme.typography.titleSmall)
+                        Text(section.body, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHelp = false }) {
+                    Text("关闭")
+                }
+            },
+        )
     }
 }
 
