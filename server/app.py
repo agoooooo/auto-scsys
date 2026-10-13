@@ -833,7 +833,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             (task["id"], version, device["id"]),
         ).fetchone()
         if not publication:
-            raise HTTPException(status_code=403, detail="设备尚未确认接收此脚本版本")
+            raise HTTPException(status_code=403, detail="此脚本版本尚未授权给设备")
 
     def _expire_requests(db: sqlite3.Connection, request_id: str | None = None) -> None:
         query = "UPDATE remote_runs SET status='expired' WHERE status='pending' AND expires_at<=?"
@@ -1725,16 +1725,16 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         publication_id = existing["id"] if existing else str(uuid.uuid4())
         if existing:
             db.execute(
-                """UPDATE task_publications SET status='pending',published_by=?,created_at=?,accepted_at=NULL
+                """UPDATE task_publications SET status='accepted',published_by=?,created_at=?,accepted_at=?
                    WHERE id=?""",
-                (user["id"], now, publication_id),
+                (user["id"], now, now, publication_id),
             )
         else:
             db.execute(
                 """INSERT INTO task_publications
-                   (id,task_id,version,device_id,published_by,status,created_at)
-                   VALUES(?,?,?,?,?,'pending',?)""",
-                (publication_id, task_id, body.version, device["id"], user["id"], now),
+                   (id,task_id,version,device_id,published_by,status,created_at,accepted_at)
+                   VALUES(?,?,?,?,?,'accepted',?,?)""",
+                (publication_id, task_id, body.version, device["id"], user["id"], now, now),
             )
         db.execute(
             "INSERT INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?) ON CONFLICT DO NOTHING",
@@ -1743,7 +1743,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         audit(db, user["id"], "task.publication_created", "task_publication", publication_id)
         return {
             "id": publication_id, "task_id": task_id, "version": body.version,
-            "device_id": device["id"], "status": "pending",
+            "device_id": device["id"], "status": "accepted",
         }
 
     @app.delete("/tasks/{task_id}/publications/{publication_id}")
@@ -2004,6 +2004,22 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if user["role"] != "user" or device["user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="只有设备所属用户可以同步设备")
         _touch_device(db, device_id)
+        legacy_pending = db.execute(
+            """SELECT p.id FROM task_publications p
+               JOIN tasks t ON t.id=p.task_id
+               JOIN task_grants g ON g.task_id=t.id AND g.user_id=?
+               WHERE p.device_id=? AND p.status='pending' AND t.status='published'""",
+            (device["user_id"], device["id"]),
+        ).fetchall()
+        if legacy_pending:
+            accepted_at = utc_now()
+            for publication in legacy_pending:
+                db.execute(
+                    """UPDATE task_publications SET status='accepted',accepted_at=?
+                       WHERE id=? AND status='pending'""",
+                    (accepted_at, publication["id"]),
+                )
+                audit(db, user["id"], "task.publication_auto_authorized", "task_publication", publication["id"])
         own_tasks = db.execute(
             """SELECT t.*,t.active_version AS device_version FROM tasks t
                WHERE t.owner_id=? AND t.status='published' AND t.active_version IS NOT NULL""",

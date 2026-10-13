@@ -909,7 +909,7 @@ private fun FlowPilotScreen(
                             }
                         } else when (selectedDestination) {
                             DeviceAppDestination.DEVICE -> "设备状态、连接和运行权限"
-                            DeviceAppDestination.TASKS -> "已分配任务与待确认发布"
+                            DeviceAppDestination.TASKS -> "已分配脚本与可运行版本"
                             DeviceAppDestination.RUNS -> "远程请求、运行状态与执行记录"
                             DeviceAppDestination.ACCOUNT -> "个人资料、密码与应用设置"
                         },
@@ -1148,6 +1148,25 @@ private fun FlowPilotScreen(
             }
         } else {
             if (selectedDestination == DeviceAppDestination.DEVICE) {
+              FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text("快速开始", style = MaterialTheme.typography.titleMedium)
+                    DeviceQuickStartStep("1", "绑定此手机", if (device == null) "绑定后同步可用脚本" else "已完成")
+                    DeviceQuickStartStep(
+                        "2",
+                        "开启远程待命",
+                        if (remoteMonitoring) "已开启" else "开启后才能接收派发",
+                    )
+                    DeviceQuickStartStep(
+                        "3",
+                        "从控制端派发任务",
+                        "无需确认接收；首次需要的系统权限按提示授权",
+                    )
+                }
+              }
               if (device == null) {
                 FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
@@ -1354,50 +1373,6 @@ private fun FlowPilotScreen(
               if (device == null) {
                   Text("请先在“设备”页面绑定此手机。")
               } else {
-                if (state.pendingPublications.isNotEmpty()) {
-                    Text("待确认的脚本发布（${state.pendingPublications.size}）", style = MaterialTheme.typography.titleLarge)
-                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-                        Column {
-                            state.pendingPublications.forEachIndexed { index, publication ->
-                                Column(
-                                    modifier = Modifier.fillMaxWidth().padding(14.dp),
-                                    verticalArrangement = Arrangement.spacedBy(5.dp),
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(publication.taskName, style = MaterialTheme.typography.titleSmall)
-                                        Text(publication.version, style = MaterialTheme.typography.bodySmall)
-                                    }
-                                    Text(
-                                        "${sourceLabel(publication.source)} · ${publication.publisher}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    if (publication.description.isNotBlank()) Text(publication.description, style = MaterialTheme.typography.bodySmall)
-                                    if (publication.notes.isNotBlank()) {
-                                        Text("版本说明：${publication.notes}", style = MaterialTheme.typography.bodySmall)
-                                    }
-                                    Text(
-                                        "能力：${publication.capabilities.joinToString("、")}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    TextButton(
-                                        onClick = { viewModel.acceptPublication(publication) },
-                                        enabled = !state.loading,
-                                    ) {
-                                        Text("确认接收")
-                                    }
-                                }
-                                if (index < state.pendingPublications.lastIndex) HorizontalDivider()
-                            }
-                        }
-                    }
-                }
-
                 Text("可用任务（${state.tasks.size}）", style = MaterialTheme.typography.titleLarge)
                 if (state.tasks.isEmpty()) {
                     Text("当前没有分配给此账号的已发布任务。")
@@ -1976,6 +1951,28 @@ private fun ScriptContent(source: String) {
                 "${index + 1}: $line",
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
             )
+        }
+    }
+}
+
+@Composable
+private fun DeviceQuickStartStep(number: String, title: String, detail: String) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            modifier = Modifier.size(26.dp),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(number, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

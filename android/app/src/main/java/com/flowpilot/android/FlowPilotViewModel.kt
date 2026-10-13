@@ -23,7 +23,6 @@ internal data class AppUiState(
     val notice: String? = null,
     val device: BoundDevice? = null,
     val tasks: List<AvailableTask> = emptyList(),
-    val pendingPublications: List<PendingPublication> = emptyList(),
     val remoteRuns: List<RemoteRun> = emptyList(),
     val runHistory: List<RunRecord> = emptyList(),
     val runHistoryLoading: Boolean = false,
@@ -187,8 +186,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                     token = session.token,
                     tokenExpiresAt = session.tokenExpiresAt,
                     device = device,
-                    tasks = taskSync.tasks,
-                    pendingPublications = taskSync.pendingPublications,
+                    tasks = taskSync,
                 )
                 refreshRunHistory()
             } catch (exception: Exception) {
@@ -217,8 +215,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                     loading = if (showLoading) false else _state.value.loading,
                     token = session.token,
                     tokenExpiresAt = session.tokenExpiresAt,
-                    tasks = taskSync.tasks,
-                    pendingPublications = taskSync.pendingPublications,
+                    tasks = taskSync,
                 )
             } catch (exception: Exception) {
                 _state.value = _state.value.copy(
@@ -227,37 +224,6 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                 )
             } finally {
                 taskSyncInFlight = false
-            }
-        }
-    }
-
-    fun acceptPublication(publication: PendingPublication) {
-        val current = _state.value
-        val device = current.device ?: return
-        if (current.token == null || current.loading) return
-        _state.value = current.copy(loading = true, error = null)
-        viewModelScope.launch {
-            try {
-                val session = withContext(Dispatchers.IO) { freshSession() }
-                val client = ApiClient(session.apiBaseUrl)
-                withContext(Dispatchers.IO) {
-                    client.acceptPublication(session.token, device.id, publication.id)
-                }
-                val taskSync = withContext(Dispatchers.IO) {
-                    client.syncTasks(session.token, device.id)
-                }
-                _state.value = _state.value.copy(
-                    token = session.token,
-                    tokenExpiresAt = session.tokenExpiresAt,
-                    tasks = taskSync.tasks,
-                    pendingPublications = taskSync.pendingPublications,
-                    loading = false,
-                )
-            } catch (exception: Exception) {
-                _state.value = _state.value.copy(
-                    loading = false,
-                    error = exception.message ?: "确认接收脚本失败",
-                )
             }
         }
     }
@@ -319,7 +285,6 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                     tokenExpiresAt = session.tokenExpiresAt,
                     device = null,
                     tasks = emptyList(),
-                    pendingPublications = emptyList(),
                     remoteRuns = emptyList(),
                     remoteRunsLoading = false,
                     remoteMonitoring = false,
@@ -572,8 +537,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         _state.value = _state.value.copy(device = device)
         val taskSync = withContext(Dispatchers.IO) { client.syncTasks(token, device.id) }
         _state.value = _state.value.copy(
-            tasks = taskSync.tasks,
-            pendingPublications = taskSync.pendingPublications,
+            tasks = taskSync,
         )
     }
 

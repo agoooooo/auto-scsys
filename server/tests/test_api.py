@@ -1385,19 +1385,16 @@ def test_admin_can_list_grant_and_revoke_task_access(client):
     }
     assert {task["id"] for task in client.get("/tasks", headers=auth(chen)).json()} == {"t-001", "t-002"}
     pending_sync = client.post("/devices/d-001/sync", headers=auth(chen)).json()
-    assert [item["id"] for item in pending_sync["tasks"]] == ["t-001"]
-    assert pending_sync["pending_publications"][0]["version"] == "v1.0.0"
+    assert {item["id"] for item in pending_sync["tasks"]} == {"t-001", "t-002"}
+    assert pending_sync["pending_publications"] == []
     assert client.post(
         "/devices/d-001/publications/not-this-device/accept",
         headers=auth(chen),
     ).status_code == 404
-    assert client.post(
-        f"/devices/d-001/publications/{publication.json()['id']}/accept",
-        headers=auth(chen),
-    ).status_code == 200
+    assert publication.json()["status"] == "accepted"
     assert any(
         item["id"] == "t-002" and item["active_version"] == "v1.0.0"
-        for item in client.post("/devices/d-001/sync", headers=auth(chen)).json()["tasks"]
+        for item in pending_sync["tasks"]
     )
     assert all(
         item["id"] != "t-002"
@@ -1449,7 +1446,7 @@ def test_admin_can_list_grant_and_revoke_task_access(client):
     assert inactive_grant.status_code == 409
 
 
-def test_admin_publication_requires_device_confirmation_and_can_be_revoked(client):
+def test_admin_publication_is_immediately_available_without_device_confirmation_and_can_be_revoked(client):
     admin = login(client, "admin@example.com", "admin-demo")
     zhou = login(client, "zhou.ke@example.com", "user-demo")
     content = b"result = 'published to one device'\n"
@@ -1467,39 +1464,28 @@ def test_admin_publication_requires_device_confirmation_and_can_be_revoked(clien
     )
     assert publication.status_code == 201
     publication_id = publication.json()["id"]
-    assert publication.json()["status"] == "pending"
+    assert publication.json()["status"] == "accepted"
     assert client.get("/tasks/t-002/publications", headers=auth(admin)).json()[0]["user_name"] == "周可"
 
-    pending = client.post("/devices/d-003/sync", headers=auth(zhou)).json()
-    assert pending["tasks"] == []
-    assert pending["pending_publications"][0]["id"] == publication_id
-    assert pending["pending_publications"][0]["publisher"] == "林管理员"
+    with server_app._connect(client.app.state.db_path) as db:
+        db.execute(
+            "UPDATE task_publications SET status='pending',accepted_at=NULL WHERE id=?",
+            (publication_id,),
+        )
+    synced = client.post("/devices/d-003/sync", headers=auth(zhou)).json()
+    assert [(item["id"], item["active_version"]) for item in synced["tasks"]] == [("t-002", "v1.0.0")]
+    assert synced["pending_publications"] == []
+    with server_app._connect(client.app.state.db_path) as db:
+        publication_state = db.execute(
+            "SELECT status,accepted_at FROM task_publications WHERE id=?",
+            (publication_id,),
+        ).fetchone()
+    assert publication_state["status"] == "accepted"
+    assert publication_state["accepted_at"] is not None
     assert client.get(
         "/tasks/t-002/publications",
         headers=auth(zhou),
     ).status_code == 403
-    assert client.get(
-        "/devices/d-003/tasks/t-002/versions/v1.0.0/content",
-        headers=auth(zhou),
-    ).status_code == 403
-    assert client.post(
-        "/devices/d-003/runs",
-        headers=auth(zhou),
-        json={"task_id": "t-002", "version": "v1.0.0"},
-    ).status_code == 403
-    assert client.post(
-        "/devices/d-003/publications/not-this-device/accept",
-        headers=auth(zhou),
-    ).status_code == 404
-
-    accepted = client.post(
-        f"/devices/d-003/publications/{publication_id}/accept",
-        headers=auth(zhou),
-    )
-    assert accepted.status_code == 200
-    assert accepted.json()["status"] == "accepted"
-    synced = client.post("/devices/d-003/sync", headers=auth(zhou)).json()
-    assert [(item["id"], item["active_version"]) for item in synced["tasks"]] == [("t-002", "v1.0.0")]
     assert client.get(
         "/devices/d-003/tasks/t-002/versions/v1.0.0/content",
         headers=auth(zhou),
@@ -1510,6 +1496,11 @@ def test_admin_publication_requires_device_confirmation_and_can_be_revoked(clien
         json={"task_id": "t-002", "version": "v1.0.0"},
     )
     assert local_run.status_code == 201
+    assert client.post(
+        "/devices/d-003/publications/not-this-device/accept",
+        headers=auth(zhou),
+    ).status_code == 404
+
     assert client.post(
         f"/runs/{local_run.json()['id']}",
         headers=auth(zhou),
@@ -1531,7 +1522,7 @@ def test_admin_publication_requires_device_confirmation_and_can_be_revoked(clien
     assert client.get(
         "/devices/d-001/tasks/t-002/versions/v1.0.0/content",
         headers=auth(login(client)),
-    ).status_code == 403
+    ).content == content
 
     revoked = client.delete(
         f"/tasks/t-002/publications/{publication_id}",

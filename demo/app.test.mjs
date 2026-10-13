@@ -29,3 +29,9 @@ test("Web exposes profile editing, password change, and opt-in remembered sessio
   assert.match(appSource, /在此设备保持登录/);
   assert.match(appSource, /await apiRequest\(session, "\/auth\/change-password"/);
 });
+
+test("device script publication no longer waits for a device confirmation", () => {
+  assert.match(appSource, /授权并发布到设备/);
+  assert.match(appSource, /发布后设备自动同步，控制端派发后自动运行/);
+  assert.doesNotMatch(appSource, /发布并请求设备确认|设备用户确认后才能同步脚本/);
+});

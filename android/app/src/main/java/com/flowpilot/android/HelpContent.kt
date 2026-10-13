@@ -10,7 +10,7 @@ internal fun controlledAppHelpSections(versionName: String): List<HelpSection> =
     ),
     HelpSection(
         "脚本接收与运行",
-        "先检查发布来源、版本说明和能力列表，再确认接收脚本。屏幕捕获和无障碍权限只能由你在 Android 系统中授予。",
+        "授权到此设备的脚本会自动同步；控制端派发后设备自动运行，无需确认接收。屏幕捕获和无障碍权限仍只能由你在 Android 系统中授予。",
     ),
     HelpSection(
         "停止任务",

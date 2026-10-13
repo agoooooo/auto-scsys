@@ -1073,6 +1073,14 @@ private fun ControllerScreen(
                 }
             }
             if (selectedDestination == ControllerDestination.DEVICES) {
+                ControllerCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("快速开始", style = MaterialTheme.typography.titleSmall)
+                        ControllerQuickStartStep("1", "选设备", "点选在线设备，可一次选择多台")
+                        ControllerQuickStartStep("2", "选脚本并派发", "到“任务”页选择脚本，点击派发")
+                        ControllerQuickStartStep("3", "查看结果", "到“运行”页查看排队和执行状态")
+                    }
+                }
                 Text("受控设备（${state.devices.size}）", style = MaterialTheme.typography.titleMedium)
                 val orderedDevices = orderControllerDevices(state.devices)
                 val selectedOnlineCount = orderedDevices.count {
@@ -1376,6 +1384,28 @@ private fun ControllerScreen(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun ControllerQuickStartStep(number: String, title: String, detail: String) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            modifier = Modifier.size(26.dp),
+            shape = androidx.compose.foundation.shape.CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(number, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
