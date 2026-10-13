@@ -45,4 +45,12 @@ class ControllerPolicyTest {
         assertEquals("离线", controllerDeviceStatusLabel("offline"))
         assertEquals("已停用", controllerDeviceStatusLabel("disabled"))
     }
+
+    @Test
+    fun signedInNavigationHasDispatchRunsAndAccountDestinations() {
+        assertEquals(
+            listOf("派发", "运行", "账号"),
+            ControllerDestination.entries.map(ControllerDestination::label),
+        )
+    }
 }

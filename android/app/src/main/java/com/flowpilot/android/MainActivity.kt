@@ -43,6 +43,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -78,6 +80,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+internal enum class DeviceAppDestination(val label: String) {
+    DEVICE("设备"),
+    TASKS("任务"),
+    RUNS("运行"),
+}
 
 class MainActivity : ComponentActivity() {
     private val flowPilotViewModel: FlowPilotViewModel by viewModels()
@@ -738,6 +746,12 @@ private fun FlowPilotScreen(
     var confirmDeviceUnbind by rememberSaveable { mutableStateOf(false) }
     var scriptReviewAttempt by remember { mutableStateOf<String?>(null) }
     var confirmScriptRun by rememberSaveable { mutableStateOf(false) }
+    var selectedDestinationName by rememberSaveable {
+        mutableStateOf(DeviceAppDestination.DEVICE.name)
+    }
+    val selectedDestination = DeviceAppDestination.entries.firstOrNull {
+        it.name == selectedDestinationName
+    } ?: DeviceAppDestination.DEVICE
     LaunchedEffect(state.notice) {
         if (state.notice != null) {
             registering = false
@@ -811,9 +825,10 @@ private fun FlowPilotScreen(
         }
     }
 
-    Column(
+    Column(modifier = Modifier.fillMaxSize()) {
+      Column(
         modifier = Modifier
-            .fillMaxSize()
+            .weight(1f)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -1075,7 +1090,8 @@ private fun FlowPilotScreen(
                 )
             }
 
-            if (device == null) {
+            if (selectedDestination == DeviceAppDestination.DEVICE) {
+              if (device == null) {
                 FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -1092,7 +1108,7 @@ private fun FlowPilotScreen(
                         }
                     }
                 }
-            } else {
+              } else {
                 FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -1274,6 +1290,13 @@ private fun FlowPilotScreen(
                     }
                 }
 
+              }
+            }
+
+            if (selectedDestination == DeviceAppDestination.TASKS) {
+              if (device == null) {
+                  Text("请先在“设备”页面绑定此手机。")
+              } else {
                 if (state.pendingPublications.isNotEmpty()) {
                     Text("待确认的脚本发布（${state.pendingPublications.size}）", style = MaterialTheme.typography.titleLarge)
                     state.pendingPublications.forEach { publication ->
@@ -1333,6 +1356,13 @@ private fun FlowPilotScreen(
                     }
                 }
 
+              }
+            }
+
+            if (selectedDestination == DeviceAppDestination.RUNS) {
+              if (device == null) {
+                  Text("请先在“设备”页面绑定此手机。")
+              } else {
                 if (state.remoteRuns.isNotEmpty()) {
                     Text("远程请求（${state.remoteRuns.size}）", style = MaterialTheme.typography.titleLarge)
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1522,6 +1552,7 @@ private fun FlowPilotScreen(
                                 } else if (runStatus.status == "awaiting_permission") {
                                     Text("等待 Android 系统授权")
                                 }
+                              }
                             }
                         }
                     }
@@ -1544,6 +1575,28 @@ private fun FlowPilotScreen(
             Text(message, color = MaterialTheme.colorScheme.error)
         }
         Spacer(Modifier.height(8.dp))
+      }
+      if (user != null) {
+          NavigationBar {
+              DeviceAppDestination.entries.forEach { destination ->
+                  NavigationBarItem(
+                      selected = selectedDestination == destination,
+                      onClick = { selectedDestinationName = destination.name },
+                      icon = {
+                          Text(
+                              when (destination) {
+                                  DeviceAppDestination.DEVICE -> "设"
+                                  DeviceAppDestination.TASKS -> "务"
+                                  DeviceAppDestination.RUNS -> "行"
+                              },
+                              style = MaterialTheme.typography.labelLarge,
+                          )
+                      },
+                      label = { Text(destination.label) },
+                  )
+              }
+          }
+      }
     }
 
     selectedTask?.let { task ->
