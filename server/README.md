@@ -37,7 +37,7 @@ FLOWPILOT_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32)
 
 ## Private staging (HTTP, loopback-only by default)
 
-Use the separate `compose.staging.yaml` to test PostgreSQL, MinIO/S3, Web/API, and script presigned transfers before configuring public domains or HTTPS. Staging runs with `FLOWPILOT_ENV=staging`: it requires PostgreSQL, S3-compatible storage, a stable test-only token secret, and exact CORS origins; it disables demo account seeding and API documentation and rejects seeded demo accounts. Host ports bind to `127.0.0.1` by default, and the Caddy/public proxy is not included.
+Use the separate `compose.staging.yaml` to test PostgreSQL, RustFS/S3, Web/API, and script presigned transfers before configuring public domains or HTTPS. RustFS is an S3-compatible staging backend; it does not replace the MinIO/S3 backend configured for the final production Compose, so run a separate compatibility check against the actual production storage provider before launch. Staging runs with `FLOWPILOT_ENV=staging`: it requires PostgreSQL, S3-compatible storage, a stable test-only token secret, and exact CORS origins; it disables demo account seeding and API documentation and rejects seeded demo accounts. Host ports bind to `127.0.0.1` by default, and the Caddy/public proxy is not included.
 
 Create a private environment file with unique staging-only credentials. Generate random values locally; use URL-encoded credentials in `FLOWPILOT_DATABASE_URL` if they contain reserved characters.
 
@@ -58,7 +58,7 @@ docker compose --env-file .env.staging -p flowpilot-staging -f compose.staging.y
 
 For an Android device or another trusted LAN client, explicitly set `FLOWPILOT_STAGING_BIND_ADDRESS` to the host's private LAN IP and set `FLOWPILOT_STAGING_WEB_ORIGIN` and `FLOWPILOT_STAGING_S3_PUBLIC_ENDPOINT` to that same IP with their configured ports. Restrict host firewall ingress to the intended test clients. Do not bind to `0.0.0.0`, forward router ports, connect real accounts, or expose this HTTP setup to the internet. Android staging tests require a Debug APK because Release rejects cleartext HTTP.
 
-Staging data is persisted in the `flowpilot-staging` Compose project's database and object volumes. `docker compose ... down` stops the services but preserves these volumes; deleting them is destructive. Staging does not substitute for encrypted off-host backups, production recovery drills, or the final HTTPS/CORS/domain configuration.
+Staging data is persisted in the `flowpilot-staging` Compose project's database and object volumes. `docker compose ... down` stops the services but preserves these volumes; deleting them is destructive. Staging does not substitute for encrypted off-host backups, production recovery drills, testing against the production object-storage provider, or the final HTTPS/CORS/domain configuration.
 
 ## Docker production deployment (final HTTPS ingress phase)
 

@@ -66,6 +66,7 @@ def test_private_staging_compose_is_valid_and_binds_ports_to_loopback_by_default
     assert result.returncode == 0, result.stderr
     configuration = json.loads(result.stdout)
     assert "proxy" not in configuration["services"]
-    for service_name in ("api", "web", "minio"):
+    for service_name in ("api", "web", "object-store"):
         ports = configuration["services"][service_name]["ports"]
         assert ports[0]["host_ip"] == "127.0.0.1"
+    assert configuration["services"]["object-store"]["image"] == "rustfs/rustfs:1.0.1"
