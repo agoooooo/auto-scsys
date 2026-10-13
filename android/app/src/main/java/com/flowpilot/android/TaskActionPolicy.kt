@@ -41,6 +41,11 @@ internal fun defaultStandbyRequestKey(
     return key.takeIf { it != requestedFor }
 }
 
+internal fun shouldRequestBatteryOptimizationExemption(
+    exemptionSupported: Boolean,
+    alreadyExempt: Boolean,
+): Boolean = exemptionSupported && !alreadyExempt
+
 internal fun shouldDirectlyRunRemoteRequest(
     status: String,
     runId: String?,

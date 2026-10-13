@@ -222,6 +222,13 @@ class TaskActionPolicyTest {
     }
 
     @Test
+    fun batteryOptimizationExemptionIsRequestedOnlyWhenNeededAndSupported() {
+        assertTrue(shouldRequestBatteryOptimizationExemption(exemptionSupported = true, alreadyExempt = false))
+        assertFalse(shouldRequestBatteryOptimizationExemption(exemptionSupported = true, alreadyExempt = true))
+        assertFalse(shouldRequestBatteryOptimizationExemption(exemptionSupported = false, alreadyExempt = false))
+    }
+
+    @Test
     fun logoutBecomesAvailableAfterPermissionIsDeniedOrRunFinishes() {
         assertFalse(canLogoutDuringRun("running"))
         assertFalse(canLogoutDuringRun("awaiting_permission"))

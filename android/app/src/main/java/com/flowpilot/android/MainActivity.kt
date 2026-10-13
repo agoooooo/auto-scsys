@@ -7,8 +7,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -74,9 +76,11 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private val flowPilotViewModel: FlowPilotViewModel by viewModels()
     private val notificationPermissionGranted = mutableStateOf(false)
+    private val batteryOptimizationExempt = mutableStateOf(false)
     private var startMonitoringAfterNotificationGrant = false
     private var startOcrStandbyAfterNotificationGrant = false
     private var startDefaultOcrAfterNotificationGrant = false
+    private var startDefaultOcrAfterBatterySettings = false
     private var pendingOcrStandbyStart = false
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -89,11 +93,22 @@ class MainActivity : ComponentActivity() {
         startOcrStandbyAfterNotificationGrant = false
         startDefaultOcrAfterNotificationGrant = false
         if (granted && shouldStartDefaultOcr) {
-            if (remoteMonitoring.value || startRemoteMonitoring()) requestDefaultOcrStandby()
+            if (remoteMonitoring.value || startRemoteMonitoring()) {
+                requestBatteryOptimizationExemption(continueToOcr = true)
+            }
         }
         else if (granted && shouldStartMonitoring) startRemoteMonitoring()
         else if (granted && shouldStartOcrStandby) requestOcrStandbyCapturePermission()
         else if (!granted) flowPilotViewModel.showError("未授予通知权限，无法显示远程待命和运行状态")
+    }
+    private val batteryOptimizationSettings = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        batteryOptimizationExempt.value = isIgnoringBatteryOptimizations()
+        if (startDefaultOcrAfterBatterySettings) {
+            startDefaultOcrAfterBatterySettings = false
+            requestDefaultOcrStandby()
+        }
     }
     private val screenCapturePermission = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -234,9 +249,14 @@ class MainActivity : ComponentActivity() {
                         viewModel = flowPilotViewModel,
                         accessibilityEnabled = accessibilityEnabled.value,
                         notificationPermissionGranted = notificationPermissionGranted.value,
+                        batteryOptimizationExempt = batteryOptimizationExempt.value,
                         remoteMonitoring = remoteMonitoring.value,
                         ocrStandbyActive = ocrStandbyActive.value,
                         onStartDefaultStandby = ::startDefaultStandby,
+                        onRequestBatteryOptimizationExemption = {
+                            requestBatteryOptimizationExemption()
+                        },
+                        onOpenAppSystemSettings = ::openAppSystemSettings,
                         onSetOcrStandby = ::setOcrStandby,
                         onAutoRunRemoteRequest = ::autoRunRemoteRequest,
                         onRunTask = ::beginExecution,
@@ -270,6 +290,7 @@ class MainActivity : ComponentActivity() {
             Build.VERSION.SDK_INT < 33 ||
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
                 android.content.pm.PackageManager.PERMISSION_GRANTED
+        batteryOptimizationExempt.value = isIgnoringBatteryOptimizations()
         remoteMonitoring.value = RemoteRunMonitorService.isMonitoring(this)
         ocrStandbyActive.value = OcrStandbyService.isActive(this)
         OcrStandbyService.consumeLastError(this)?.let(flowPilotViewModel::showError)
@@ -505,7 +526,54 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (!remoteMonitoring.value && !startRemoteMonitoring()) return
-        requestDefaultOcrStandby()
+        requestBatteryOptimizationExemption(continueToOcr = true)
+    }
+
+    private fun requestBatteryOptimizationExemption(continueToOcr: Boolean = false) {
+        if (!shouldRequestBatteryOptimizationExemption(
+                exemptionSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M,
+                alreadyExempt = isIgnoringBatteryOptimizations(),
+            )
+        ) {
+            batteryOptimizationExempt.value = isIgnoringBatteryOptimizations()
+            if (continueToOcr) requestDefaultOcrStandby()
+            return
+        }
+        startDefaultOcrAfterBatterySettings = continueToOcr
+        try {
+            batteryOptimizationSettings.launch(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName"),
+                ),
+            )
+        } catch (exception: Exception) {
+            startDefaultOcrAfterBatterySettings = false
+            flowPilotViewModel.showError(
+                "无法打开后台电池优化授权：${exception.message ?: "未知错误"}",
+            )
+            if (continueToOcr) requestDefaultOcrStandby()
+        }
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+            (getSystemService(Context.POWER_SERVICE) as PowerManager)
+                .isIgnoringBatteryOptimizations(packageName)
+
+    private fun openAppSystemSettings() {
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", packageName, null),
+                ),
+            )
+        } catch (exception: Exception) {
+            flowPilotViewModel.showError(
+                "无法打开 FlowPilot 系统设置：${exception.message ?: "未知错误"}",
+            )
+        }
     }
 
     private fun requestDefaultOcrStandby() {
@@ -584,9 +652,12 @@ private fun FlowPilotScreen(
     viewModel: FlowPilotViewModel,
     accessibilityEnabled: Boolean,
     notificationPermissionGranted: Boolean,
+    batteryOptimizationExempt: Boolean,
     remoteMonitoring: Boolean,
     ocrStandbyActive: Boolean,
     onStartDefaultStandby: () -> Unit,
+    onRequestBatteryOptimizationExemption: () -> Unit,
+    onOpenAppSystemSettings: () -> Unit,
     onSetOcrStandby: (Boolean) -> Unit,
     onRunTask: (AvailableTask, String?, String?) -> Unit,
     onAutoRunRemoteRequest: (RemoteRun) -> Unit,
@@ -860,6 +931,39 @@ private fun FlowPilotScreen(
                         Text(
                             "待命期间会显示持续服务通知。所有远程请求都会自动运行，无需逐项审阅或确认；任务可随时停止。若任务需要无障碍或屏幕捕获，仍须先在 Android 系统中启用或授权。持续 OCR 待命开启时可复用当前屏幕捕获授权；否则收到请求后打开 App 并按系统提示授权。",
                         )
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            Text(
+                                if (batteryOptimizationExempt) {
+                                    "已允许 FlowPilot 忽略电池优化，有助于在后台维持待命。"
+                                } else {
+                                    "尚未允许忽略电池优化，系统省电策略可能暂停后台待命。"
+                                },
+                                color = if (batteryOptimizationExempt) {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                },
+                            )
+                            if (!batteryOptimizationExempt) {
+                                Button(
+                                    onClick = onRequestBatteryOptimizationExemption,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("允许后台保活")
+                                }
+                            }
+                            Text(
+                                "部分手机还需在系统设置中允许 FlowPilot 自启动和后台运行；电池豁免不能阻止厂商系统强行回收应用。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            TextButton(
+                                onClick = onOpenAppSystemSettings,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("打开 FlowPilot 系统设置")
+                            }
+                        }
                         if (!notificationPermissionGranted) {
                             Text(
                                 "未授予通知权限，远程待命无法启动。点击下方按钮可再次请求通知权限。",
