@@ -30,8 +30,8 @@ test("Web exposes profile editing, password change, and opt-in remembered sessio
   assert.match(appSource, /await apiRequest\(session, "\/auth\/change-password"/);
 });
 
-test("device script publication no longer waits for a device confirmation", () => {
-  assert.match(appSource, /授权并发布到设备/);
-  assert.match(appSource, /发布后设备自动同步，控制端派发后自动运行/);
-  assert.doesNotMatch(appSource, /发布并请求设备确认|设备用户确认后才能同步脚本/);
+test("task access grants allow direct device dispatch without device publication", () => {
+  assert.match(appSource, /获得任务权限的用户可直接从控制端派发到自己的设备/);
+  assert.match(appSource, /无需逐台设备发布脚本/);
+  assert.doesNotMatch(appSource, /task-publication-form|revoke-publication|授权并发布到设备/);
 });

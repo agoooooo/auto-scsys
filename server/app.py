@@ -819,22 +819,6 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             raise HTTPException(status_code=409, detail="任务当前不可运行")
         return task
 
-    def _ensure_device_has_task_version(
-        db: sqlite3.Connection,
-        task: sqlite3.Row,
-        device: sqlite3.Row,
-        version: str,
-    ) -> None:
-        if task["owner_id"] == device["user_id"]:
-            return
-        publication = db.execute(
-            """SELECT 1 FROM task_publications
-               WHERE task_id=? AND version=? AND device_id=? AND status='accepted'""",
-            (task["id"], version, device["id"]),
-        ).fetchone()
-        if not publication:
-            raise HTTPException(status_code=403, detail="此脚本版本尚未授权给设备")
-
     def _expire_requests(db: sqlite3.Connection, request_id: str | None = None) -> None:
         query = "UPDATE remote_runs SET status='expired' WHERE status='pending' AND expires_at<=?"
         parameters: tuple = (int(time.time()),)
@@ -1541,24 +1525,16 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if viewer is not None:
             if viewer["role"] == "admin":
                 assigned_device_count = db.execute(
-                    """SELECT COUNT(DISTINCT p.device_id) FROM task_publications p
-                       JOIN devices d ON d.id=p.device_id JOIN users u ON u.id=d.user_id
-                       WHERE p.task_id=? AND p.status!='revoked'
+                    """SELECT COUNT(*) FROM devices d JOIN users u ON u.id=d.user_id
+                       LEFT JOIN task_grants g ON g.task_id=? AND g.user_id=u.id
+                       WHERE (u.id=? OR g.user_id IS NOT NULL)
                          AND d.status!='disabled' AND u.status='active'""",
-                    (row["id"],),
-                ).fetchone()[0]
-            elif row["owner_id"] == viewer["id"]:
-                assigned_device_count = db.execute(
-                    "SELECT COUNT(*) FROM devices WHERE user_id=? AND status!='disabled'",
-                    (viewer["id"],),
+                    (row["id"], row["owner_id"]),
                 ).fetchone()[0]
             else:
                 assigned_device_count = db.execute(
-                    """SELECT COUNT(DISTINCT p.device_id) FROM task_publications p
-                       JOIN devices d ON d.id=p.device_id
-                       WHERE p.task_id=? AND d.user_id=? AND d.status!='disabled'
-                         AND p.status!='revoked'""",
-                    (row["id"], viewer["id"]),
+                    "SELECT COUNT(*) FROM devices WHERE user_id=? AND status!='disabled'",
+                    (viewer["id"],),
                 ).fetchone()[0]
             task["assigned_device_count"] = assigned_device_count
         return task
@@ -1736,10 +1712,6 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                    VALUES(?,?,?,?,?,'accepted',?,?)""",
                 (publication_id, task_id, body.version, device["id"], user["id"], now, now),
             )
-        db.execute(
-            "INSERT INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?) ON CONFLICT DO NOTHING",
-            (task_id, device["user_id"], now),
-        )
         audit(db, user["id"], "task.publication_created", "task_publication", publication_id)
         return {
             "id": publication_id, "task_id": task_id, "version": body.version,
@@ -1765,11 +1737,6 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                 """UPDATE run_authorizations SET revoked_at=?
                    WHERE task_id=? AND version=? AND device_id=? AND revoked_at IS NULL""",
                 (utc_now(), task_id, publication["version"], publication["device_id"]),
-            )
-            db.execute(
-                """UPDATE remote_runs SET status='expired'
-                   WHERE task_id=? AND version=? AND device_id=? AND status='pending'""",
-                (task_id, publication["version"], publication["device_id"]),
             )
             audit(db, user["id"], "task.publication_revoked", "task_publication", publication_id)
         return {"id": publication_id, "status": "revoked"}
@@ -2004,60 +1971,22 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if user["role"] != "user" or device["user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="只有设备所属用户可以同步设备")
         _touch_device(db, device_id)
-        legacy_pending = db.execute(
-            """SELECT p.id FROM task_publications p
-               JOIN tasks t ON t.id=p.task_id
-               JOIN task_grants g ON g.task_id=t.id AND g.user_id=?
-               WHERE p.device_id=? AND p.status='pending' AND t.status='published'""",
-            (device["user_id"], device["id"]),
-        ).fetchall()
-        if legacy_pending:
-            accepted_at = utc_now()
-            for publication in legacy_pending:
-                db.execute(
-                    """UPDATE task_publications SET status='accepted',accepted_at=?
-                       WHERE id=? AND status='pending'""",
-                    (accepted_at, publication["id"]),
-                )
-                audit(db, user["id"], "task.publication_auto_authorized", "task_publication", publication["id"])
-        own_tasks = db.execute(
-            """SELECT t.*,t.active_version AS device_version FROM tasks t
-               WHERE t.owner_id=? AND t.status='published' AND t.active_version IS NOT NULL""",
-            (device["user_id"],),
-        ).fetchall()
-        accepted = db.execute(
-            """SELECT t.*,p.version AS device_version FROM task_publications p
-               JOIN tasks t ON t.id=p.task_id JOIN task_grants g ON g.task_id=t.id AND g.user_id=?
-               WHERE p.device_id=? AND p.status='accepted' AND t.status='published'
-               ORDER BY p.accepted_at DESC""",
-            (device["user_id"], device["id"]),
-        ).fetchall()
-        versions = {}
-        for row in [*own_tasks, *accepted]:
-            versions.setdefault((row["id"], row["device_version"]), _task_dict(db, row) | {
-                "active_version": row["device_version"],
-            })
-        pending = db.execute(
-            """SELECT p.id,p.task_id,p.version,p.created_at,t.name,t.description,t.source,
-                      t.capabilities_json,v.notes,publisher.name AS publisher_name
-               FROM task_publications p JOIN tasks t ON t.id=p.task_id
-               JOIN task_versions v ON v.task_id=p.task_id AND v.version=p.version
-               JOIN users publisher ON publisher.id=p.published_by
-               WHERE p.device_id=? AND p.status='pending' AND t.status='published'
-               ORDER BY p.created_at""",
-            (device["id"],),
+        available_tasks = db.execute(
+            """SELECT DISTINCT t.*,t.active_version AS device_version FROM tasks t
+               LEFT JOIN task_grants g ON g.task_id=t.id
+               WHERE (t.owner_id=? OR g.user_id=?)
+                 AND t.status='published' AND t.active_version IS NOT NULL
+               ORDER BY t.name""",
+            (device["user_id"], device["user_id"]),
         ).fetchall()
         return {
             "device_id": device_id,
             "synced_at": utc_now(),
-            "tasks": list(versions.values()),
-            "pending_publications": [{
-                "id": row["id"], "task_id": row["task_id"], "version": row["version"],
-                "created_at": row["created_at"], "task_name": row["name"],
-                "description": row["description"], "source": row["source"],
-                "capabilities": json.loads(row["capabilities_json"]), "notes": row["notes"],
-                "publisher": row["publisher_name"],
-            } for row in pending],
+            "tasks": [
+                _task_dict(db, row) | {"active_version": row["device_version"]}
+                for row in available_tasks
+            ],
+            "pending_publications": [],
         }
 
     @app.post("/devices/{device_id}/publications/{publication_id}/accept")
@@ -2113,7 +2042,6 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     def download_script(device_id: str, task_id: str, version: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         device = _device_for_user(db, device_id, user)
         task = _task_for_user(db, task_id, {"id": device["user_id"], "role": "user"})
-        _ensure_device_has_task_version(db, task, device, version)
         row = db.execute(
             "SELECT filename,content,storage_key,sha256 FROM task_versions WHERE task_id=? AND version=?",
             (task_id, version),
@@ -2148,7 +2076,6 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     ):
         device = _device_for_user(db, device_id, user)
         task = _task_for_user(db, task_id, {"id": device["user_id"], "role": "user"})
-        _ensure_device_has_task_version(db, task, device, version)
         row = db.execute(
             "SELECT filename,storage_key,sha256 FROM task_versions WHERE task_id=? AND version=?",
             (task_id, version),
@@ -2216,7 +2143,6 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         task = _task_for_user(db, body.task_id, {"id": device["user_id"], "role": "user"})
         if not task["active_version"]:
             raise HTTPException(status_code=409, detail="任务没有可运行版本")
-        _ensure_device_has_task_version(db, task, device, task["active_version"])
         _expire_requests(db)
         has_predecessor = db.execute(
             """SELECT 1 FROM remote_runs WHERE device_id=? AND status='pending'
@@ -2266,7 +2192,6 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         ).fetchone()
         if not version:
             raise HTTPException(status_code=404, detail="脚本版本不存在")
-        _ensure_device_has_task_version(db, task, device, body.version)
         _ensure_device_idle(db, device["id"])
         run_id = str(uuid.uuid4())
         try:

@@ -1396,8 +1396,8 @@ def test_admin_can_list_grant_and_revoke_task_access(client):
         item["id"] == "t-002" and item["active_version"] == "v1.0.0"
         for item in pending_sync["tasks"]
     )
-    assert all(
-        item["id"] != "t-002"
+    assert any(
+        item["id"] == "t-002"
         for item in client.post("/devices/d-002/sync", headers=auth(chen)).json()["tasks"]
     )
     assert client.get(
@@ -1446,7 +1446,7 @@ def test_admin_can_list_grant_and_revoke_task_access(client):
     assert inactive_grant.status_code == 409
 
 
-def test_admin_publication_is_immediately_available_without_device_confirmation_and_can_be_revoked(client):
+def test_granted_task_can_sync_download_and_run_without_device_publication(client):
     admin = login(client, "admin@example.com", "admin-demo")
     zhou = login(client, "zhou.ke@example.com", "user-demo")
     content = b"result = 'published to one device'\n"
@@ -1456,36 +1456,12 @@ def test_admin_publication_is_immediately_available_without_device_confirmation_
         data={"version": "v1.0.0", "notes": "首发版本"},
         files={"script": ("shared.py", content)},
     ).status_code == 201
+    assert client.post("/tasks/t-002/grants/u-1002", headers=auth(admin)).status_code == 201
 
-    publication = client.post(
-        "/tasks/t-002/publications",
-        headers=auth(admin),
-        json={"device_id": "d-003", "version": "v1.0.0"},
-    )
-    assert publication.status_code == 201
-    publication_id = publication.json()["id"]
-    assert publication.json()["status"] == "accepted"
-    assert client.get("/tasks/t-002/publications", headers=auth(admin)).json()[0]["user_name"] == "周可"
-
-    with server_app._connect(client.app.state.db_path) as db:
-        db.execute(
-            "UPDATE task_publications SET status='pending',accepted_at=NULL WHERE id=?",
-            (publication_id,),
-        )
+    assert client.get("/tasks/t-002/publications", headers=auth(admin)).json() == []
     synced = client.post("/devices/d-003/sync", headers=auth(zhou)).json()
     assert [(item["id"], item["active_version"]) for item in synced["tasks"]] == [("t-002", "v1.0.0")]
     assert synced["pending_publications"] == []
-    with server_app._connect(client.app.state.db_path) as db:
-        publication_state = db.execute(
-            "SELECT status,accepted_at FROM task_publications WHERE id=?",
-            (publication_id,),
-        ).fetchone()
-    assert publication_state["status"] == "accepted"
-    assert publication_state["accepted_at"] is not None
-    assert client.get(
-        "/tasks/t-002/publications",
-        headers=auth(zhou),
-    ).status_code == 403
     assert client.get(
         "/devices/d-003/tasks/t-002/versions/v1.0.0/content",
         headers=auth(zhou),
@@ -1514,34 +1490,48 @@ def test_admin_publication_is_immediately_available_without_device_confirmation_
     )
     assert remote.status_code == 201
     assert remote.json()["status"] == "pending"
-    assert client.post(
+
+    publication = client.post(
         "/tasks/t-002/publications",
         headers=auth(admin),
-        json={"device_id": "d-001", "version": "v1.0.0"},
-    ).status_code == 201
-    assert client.get(
-        "/devices/d-001/tasks/t-002/versions/v1.0.0/content",
-        headers=auth(login(client)),
-    ).content == content
+        json={"device_id": "d-003", "version": "v1.0.0"},
+    )
+    assert publication.status_code == 201
 
     revoked = client.delete(
-        f"/tasks/t-002/publications/{publication_id}",
+        f"/tasks/t-002/publications/{publication.json()['id']}",
         headers=auth(admin),
     )
     assert revoked.status_code == 200
     assert next(
         item for item in client.get("/devices/d-003/remote-runs", headers=auth(zhou)).json()
         if item["id"] == remote.json()["id"]
-    )["status"] == "expired"
+    )["status"] == "pending"
     assert client.get(
         "/devices/d-003/tasks/t-002/versions/v1.0.0/content",
         headers=auth(zhou),
-    ).status_code == 403
+    ).content == content
     assert client.post(
         "/remote-runs",
         headers=auth(zhou),
         json={"task_id": "t-002", "device_id": "d-003"},
-    ).status_code == 403
+    ).status_code == 201
+
+    chen = login(client)
+    unrelated_publication = client.post(
+        "/tasks/t-002/publications",
+        headers=auth(admin),
+        json={"device_id": "d-001", "version": "v1.0.0"},
+    )
+    assert unrelated_publication.status_code == 201
+    assert all(
+        task["id"] != "t-002"
+        for task in client.post("/devices/d-001/sync", headers=auth(chen)).json()["tasks"]
+    )
+    assert client.get(
+        "/devices/d-001/tasks/t-002/versions/v1.0.0/content",
+        headers=auth(chen),
+    ).status_code == 404
     assert client.get("/admin/audit", headers=auth(admin)).json()
 
 
@@ -1562,6 +1552,8 @@ def test_task_list_reports_viewer_scoped_distinct_assigned_device_counts(client)
         headers=auth(admin),
         json={"status": "published"},
     ).status_code == 200
+    assert client.post("/tasks/t-002/grants/u-1001", headers=auth(admin)).status_code == 201
+    assert client.post("/tasks/t-002/grants/u-1002", headers=auth(admin)).status_code == 201
 
     publications = []
     for device_id, version in (
@@ -1584,7 +1576,7 @@ def test_task_list_reports_viewer_scoped_distinct_assigned_device_counts(client)
 
     admin_tasks = {task["id"]: task for task in client.get("/tasks", headers=auth(admin)).json()}
     chen_tasks = {task["id"]: task for task in client.get("/tasks", headers=auth(chen)).json()}
-    assert admin_tasks["t-002"]["assigned_device_count"] == 2
+    assert admin_tasks["t-002"]["assigned_device_count"] == 3
     assert chen_tasks["t-002"]["assigned_device_count"] == 2
     assert chen_tasks["t-001"]["assigned_device_count"] == 2
 
@@ -1595,7 +1587,7 @@ def test_task_list_reports_viewer_scoped_distinct_assigned_device_counts(client)
     ).status_code == 200
     admin_tasks = {task["id"]: task for task in client.get("/tasks", headers=auth(admin)).json()}
     chen_tasks = {task["id"]: task for task in client.get("/tasks", headers=auth(chen)).json()}
-    assert admin_tasks["t-002"]["assigned_device_count"] == 1
+    assert admin_tasks["t-002"]["assigned_device_count"] == 2
     assert chen_tasks["t-002"]["assigned_device_count"] == 1
     assert chen_tasks["t-001"]["assigned_device_count"] == 1
 
