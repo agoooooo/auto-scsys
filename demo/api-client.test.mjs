@@ -9,6 +9,7 @@ import {
   login,
   readSession,
   revokeSession,
+  requestRemoteRunStop,
   saveSession,
   uploadScriptVersion,
   waitForRemoteRun,
@@ -145,6 +146,22 @@ test("remote-run submission refuses an offline or foreign device before creating
   assert.deepEqual(calls, ["/devices"]);
 });
 
+test("remote-run stop sends a request-scoped idempotent stop command", async () => {
+  const calls = [];
+  const result = await requestRemoteRunStop(
+    { baseUrl: "http://localhost:8001", token: "access-token" },
+    "request/1",
+    async (url, options) => {
+      calls.push({ url: new URL(url).pathname, options });
+      return new Response(JSON.stringify({ status: "running", stop_requested: true }), { status: 200 });
+    },
+  );
+  assert.equal(calls[0].url, "/remote-runs/request%2F1/stop");
+  assert.equal(calls[0].options.method, "POST");
+  assert.ok(calls[0].options.headers.Authorization.startsWith("Bearer "));
+  assert.equal(result.stop_requested, true);
+});
+
 test("remote-run monitoring polls until completion and returns the safe result", async () => {
   const statuses = [
     { id: "request-1", status: "running", result_summary: "" },
@@ -252,14 +269,14 @@ test("snapshot loading maps API resources and requests only online devices", asy
       versions: [{ version: "v1.0.0", filename: "task.py", sha256: "hash" }],
     }],
     "/runs": [{
-      id: "r1", task_id: "t1", task_name: "OCR", version: "v1.0.0", device_id: "d1",
+      id: "r2", task_id: "t1", task_name: "OCR", version: "v1.0.0", device_id: "d1", remote_run_id: "q1",
       device_name: "Pixel", user_name: "Test User", status: "running", started_at: "now",
       result_summary: "",
     }],
     "/run-authorizations": [],
     "/devices/d1/remote-runs": [{
       id: "q1", task_id: "t1", task: "OCR", version: "v1.0.0", device_id: "d1",
-      requested_by: "u-admin", requested_by_name: "Admin", status: "running", run_id: "r2", created_at: "now",
+      requested_by: "u-admin", requested_by_name: "Admin", status: "running", run_id: "r2", stop_requested: true, created_at: "now",
       expires_at: 9999999999, source: "Owner", capabilities: ["OCR"],
     }],
   };
@@ -279,8 +296,11 @@ test("snapshot loading maps API resources and requests only online devices", asy
   assert.equal(snapshot.runs[0].taskId, "t1");
   assert.equal(snapshot.runs[0].deviceId, "d1");
   assert.equal(snapshot.runs[0].task, "OCR");
+  assert.equal(snapshot.runs[0].remoteRunId, "q1");
+  assert.equal(snapshot.runs[0].stopRequested, true);
   assert.equal(snapshot.remoteRuns[0].requestedBy, "Admin");
   assert.equal(snapshot.remoteRuns[0].runId, "r2");
+  assert.equal(snapshot.remoteRuns[0].stopRequested, true);
   assert.equal(calls.includes("/devices/d2/remote-runs"), false);
 });
 

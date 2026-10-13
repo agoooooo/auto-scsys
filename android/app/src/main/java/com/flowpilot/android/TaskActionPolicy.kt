@@ -12,6 +12,9 @@ internal fun canExecuteTaskScript(
     accessibilityEnabled: Boolean,
 ): Boolean = scriptReviewed && confirmationChecked && accessibilityEnabled
 
+internal fun shouldPollRemoteStop(remoteRequestId: String?, stopRequested: Boolean): Boolean =
+    !remoteRequestId.isNullOrBlank() && !stopRequested
+
 internal fun requiresScreenCapture(capabilities: List<String>): Boolean =
     capabilities.any { capability ->
         capability.contains("屏幕", ignoreCase = true) ||

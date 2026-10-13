@@ -90,6 +90,7 @@ class MainActivity : ComponentActivity() {
                         onSelectTask = { state = state.copy(selectedTaskId = it) },
                         onDispatch = ::dispatch,
                         onCancelPending = ::cancelPendingRun,
+                        onStopRunning = ::stopRunningRun,
                         onLogout = ::logout,
                     )
                 }
@@ -284,6 +285,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun stopRunningRun() {
+        val session = state.session ?: return
+        val run = state.run?.takeIf { it.status == "running" && !it.stopRequested } ?: return
+        if (state.loading) return
+        state = state.copy(loading = true, error = null, message = null)
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    ControllerApi(session.apiUrl).requestStop(session.token, run.id)
+                }
+                state = state.copy(
+                    loading = false,
+                    run = run.copy(stopRequested = true),
+                    message = "已发送停止请求，等待受控端响应",
+                )
+            } catch (error: Exception) {
+                state = state.copy(loading = false, error = error.message ?: "发送停止请求失败")
+            }
+        }
+    }
+
     private fun logout() {
         val session = state.session ?: return
         monitorJob?.cancel()
@@ -333,6 +355,7 @@ private fun ControllerScreen(
     onSelectTask: (String) -> Unit,
     onDispatch: () -> Unit,
     onCancelPending: () -> Unit,
+    onStopRunning: () -> Unit,
     onLogout: () -> Unit,
 ) {
     Column(
@@ -437,12 +460,19 @@ private fun ControllerScreen(
                             OutlinedButton(onClick = onCancelPending, enabled = !state.loading) {
                                 Text("取消等待中的任务")
                             }
+                        } else if (run.status == "running") {
+                            OutlinedButton(
+                                onClick = onStopRunning,
+                                enabled = !state.loading && !run.stopRequested,
+                            ) {
+                                Text(if (run.stopRequested) "已请求停止" else "停止运行")
+                            }
                         }
                     }
                 }
             }
             Spacer(Modifier.height(8.dp))
-            Text("控制端仅负责派发与跟踪，不包含脚本执行运行时。运行中停止功能尚待服务端和受控端停止协议支持。")
+            Text("控制端仅负责派发与跟踪，不包含脚本执行运行时。停止请求由受控端轮询，并在脚本的下一个停止检查点响应。")
         }
     }
 }

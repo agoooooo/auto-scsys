@@ -69,6 +69,15 @@ export async function createRemoteRunRequest(session, taskId, deviceId, fetchImp
   }, fetchImpl);
 }
 
+export function requestRemoteRunStop(session, requestId, fetchImpl = fetch) {
+  return apiRequest(
+    session,
+    `/remote-runs/${encodeURIComponent(requestId)}/stop`,
+    { method: "POST" },
+    fetchImpl,
+  );
+}
+
 export async function waitForRemoteRun(session, requestId, {
   fetchImpl = fetch,
   pollIntervalMs = 5000,
@@ -197,16 +206,6 @@ export async function loadSnapshot(session, fetchImpl = fetch) {
     capabilities: task.capabilities,
     apiVersions: task.versions,
   }));
-  const mappedRuns = runs.map((run) => ({
-    ...run,
-    taskId: run.task_id,
-    deviceId: run.device_id,
-    task: run.task_name,
-    device: run.device_name,
-    user: run.user_name,
-    result: run.result_summary,
-    remoteRunId: run.remote_run_id,
-  }));
   const mappedRequests = deviceRequests.flat().map((request) => ({
     ...request,
     taskId: request.task_id,
@@ -218,6 +217,18 @@ export async function loadSnapshot(session, fetchImpl = fetch) {
     requestedAt: new Date(request.created_at).getTime(),
     expiresAt: request.expires_at * 1000,
     runId: request.run_id,
+    stopRequested: request.stop_requested === true,
+  }));
+  const mappedRuns = runs.map((run) => ({
+    ...run,
+    taskId: run.task_id,
+    deviceId: run.device_id,
+    task: run.task_name,
+    device: run.device_name,
+    user: run.user_name,
+    result: run.result_summary,
+    remoteRunId: run.remote_run_id,
+    stopRequested: mappedRequests.find((request) => request.id === run.remote_run_id)?.stopRequested ?? false,
   }));
   const mappedAuthorizations = authorizations.map((item) => ({
     ...item,

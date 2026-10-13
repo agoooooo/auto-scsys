@@ -95,6 +95,7 @@ internal class TaskExecutionService : Service() {
         var api: ApiClient? = null
         var activeSession: StoredSession? = null
         var heartbeatJob: Job? = null
+        var stopPollJob: Job? = null
 
         store.update(runId, taskName, taskVersion, "running", "正在执行")
         notifyRunStatusChanged()
@@ -109,6 +110,46 @@ internal class TaskExecutionService : Service() {
             val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID)
                 ?: session.deviceId
                 ?: throw IllegalStateException("当前账号尚未绑定此设备")
+            val remoteRequestId = intent.getStringExtra(EXTRA_REMOTE_REQUEST_ID)
+            if (!remoteRequestId.isNullOrBlank()) {
+                val stopCheckSession = freshSession()
+                val initialRemoteStatus = withContext(Dispatchers.IO) {
+                    ApiClient(stopCheckSession.apiBaseUrl)
+                        .remoteRunStatus(stopCheckSession.token, remoteRequestId)
+                }
+                if (initialRemoteStatus.stopRequested) stopRequested.set(true)
+                ensureNotStopped()
+                stopPollJob = serviceScope.launch {
+                    var pollErrorLogged = false
+                    while (isActive && shouldPollRemoteStop(remoteRequestId, stopRequested.get())) {
+                        try {
+                            val pollSession = freshSession()
+                            val remoteStatus = ApiClient(pollSession.apiBaseUrl)
+                                .remoteRunStatus(pollSession.token, remoteRequestId)
+                            pollErrorLogged = false
+                            if (remoteStatus.stopRequested && stopRequested.compareAndSet(false, true)) {
+                                setTaskNotification(
+                                    "收到控制端停止请求，将在脚本下一个检查点停止",
+                                    ongoing = true,
+                                )
+                                break
+                            }
+                        } catch (exception: CancellationException) {
+                            throw exception
+                        } catch (exception: Exception) {
+                            if (!pollErrorLogged) {
+                                RunStatusStore(this@TaskExecutionService).appendLog(
+                                    "检查远程停止请求失败：${exception.message ?: "服务器不可用"}",
+                                )
+                                pollErrorLogged = true
+                            }
+                        }
+                        if (shouldPollRemoteStop(remoteRequestId, stopRequested.get())) {
+                            delay(REMOTE_STOP_POLL_INTERVAL_MILLIS)
+                        }
+                    }
+                }
+            }
             heartbeatJob = serviceScope.launch {
                 while (isActive) {
                     delay(HEARTBEAT_INTERVAL_MILLIS)
@@ -176,6 +217,7 @@ internal class TaskExecutionService : Service() {
             summary = if (stopRequested.get()) "用户停止了任务" else exception.message ?: "任务执行失败"
         } finally {
             heartbeatJob?.cancelAndJoin()
+            stopPollJob?.cancelAndJoin()
             try {
                 if (ownsCaptureSession) capture?.close()
             } catch (exception: Exception) {
@@ -344,6 +386,7 @@ internal class TaskExecutionService : Service() {
         const val EXTRA_TASK_VERSION = "task_version"
         const val EXTRA_TASK_CAPABILITIES = "task_capabilities"
         const val EXTRA_DEVICE_ID = "device_id"
+        const val EXTRA_REMOTE_REQUEST_ID = "remote_request_id"
         const val EXTRA_CAPTURE_RESULT_CODE = "capture_result_code"
         const val EXTRA_CAPTURE_RESULT_DATA = "capture_result_data"
         const val CHANNEL_ID = "flowpilot_task_execution"
@@ -352,6 +395,7 @@ internal class TaskExecutionService : Service() {
         private const val MAX_LOG_ENTRY_CHARS = 500
         private const val SERVICE_START_GRACE_PERIOD_MILLIS = 1_000L
         private const val HEARTBEAT_INTERVAL_MILLIS = 60_000L
+        private const val REMOTE_STOP_POLL_INTERVAL_MILLIS = 5_000L
         private const val TOKEN_REFRESH_LEAD_SECONDS = 5 * 60L
         private const val SCRIPT_CACHE_DIRECTORY = "verified_scripts"
 
@@ -362,6 +406,7 @@ internal class TaskExecutionService : Service() {
             captureResultCode: Int?,
             captureResultData: Intent?,
             deviceId: String,
+            remoteRequestId: String? = null,
         ) {
             val intent = Intent(context, TaskExecutionService::class.java)
                 .setAction(ACTION_EXECUTE)
@@ -371,6 +416,7 @@ internal class TaskExecutionService : Service() {
                 .putExtra(EXTRA_TASK_VERSION, task.version)
                 .putExtra(EXTRA_DEVICE_ID, deviceId)
                 .putExtra(EXTRA_TASK_CAPABILITIES, task.capabilities.toTypedArray())
+            remoteRequestId?.let { intent.putExtra(EXTRA_REMOTE_REQUEST_ID, it) }
             if (captureResultCode != null && captureResultData != null) {
                 intent.putExtra(EXTRA_CAPTURE_RESULT_CODE, captureResultCode)
                     .putExtra(EXTRA_CAPTURE_RESULT_DATA, captureResultData)

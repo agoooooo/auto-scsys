@@ -1446,6 +1446,7 @@ def test_existing_database_migrates_active_version_and_authorization_scope(clien
     with sqlite3.connect(db_path) as db:
         db.execute("ALTER TABLE tasks DROP COLUMN active_version")
         db.execute("ALTER TABLE run_authorizations DROP COLUMN all_versions")
+        db.execute("ALTER TABLE remote_runs DROP COLUMN stop_requested_at")
 
     app = create_app(db_path, b"test-secret-must-be-at-least-32-bytes")
     with TestClient(app) as migrated_client:
@@ -1457,7 +1458,11 @@ def test_existing_database_migrates_active_version_and_authorization_scope(clien
             authorization_columns = {
                 row[1] for row in db.execute("PRAGMA table_info(run_authorizations)")
             }
+            remote_run_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(remote_runs)")
+            }
         assert "all_versions" in authorization_columns
+        assert "stop_requested_at" in remote_run_columns
 
 
 def test_remote_run_confirmation_rejection_and_run_record(client):
@@ -1531,6 +1536,7 @@ def test_device_can_poll_remote_run_until_execution_finishes(client):
         headers=auth(user),
         json={"decision": "approve"},
     ).json()
+    assert client.get("/runs", headers=auth(user)).json()[0]["remote_run_id"] == request["id"]
 
     polled = client.get("/devices/d-001/remote-runs", headers=auth(user))
     assert polled.status_code == 200
@@ -1550,6 +1556,69 @@ def test_device_can_poll_remote_run_until_execution_finishes(client):
     )
     assert completed.status_code == 200
     assert client.get("/devices/d-001/remote-runs", headers=auth(user)).json() == []
+
+
+def test_remote_run_stop_request_is_authorized_idempotent_and_visible_to_device(client):
+    user = login(client)
+    admin = login(client, "admin@example.com", "admin-demo")
+    other_user = login(client, "zhou.ke@example.com", "user-demo")
+    request = client.post(
+        "/remote-runs",
+        headers=auth(user),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).json()
+    run_id = client.patch(
+        f"/remote-runs/{request['id']}",
+        headers=auth(user),
+        json={"decision": "approve"},
+    ).json()["run_id"]
+
+    path = f"/remote-runs/{request['id']}/stop"
+    assert client.post(path, headers=auth(other_user)).status_code == 404
+    assert client.post(path, headers=auth(admin)).status_code == 403
+
+    stopped = client.post(path, headers=auth(user))
+    assert stopped.status_code == 200
+    assert stopped.json() == {
+        "id": request["id"],
+        "status": "running",
+        "stop_requested": True,
+        "already_requested": False,
+    }
+    repeated = client.post(path, headers=auth(user))
+    assert repeated.status_code == 200
+    assert repeated.json()["already_requested"] is True
+
+    polled = client.get("/devices/d-001/remote-runs", headers=auth(user))
+    assert polled.status_code == 200
+    assert polled.json()[0]["stop_requested"] is True
+    status = client.get(f"/remote-runs/{request['id']}", headers=auth(user))
+    assert status.json()["stop_requested"] is True
+    events = client.get("/admin/audit", headers=auth(admin)).json()
+    assert sum(
+        event["action"] == "remote_run.stop_requested" and event["resource_id"] == request["id"]
+        for event in events
+    ) == 1
+
+    completed = client.post(
+        f"/runs/{run_id}",
+        headers=auth(user),
+        json={"status": "stopped", "result_summary": "用户停止了任务"},
+    )
+    assert completed.status_code == 200
+    assert client.get(f"/remote-runs/{request['id']}", headers=auth(user)).json()["stop_requested"] is False
+    assert client.post(path, headers=auth(user)).status_code == 409
+
+
+def test_remote_run_cannot_be_stopped_before_device_accepts_it(client):
+    user = login(client)
+    request = client.post(
+        "/remote-runs",
+        headers=auth(user),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).json()
+    response = client.post(f"/remote-runs/{request['id']}/stop", headers=auth(user))
+    assert response.status_code == 409
 
 
 def test_device_user_must_confirm_remote_runs_and_can_report_local_runs(client):

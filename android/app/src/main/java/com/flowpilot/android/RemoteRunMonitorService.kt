@@ -134,6 +134,7 @@ internal class RemoteRunMonitorService : Service() {
                                     captureResultCode = null,
                                     captureResultData = null,
                                     deviceId = deviceId,
+                                    remoteRequestId = request.id,
                                 )
                                 markHandled(request.id)
                             } catch (exception: Exception) {

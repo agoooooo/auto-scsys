@@ -38,6 +38,11 @@ internal data class RunRecord(
     val resultSummary: String,
 )
 
+internal data class RemoteRunStatus(
+    val status: String,
+    val stopRequested: Boolean,
+)
+
 internal data class DownloadedScript(
     val filename: String,
     val source: String,
@@ -280,6 +285,17 @@ internal class ApiClient(baseUrl: String) {
                 .put("decision", "approve"),
         ))
         return response.optString("run_id").takeIf(String::isNotBlank)
+    }
+
+    fun remoteRunStatus(token: String, requestId: String): RemoteRunStatus {
+        val response = JSONObject(request(
+            "/remote-runs/${encodePathSegment(requestId)}",
+            token = token,
+        ))
+        return RemoteRunStatus(
+            status = response.optString("status"),
+            stopRequested = response.optBoolean("stop_requested"),
+        )
     }
 
     fun listRuns(token: String): List<RunRecord> =

@@ -101,6 +101,14 @@ class TaskActionPolicyTest {
     }
 
     @Test
+    fun remoteStopPollingOnlyAppliesToActiveRemoteRuns() {
+        assertTrue(shouldPollRemoteStop("remote-request", stopRequested = false))
+        assertFalse(shouldPollRemoteStop(null, stopRequested = false))
+        assertFalse(shouldPollRemoteStop("", stopRequested = false))
+        assertFalse(shouldPollRemoteStop("remote-request", stopRequested = true))
+    }
+
+    @Test
     fun remoteRequestsRunDirectlyWhenRequiredSystemCapabilitiesAreReady() {
         assertTrue(requiresScreenCapture(listOf("OCR 文字识别")))
         assertTrue(requiresScreenCapture(listOf("屏幕捕获（需系统授权）")))

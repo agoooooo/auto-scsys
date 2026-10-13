@@ -128,8 +128,8 @@ The helper intentionally does not create the destination, encrypt, upload, rotat
 - `GET /devices/{id}/tasks/{task_id}/versions/{version}/content-url`（授权后签发 5 分钟脚本下载地址；SQLite 返回直连兼容模式）
 - `GET /devices/{id}/tasks/{task_id}/versions/{version}/content`（SQLite/旧客户端兼容下载）
 - `POST /devices/{id}/publications/{publication_id}/accept`（设备用户确认接收指定脚本版本）
-- `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`GET /remote-runs/{id}`、`PATCH /remote-runs/{id}`；只有普通用户可为自己的设备创建远程运行请求。新请求一律保持待处理状态，Android 客户端须在服务端重新校验并批准后才会建立运行记录；历史预授权不会自动启动当前客户端的请求。设备轮询结果包含待处理请求、运行中的请求及最近 50 条过期请求，方便设备端显示过期状态；运行中的请求包含 `run_id`。Web 创建请求后会轮询该状态接口，直至显示成功、失败、停止或过期；设备只向服务端上报固定的安全诊断摘要，不会上传任意脚本异常或屏幕内容
-- `POST /runs/{id}`、`GET /runs`
+- `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`GET /remote-runs/{id}`、`PATCH /remote-runs/{id}`、`POST /remote-runs/{id}/stop`；只有普通用户可为自己的设备创建远程运行请求或请求停止。新请求一律保持待处理状态，Android 客户端须在服务端重新校验并批准后才会建立运行记录；历史预授权不会自动启动当前客户端的请求。设备轮询结果包含待处理请求、运行中的请求及最近 50 条过期请求，方便设备端显示过期状态；运行中的请求包含 `run_id` 和 `stop_requested`。运行中的停止请求以幂等标记传给受控端，受控端执行期间每 5 秒查询，脚本在下一个停止检查点退出；此信令不强行终止 Android 进程或任意阻塞代码。Web/App 查询请求状态时也会看到停止标记，结束状态仍由受控端上报。设备只向服务端上报固定的安全诊断摘要，不会上传任意脚本异常或屏幕内容
+- `POST /runs/{id}`、`GET /runs`（包含可用于关联远程请求的 `remote_run_id`）
 - `GET/POST/DELETE /run-authorizations`、`GET /admin/audit`
 
 管理员将已发布版本分发到具体设备后，设备用户先看到版本来源、更新说明和能力列表；确认接收后，服务端才允许该设备同步和下载该版本。服务端对运行请求和下载分别校验账号、设备、任务授权及已确认的版本。Android 客户端在服务端鉴权后自动批准并启动新请求，不需要逐次任务确认或有限预授权；旧预授权记录不会绕过当前客户端的设备端批准流程。这不等同于授予 Android 系统权限。请求需要的无障碍能力必须已启用；OCR/屏幕捕获仍要求 Android 系统授权。如果设备已主动开启持续 OCR 前台服务且会话有效，可在会话期间复用授权，否则客户端须先通过系统授权后运行。会话结束、系统回收或撤销共享后，必须重新授权。运行 API 只记录客户端回报状态，不在服务端或浏览器里执行 Python。

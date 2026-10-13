@@ -204,7 +204,8 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
                 status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'rejected', 'expired', 'success', 'failure', 'stopped')),
                 created_at TEXT NOT NULL,
                 expires_at INTEGER NOT NULL,
-                run_id TEXT
+                run_id TEXT,
+                stop_requested_at TEXT
             );
             CREATE TABLE IF NOT EXISTS run_authorizations (
                 id TEXT PRIMARY KEY,
@@ -269,6 +270,9 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
         authorization_columns = db.table_columns("run_authorizations")
         if "all_versions" not in authorization_columns:
             db.execute("ALTER TABLE run_authorizations ADD COLUMN all_versions INTEGER NOT NULL DEFAULT 0")
+        remote_run_columns = db.table_columns("remote_runs")
+        if "stop_requested_at" not in remote_run_columns:
+            db.execute("ALTER TABLE remote_runs ADD COLUMN stop_requested_at TEXT")
         if seed_demo and db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
             _seed_database(db)
         db.execute("UPDATE task_versions SET content_size=length(content) WHERE content_size=0 AND content IS NOT NULL")
@@ -1751,6 +1755,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             "requested_by_name": row["requested_by_name"],
             "created_at": row["created_at"], "expires_at": row["expires_at"], "source": row["source"],
             "capabilities": json.loads(row["capabilities_json"]),
+            "stop_requested": bool(row["stop_requested_at"]) and row["status"] == "running",
         } for row in rows]
 
     @app.get("/remote-runs/{request_id}")
@@ -1774,7 +1779,51 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             "run_id": request["run_id"],
             "run_status": request["run_status"],
             "result_summary": request["result_summary"] or "",
+            "stop_requested": bool(request["stop_requested_at"]) and request["status"] == "running",
             "expires_at": request["expires_at"],
+        }
+
+    @app.post("/remote-runs/{request_id}/stop")
+    def request_remote_run_stop(request_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
+        request = db.execute(
+            """SELECT r.*,run.status AS run_status
+               FROM remote_runs r
+               LEFT JOIN runs run ON run.remote_run_id=r.id
+               WHERE r.id=?""",
+            (request_id,),
+        ).fetchone()
+        if not request:
+            raise HTTPException(status_code=404, detail="运行请求不存在")
+        device = _device_for_user(db, request["device_id"], user)
+        if user["role"] != "user" or device["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="只有目标设备所属用户可以停止运行")
+        if request["status"] != "running" or request["run_status"] != "running":
+            raise HTTPException(status_code=409, detail="任务当前不在运行状态")
+
+        already_requested = request["stop_requested_at"] is not None
+        if not already_requested:
+            changed = db.execute(
+                """UPDATE remote_runs SET stop_requested_at=?
+                   WHERE id=? AND status='running' AND stop_requested_at IS NULL""",
+                (utc_now(), request_id),
+            ).rowcount
+            updated = db.execute(
+                "SELECT stop_requested_at,status FROM remote_runs WHERE id=?",
+                (request_id,),
+            ).fetchone()
+            if updated["status"] != "running":
+                raise HTTPException(status_code=409, detail="任务已结束，无法停止")
+            if updated["stop_requested_at"] is None:
+                raise HTTPException(status_code=409, detail="停止请求未能提交，请重试")
+            if changed:
+                audit(db, user["id"], "remote_run.stop_requested", "remote_run", request_id)
+            else:
+                already_requested = True
+        return {
+            "id": request_id,
+            "status": "running",
+            "stop_requested": True,
+            "already_requested": already_requested,
         }
 
     @app.patch("/remote-runs/{request_id}")
@@ -1839,7 +1888,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
 
     @app.get("/runs")
     def list_runs(user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
-        query = """SELECT r.id,r.task_id,t.name AS task_name,r.version,r.device_id,d.name AS device_name,
+        query = """SELECT r.id,r.task_id,t.name AS task_name,r.version,r.device_id,r.remote_run_id,d.name AS device_name,
                           d.user_id,u.name AS user_name,r.status,r.started_at,r.finished_at,r.result_summary
                    FROM runs r JOIN tasks t ON t.id=r.task_id JOIN devices d ON d.id=r.device_id
                    JOIN users u ON u.id=d.user_id"""

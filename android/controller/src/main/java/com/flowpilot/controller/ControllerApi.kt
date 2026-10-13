@@ -25,6 +25,7 @@ internal data class ControllerRunStatus(
     val status: String,
     val runStatus: String?,
     val resultSummary: String,
+    val stopRequested: Boolean = false,
 )
 
 internal fun normalizeControllerApiUrl(value: String, allowCleartext: Boolean = BuildConfig.DEBUG): String {
@@ -103,6 +104,7 @@ internal class ControllerApi(baseUrl: String) {
                     status = it.optString("status"),
                     runStatus = null,
                     resultSummary = "",
+                    stopRequested = it.optBoolean("stop_requested"),
                 )
             }
 
@@ -128,6 +130,14 @@ internal class ControllerApi(baseUrl: String) {
         )
     }
 
+    fun requestStop(token: String, requestId: String) {
+        request(
+            "/remote-runs/${encode(requestId)}/stop",
+            "POST",
+            token,
+        )
+    }
+
     fun runStatus(token: String, requestId: String): ControllerRunStatus {
         val response = JSONObject(request("/remote-runs/${encode(requestId)}", token = token))
         return ControllerRunStatus(
@@ -135,6 +145,7 @@ internal class ControllerApi(baseUrl: String) {
             status = response.optString("status"),
             runStatus = response.optString("run_status").takeIf(String::isNotBlank),
             resultSummary = response.optString("result_summary"),
+            stopRequested = response.optBoolean("stop_requested"),
         )
     }
 

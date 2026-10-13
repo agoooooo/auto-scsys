@@ -24,6 +24,7 @@ import {
   login,
   readSession,
   revokeSession,
+  requestRemoteRunStop,
   uploadScriptVersion,
   waitForRemoteRun,
 } from "./api-client.mjs";
@@ -89,6 +90,7 @@ const auditActionLabels = {
   "remote_run.requested": "请求远程运行",
   "remote_run.rejected": "拒绝远程运行",
   "remote_run.approved": "确认远程运行",
+  "remote_run.stop_requested": "请求停止远程运行",
   "run.local_started": "启动本地运行",
   "run_authorization.created": "创建运行预授权",
   "run_authorization.revoked": "撤销运行预授权",
@@ -478,7 +480,7 @@ function phoneTaskCard(task) {
   const activeRun = state.runs.find((item) => item.taskId === task.id && item.deviceId === currentPhoneDeviceId && item.status === "running");
   return `<article class="phone-task"><div class="phone-task-top"><div class="task-symbol">⌕</div><div style="flex:1"><strong>${escapeHtml(task.name)}</strong><small>${escapeHtml(task.category)} · ${escapeHtml(task.activeVersion)}</small></div>${statusPill(task.status)}</div>
     <p>${escapeHtml(task.description)}</p>
-    ${activeRun ? `<div class="run-live"><span class="status-pill running">设备上运行中 · ${escapeHtml(activeRun.version)}</span>${canRun ? `<button class="phone-run" data-action="finish-run" data-id="${escapeHtml(activeRun.id)}">模拟完成 OCR</button><button class="secondary-button" data-action="stop-run" data-id="${escapeHtml(activeRun.id)}">停止任务</button>` : `<small class="form-hint">请以设备所属用户账号登录以更新运行状态。</small>`}</div>` : `<button class="phone-run" data-action="local-run" data-id="${escapeHtml(task.id)}" ${task.status !== "published" || !canRun ? "disabled" : ""}>▶　查看说明并运行</button>`}
+    ${activeRun ? `<div class="run-live"><span class="status-pill running">${activeRun.stopRequested ? "已请求停止" : "设备上运行中"} · ${escapeHtml(activeRun.version)}</span>${!session ? `<button class="phone-run" data-action="finish-run" data-id="${escapeHtml(activeRun.id)}">模拟完成 OCR</button><button class="secondary-button" data-action="stop-run" data-id="${escapeHtml(activeRun.id)}">停止任务</button>` : activeRun.remoteRunId && canRun ? `<button class="secondary-button" data-action="stop-run" data-id="${escapeHtml(activeRun.id)}" ${activeRun.stopRequested ? "disabled" : ""}>${activeRun.stopRequested ? "已请求停止" : "停止任务"}</button>` : session.user.role === "user" ? `<small class="form-hint">请在受控端停止本地启动的任务。</small>` : `<small class="form-hint">请以设备所属用户账号登录以控制运行。</small>`}</div>` : `<button class="phone-run" data-action="local-run" data-id="${escapeHtml(task.id)}" ${task.status !== "published" || !canRun ? "disabled" : ""}>▶　查看说明并运行</button>`}
     </article>`;
 }
 
@@ -504,7 +506,7 @@ function renderPhoneContent() {
     const systemConsentRequired = requiresRemoteSystemAuthorization(task?.capabilities);
     return `<article class="request-card"><strong>${escapeHtml(request.task)} ${statusPill(request.status)}</strong><small>${escapeHtml(request.version)} · ${escapeHtml(request.requestedBy)} 发起 · ${escapeHtml(request.device)}</small><p>脚本来源：${escapeHtml(task?.source ?? "未知")}<br>能力：${(task?.capabilities ?? []).map(escapeHtml).join("、")}</p>${request.status === "pending" ? `<small>设备收到请求后由 App 在服务端校验通过后自动启动，无需确认任务。</small>` : `<small>请求已过期，设备不会启动。</small>`}${systemConsentRequired && request.status === "pending" ? `<small>屏幕捕获仍须设备用户按 Android 系统流程授权。</small>` : ""}</article>`;
   }).join("")}` : ""}
-    ${running.length ? `<div class="phone-section-title">前台运行 <small>可随时停止</small></div>${running.map((run) => `<div class="phone-device"><div class="activity-icon">▶</div><span><strong>${escapeHtml(run.task)} · ${escapeHtml(run.version)}</strong><small>${escapeHtml(run.device)} · 持续运行中</small></span>${session?.user.role === "user" ? `<button class="text-button" data-action="stop-run" data-id="${escapeHtml(run.id)}">停止</button>` : ""}</div>`).join("")}` : ""}
+    ${running.length ? `<div class="phone-section-title">前台运行 <small>任务可从控制端停止</small></div>${running.map((run) => `<div class="phone-device"><div class="activity-icon">▶</div><span><strong>${escapeHtml(run.task)} · ${escapeHtml(run.version)}</strong><small>${escapeHtml(run.device)} · ${run.stopRequested ? "等待停止" : "持续运行中"}</small></span>${!session ? `<button class="text-button" data-action="stop-run" data-id="${escapeHtml(run.id)}">停止</button>` : session.user.role === "user" && run.remoteRunId ? `<button class="text-button" data-action="stop-run" data-id="${escapeHtml(run.id)}" ${run.stopRequested ? "disabled" : ""}>${run.stopRequested ? "已请求" : "停止"}</button>` : ""}</div>`).join("")}` : ""}
     <div class="phone-section-title">可用任务 <small>${tasks.length} 个</small></div>${tasks.length ? tasks.map(phoneTaskCard).join("") : `<div class="empty-state">暂时没有可用任务</div>`}
     <div class="phone-section-title">最近运行 <small data-phone-tab="activity">全部记录 →</small></div>
     ${state.runs.filter((run) => run.deviceId === currentPhoneDeviceId && run.status !== "running").slice(0, 2).map((run) => `<div class="phone-device"><div class="activity-icon ${run.status === "success" ? "" : "warning"}">${run.status === "success" ? "✓" : "!"}</div><span><strong>${escapeHtml(run.task)} · ${statusPill(run.status)}</strong><small>${escapeHtml(run.result ?? "")}</small></span></div>`).join("") || `<div class="empty-state">暂无运行记录</div>`}`;
@@ -987,19 +989,18 @@ document.addEventListener("click", async (event) => {
   } else if (action === "finish-run" || action === "stop-run") {
     try {
       if (session) {
-        await apiRequest(session, `/runs/${encodeURIComponent(id)}`, {
-          method: "POST",
-          body: {
-            status: action === "finish-run" ? "success" : "stopped",
-            result_summary: action === "finish-run" ? "演示 OCR 识别到「已发货」" : "用户已停止任务",
-          },
-        });
+        if (action !== "stop-run") throw new Error("真实设备运行不能由 Web 模拟完成");
+        const run = state.runs.find((item) => item.id === id);
+        if (!run?.remoteRunId) throw new Error("本地启动的任务请在受控端停止");
+        await requestRemoteRunStop(session, run.remoteRunId);
         await refreshFromApi();
       } else {
         state = finishRun(state, id, action === "finish-run" ? "success" : "stopped");
         render();
       }
-      showToast(action === "finish-run" ? "演示运行完成，结果已记录" : "任务已停止");
+      showToast(session
+        ? "已发送停止请求，受控端将在脚本的下一个停止检查点退出"
+        : action === "finish-run" ? "演示运行完成，结果已记录" : "任务已停止");
     } catch (error) { showToast(error.message); }
   } else if (action === "sync-devices") {
     if (!session) showToast("设备状态已同步（演示）");

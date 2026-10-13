@@ -184,6 +184,7 @@ class MainActivity : ComponentActivity() {
                     captureResultCode = result.resultCode,
                     captureResultData = result.data!!,
                     deviceId = device.id,
+                    remoteRequestId = pending.remoteRequestId,
                 )
                 douyinIntent?.let(::startActivity)
                 flowPilotViewModel.refreshRunStatus()
@@ -398,6 +399,7 @@ class MainActivity : ComponentActivity() {
                     captureResultCode = null,
                     captureResultData = null,
                     deviceId = deviceId,
+                    remoteRequestId = remoteRequestId,
                 )
                 RemoteRunMonitorService.markRequestHandled(this, remoteRequestId.orEmpty())
                 flowPilotViewModel.refreshRunStatus()
@@ -460,6 +462,7 @@ class MainActivity : ComponentActivity() {
                     captureResultCode = null,
                     captureResultData = null,
                     deviceId = device.id,
+                    remoteRequestId = remoteRequestId,
                 )
                 remoteRequestId?.let {
                     RemoteRunMonitorService.markRequestHandled(this@MainActivity, it)
