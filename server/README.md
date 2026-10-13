@@ -37,7 +37,7 @@ FLOWPILOT_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32)
 
 ## Private staging (HTTP, loopback-only by default)
 
-Use the separate `compose.staging.yaml` to test PostgreSQL, RustFS/S3, Web/API, and script presigned transfers before configuring public domains or HTTPS. RustFS is an S3-compatible staging backend; it does not replace the MinIO/S3 backend configured for the final production Compose, so run a separate compatibility check against the actual production storage provider before launch. Staging runs with `FLOWPILOT_ENV=staging`: it requires PostgreSQL, S3-compatible storage, a stable test-only token secret, and exact CORS origins; it disables demo account seeding and API documentation and rejects seeded demo accounts. Host ports bind to `127.0.0.1` by default, and the Caddy/public proxy is not included.
+Use the separate `compose.staging.yaml` to test PostgreSQL, RustFS/S3, Web/API, and script presigned transfers before configuring public domains or HTTPS. RustFS runs with its disk-layout check bypassed because all staging volumes share one host disk; this is strictly for single-host staging and must never be enabled for production storage. RustFS is an S3-compatible staging backend; it does not replace the MinIO/S3 backend configured for the final production Compose, so run a separate compatibility check against the actual production storage provider before launch. Staging runs with `FLOWPILOT_ENV=staging`: it requires PostgreSQL, S3-compatible storage, a stable test-only token secret, and exact CORS origins; it disables demo account seeding and API documentation and rejects seeded demo accounts. Host ports bind to `127.0.0.1` by default, and the Caddy/public proxy is not included.
 
 Create a private environment file with unique staging-only credentials. Generate random values locally; use URL-encoded credentials in `FLOWPILOT_DATABASE_URL` if they contain reserved characters.
 
@@ -50,11 +50,13 @@ docker compose --env-file .env.staging -p flowpilot-staging -f compose.staging.y
 curl --fail http://127.0.0.1:18001/health/ready
 ```
 
-The console is `http://127.0.0.1:18000/demo/`. On its login screen, set the API address to `http://127.0.0.1:18001`; initialize a dedicated staging administrator:
+The console is `http://127.0.0.1:18000/demo/`. On its login screen, set the API address to `http://127.0.0.1:18001`. On a fresh database, initialize a dedicated staging administrator once:
 
 ```bash
 docker compose --env-file .env.staging -p flowpilot-staging -f compose.staging.yaml exec api python -m server.bootstrap_admin
 ```
+
+For the already initialized staging database in this workspace, the generated admin email and password are stored locally in `.env.staging`, which is git-ignored and mode `600`.
 
 For an Android device or another trusted LAN client, explicitly set `FLOWPILOT_STAGING_BIND_ADDRESS` to the host's private LAN IP and set `FLOWPILOT_STAGING_WEB_ORIGIN` and `FLOWPILOT_STAGING_S3_PUBLIC_ENDPOINT` to that same IP with their configured ports. Restrict host firewall ingress to the intended test clients. Do not bind to `0.0.0.0`, forward router ports, connect real accounts, or expose this HTTP setup to the internet. Android staging tests require a Debug APK because Release rejects cleartext HTTP.
 
