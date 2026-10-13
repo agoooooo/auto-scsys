@@ -59,14 +59,19 @@ python -m server.database_backup backup --database "$FLOWPILOT_DB_PATH" --output
 python -m server.database_backup verify --backup /secure-backups/flowpilot.sqlite3
 ```
 
-For Compose PostgreSQL, run a custom-format dump from the database container and send it directly to encrypted off-host storage:
+For Compose PostgreSQL, configure an existing encrypted off-host directory (for example, an encrypted mounted backup volume), then schedule the repository backup helper. It writes owner-only files, verifies the custom-format archive with `pg_restore --list`, and creates a SHA-256 sidecar:
 
 ```bash
-umask 077
-docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > /secure-backups/flowpilot.dump
+scripts/backup-postgres.sh /mnt/encrypted-backups/flowpilot
 ```
 
-Back up the MinIO object volume independently (or use a managed S3 provider with versioning/replication); the Compose volume is persistence, not a backup. Restrict backup access, encrypt it off-host, monitor completion, and regularly rehearse restoring both the database and object data together. This repository does not schedule, encrypt, rotate, upload, or monitor backups.
+For example, a host cron entry can run it daily after replacing the checkout and backup paths with the host's real paths:
+
+```cron
+15 2 * * * cd /opt/flowpilot && /opt/flowpilot/scripts/backup-postgres.sh /mnt/encrypted-backups/flowpilot
+```
+
+The helper intentionally does not create the destination, encrypt, upload, rotate, or monitor backups; the destination must already be protected encrypted off-host storage, and the operator must alert on scheduler failures and manage retention. It backs up PostgreSQL only. Back up the MinIO object volume independently or use a managed S3 provider with versioning/replication, and coordinate database/object recovery so version metadata does not outlive its script objects. Before restoring production data, rehearse on a separate disposable host/database, validate the archive checksum, restore the database and objects, and verify `/health/ready`, login, script downloads, and execution records. This repository cannot perform a real restore drill without the operator's production-like backup destination and object store.
 
 ## Health probes
 
