@@ -111,6 +111,10 @@ class ControllerPolicyTest {
             listOf("设备", "任务", "运行", "我的"),
             ControllerDestination.entries.map(ControllerDestination::label),
         )
+        assertEquals(
+            listOf("我的", "个人资料", "账号与安全"),
+            ControllerAccountPage.entries.map(ControllerAccountPage::title),
+        )
     }
 
     @Test
