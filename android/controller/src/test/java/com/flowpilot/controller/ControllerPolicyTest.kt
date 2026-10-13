@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import androidx.compose.ui.graphics.Color
 
 class ControllerPolicyTest {
     @Test
@@ -52,5 +53,12 @@ class ControllerPolicyTest {
             listOf("派发", "运行", "账号"),
             ControllerDestination.entries.map(ControllerDestination::label),
         )
+    }
+
+    @Test
+    fun controllerThemeUsesGreenAccentAndLightSurfaces() {
+        assertEquals(Color(0xFF07C160), ControllerColorScheme.primary)
+        assertEquals(Color(0xFFF5F7F6), ControllerColorScheme.background)
+        assertEquals(Color.White, ControllerColorScheme.surface)
     }
 }

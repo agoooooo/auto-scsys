@@ -6,9 +6,10 @@ import org.junit.Test
 
 class FlowPilotThemeTest {
     @Test
-    fun paletteMatchesTheWebDemoTheme() {
+    fun androidThemeUsesGreenAccentAndNeutralSurfaces() {
         assertEquals(Color(0xFFF5F7FB), FlowPilotColorScheme.background)
-        assertEquals(Color(0xFF6C5CE7), FlowPilotColorScheme.primary)
+        assertEquals(Color(0xFF07C160), FlowPilotColorScheme.primary)
+        assertEquals(Color(0xFFE1F5E9), FlowPilotColorScheme.primaryContainer)
         assertEquals(Color(0xFF172033), FlowPilotColorScheme.onSurface)
         assertEquals(Color.White, FlowPilotColorScheme.surface)
     }

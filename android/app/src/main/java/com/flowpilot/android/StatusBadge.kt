@@ -23,8 +23,8 @@ internal fun runStatusBadgeStyle(status: String): StatusBadgeStyle = when (statu
         background = Color(0xFFEAF8F2),
     )
     "running", "pending", "awaiting_permission" -> StatusBadgeStyle(
-        foreground = FlowPilotPalette.PurpleDark,
-        background = FlowPilotPalette.PurpleSoft,
+        foreground = FlowPilotPalette.AccentDark,
+        background = FlowPilotPalette.AccentSoft,
     )
     "offline" -> StatusBadgeStyle(
         foreground = Color(0xFFB78034),

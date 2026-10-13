@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -23,11 +24,13 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +39,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
@@ -45,6 +55,20 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
+
+internal val ControllerColorScheme = lightColorScheme(
+    primary = Color(0xFF07C160),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFE1F5E9),
+    onPrimaryContainer = Color(0xFF075B36),
+    secondary = Color(0xFF079B4F),
+    background = Color(0xFFF5F7F6),
+    surface = Color.White,
+    surfaceVariant = Color(0xFFF0F3F1),
+    onSurface = Color(0xFF17201B),
+    onSurfaceVariant = Color(0xFF77817B),
+    outline = Color(0xFFDCE3DE),
+)
 
 private data class ControllerScreenState(
     val apiUrl: String = defaultControllerApiUrl(),
@@ -103,8 +127,8 @@ class MainActivity : ComponentActivity() {
             lifecycleScope.launch { loadDashboard(session) }
         }
         setContent {
-            MaterialTheme {
-                Surface(Modifier.fillMaxSize()) {
+            MaterialTheme(colorScheme = ControllerColorScheme) {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     ControllerScreen(
                         state = state,
                         onApiUrlChange = {
@@ -627,10 +651,41 @@ private fun ControllerScreen(
         Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        Text("FlowPilot 控制端", style = MaterialTheme.typography.headlineMedium)
-        Text("管理你的受控设备，并在授权范围内下发脚本任务。")
-        TextButton(onClick = { showHelp = true }) {
-            Text("帮助与关于")
+        if (state.session == null) {
+            Text("FlowPilot 控制端", style = MaterialTheme.typography.headlineMedium)
+            Text("管理你的受控设备，并在授权范围内下发脚本任务。")
+            TextButton(onClick = { showHelp = true }) {
+                Text("帮助与关于")
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        when (selectedDestination) {
+                            ControllerDestination.DISPATCH -> "任务派发"
+                            ControllerDestination.RUNS -> "运行状态"
+                            ControllerDestination.ACCOUNT -> "账号与安全"
+                        },
+                        style = MaterialTheme.typography.headlineSmall,
+                    )
+                    Text(
+                        when (selectedDestination) {
+                            ControllerDestination.DISPATCH -> "选择设备和任务，安全发起远程运行"
+                            ControllerDestination.RUNS -> "查看设备执行状态与操作结果"
+                            ControllerDestination.ACCOUNT -> "管理个人资料和登录凭据"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = { showHelp = true }) {
+                    Text("帮助")
+                }
+            }
         }
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         state.message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
@@ -852,22 +907,23 @@ private fun ControllerScreen(
         }
       }
       if (state.session != null) {
-          NavigationBar {
+          NavigationBar(
+              containerColor = Color.White,
+              tonalElevation = 4.dp,
+          ) {
               ControllerDestination.entries.forEach { destination ->
                   NavigationBarItem(
                       selected = selectedDestination == destination,
                       onClick = { selectedDestinationName = destination.name },
-                      icon = {
-                          Text(
-                              when (destination) {
-                                  ControllerDestination.DISPATCH -> "派"
-                                  ControllerDestination.RUNS -> "行"
-                                  ControllerDestination.ACCOUNT -> "我"
-                              },
-                              style = MaterialTheme.typography.labelLarge,
-                          )
-                      },
+                      icon = { ControllerNavigationIcon(destination, selectedDestination == destination) },
                       label = { Text(destination.label) },
+                      colors = NavigationBarItemDefaults.colors(
+                          selectedIconColor = Color(0xFF07C160),
+                          selectedTextColor = Color(0xFF07C160),
+                          indicatorColor = Color(0xFFE1F5E9),
+                          unselectedIconColor = Color(0xFF80868B),
+                          unselectedTextColor = Color(0xFF80868B),
+                      ),
                   )
               }
           }
@@ -894,6 +950,61 @@ private fun ControllerScreen(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun ControllerNavigationIcon(destination: ControllerDestination, selected: Boolean) {
+    Canvas(Modifier.size(24.dp)) {
+        val color = if (selected) Color(0xFF07C160) else Color(0xFF80868B)
+        val stroke = 1.8.dp.toPx()
+        when (destination) {
+            ControllerDestination.DISPATCH -> {
+                val plane = Path().apply {
+                    moveTo(size.width * 0.12f, size.height * 0.47f)
+                    lineTo(size.width * 0.88f, size.height * 0.12f)
+                    lineTo(size.width * 0.59f, size.height * 0.88f)
+                    lineTo(size.width * 0.46f, size.height * 0.57f)
+                    close()
+                }
+                drawPath(plane, color, style = Stroke(stroke, cap = StrokeCap.Round))
+                drawLine(
+                    color,
+                    Offset(size.width * 0.46f, size.height * 0.57f),
+                    Offset(size.width * 0.88f, size.height * 0.12f),
+                    stroke,
+                    cap = StrokeCap.Round,
+                )
+            }
+            ControllerDestination.RUNS -> {
+                val chart = Path().apply {
+                    moveTo(size.width * 0.12f, size.height * 0.82f)
+                    lineTo(size.width * 0.12f, size.height * 0.14f)
+                    moveTo(size.width * 0.22f, size.height * 0.68f)
+                    lineTo(size.width * 0.43f, size.height * 0.48f)
+                    lineTo(size.width * 0.60f, size.height * 0.60f)
+                    lineTo(size.width * 0.86f, size.height * 0.28f)
+                }
+                drawPath(chart, color, style = Stroke(stroke, cap = StrokeCap.Round))
+            }
+            ControllerDestination.ACCOUNT -> {
+                drawCircle(
+                    color,
+                    size.minDimension * 0.16f,
+                    Offset(size.width * 0.5f, size.height * 0.31f),
+                    style = Stroke(stroke),
+                )
+                drawArc(
+                    color = color,
+                    startAngle = 200f,
+                    sweepAngle = 140f,
+                    useCenter = false,
+                    topLeft = Offset(size.width * 0.19f, size.height * 0.47f),
+                    size = Size(size.width * 0.62f, size.height * 0.43f),
+                    style = Stroke(stroke, cap = StrokeCap.Round),
+                )
+            }
+        }
     }
 }
 

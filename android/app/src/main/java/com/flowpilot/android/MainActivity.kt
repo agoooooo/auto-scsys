@@ -18,6 +18,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -31,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -45,6 +47,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -60,8 +63,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
@@ -833,9 +841,40 @@ private fun FlowPilotScreen(
             .padding(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        FlowPilotBrandHeader()
-        TextButton(onClick = { showHelp = true }) {
-            Text("帮助与关于")
+        if (user == null) {
+            FlowPilotBrandHeader()
+            TextButton(onClick = { showHelp = true }) {
+                Text("帮助与关于")
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        when (selectedDestination) {
+                            DeviceAppDestination.DEVICE -> "设备"
+                            DeviceAppDestination.TASKS -> "任务"
+                            DeviceAppDestination.RUNS -> "运行"
+                        },
+                        style = MaterialTheme.typography.headlineSmall,
+                    )
+                    Text(
+                        when (selectedDestination) {
+                            DeviceAppDestination.DEVICE -> "设备状态、连接和运行权限"
+                            DeviceAppDestination.TASKS -> "已分配任务与待确认发布"
+                            DeviceAppDestination.RUNS -> "远程请求、运行状态与执行记录"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = { showHelp = true }) {
+                    Text("帮助")
+                }
+            }
         }
 
         if (user == null) {
@@ -1065,10 +1104,6 @@ private fun FlowPilotScreen(
                 }
             }
         } else {
-            FlowPilotHero(
-                title = "欢迎回来，${user.name}",
-                subtitle = "任务在设备本地执行，运行结果一目了然。",
-            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1577,22 +1612,23 @@ private fun FlowPilotScreen(
         Spacer(Modifier.height(8.dp))
       }
       if (user != null) {
-          NavigationBar {
+          NavigationBar(
+              containerColor = Color.White,
+              tonalElevation = 4.dp,
+          ) {
               DeviceAppDestination.entries.forEach { destination ->
                   NavigationBarItem(
                       selected = selectedDestination == destination,
                       onClick = { selectedDestinationName = destination.name },
-                      icon = {
-                          Text(
-                              when (destination) {
-                                  DeviceAppDestination.DEVICE -> "设"
-                                  DeviceAppDestination.TASKS -> "务"
-                                  DeviceAppDestination.RUNS -> "行"
-                              },
-                              style = MaterialTheme.typography.labelLarge,
-                          )
-                      },
+                      icon = { DeviceAppNavigationIcon(destination, selectedDestination == destination) },
                       label = { Text(destination.label) },
+                      colors = NavigationBarItemDefaults.colors(
+                          selectedIconColor = Color(0xFF07C160),
+                          selectedTextColor = Color(0xFF07C160),
+                          indicatorColor = Color(0xFFE1F5E9),
+                          unselectedIconColor = Color(0xFF80868B),
+                          unselectedTextColor = Color(0xFF80868B),
+                      ),
                   )
               }
           }
@@ -1752,6 +1788,61 @@ private fun ScriptContent(source: String) {
 }
 
 @Composable
+private fun DeviceAppNavigationIcon(destination: DeviceAppDestination, selected: Boolean) {
+    Canvas(Modifier.size(24.dp)) {
+        val color = if (selected) Color(0xFF07C160) else Color(0xFF8992A5)
+        val stroke = 1.8.dp.toPx()
+        when (destination) {
+            DeviceAppDestination.DEVICE -> {
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(size.width * 0.18f, size.height * 0.08f),
+                    size = Size(size.width * 0.64f, size.height * 0.84f),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.1f),
+                    style = Stroke(stroke),
+                )
+                drawLine(
+                    color,
+                    Offset(size.width * 0.42f, size.height * 0.77f),
+                    Offset(size.width * 0.58f, size.height * 0.77f),
+                    stroke,
+                    cap = StrokeCap.Round,
+                )
+            }
+            DeviceAppDestination.TASKS -> {
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(size.width * 0.12f, size.height * 0.12f),
+                    size = Size(size.width * 0.76f, size.height * 0.76f),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.12f),
+                    style = Stroke(stroke),
+                )
+                listOf(0.37f, 0.56f, 0.75f).forEach { y ->
+                    drawLine(
+                        color,
+                        Offset(size.width * 0.32f, size.height * y),
+                        Offset(size.width * 0.72f, size.height * y),
+                        stroke,
+                        cap = StrokeCap.Round,
+                    )
+                }
+            }
+            DeviceAppDestination.RUNS -> {
+                val chart = Path().apply {
+                    moveTo(size.width * 0.12f, size.height * 0.82f)
+                    lineTo(size.width * 0.12f, size.height * 0.14f)
+                    moveTo(size.width * 0.22f, size.height * 0.68f)
+                    lineTo(size.width * 0.43f, size.height * 0.48f)
+                    lineTo(size.width * 0.60f, size.height * 0.60f)
+                    lineTo(size.width * 0.86f, size.height * 0.28f)
+                }
+                drawPath(chart, color, style = Stroke(stroke, cap = StrokeCap.Round))
+            }
+        }
+    }
+}
+
+@Composable
 private fun FlowPilotBrandHeader() {
     Row(
         modifier = Modifier
@@ -1775,7 +1866,7 @@ private fun FlowPilotBrandHeader() {
             Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Row {
                     Text("Flow", style = MaterialTheme.typography.titleLarge, color = FlowPilotPalette.Ink)
-                    Text("Pilot", style = MaterialTheme.typography.titleLarge, color = FlowPilotPalette.Purple)
+                    Text("Pilot", style = MaterialTheme.typography.titleLarge, color = FlowPilotPalette.Accent)
                 }
                 Text(
                     "ANDROID AUTOMATION",
@@ -1786,7 +1877,7 @@ private fun FlowPilotBrandHeader() {
         }
         Surface(
             shape = RoundedCornerShape(10.dp),
-            color = FlowPilotPalette.PurpleSoft,
+            color = FlowPilotPalette.AccentSoft,
         ) {
             Text(
                 "ANDROID",
@@ -1806,7 +1897,7 @@ private fun FlowPilotHero(title: String, subtitle: String) {
             .clip(RoundedCornerShape(18.dp))
             .background(
                 Brush.linearGradient(
-                    listOf(Color(0xFF263B73), Color(0xFF5545D1)),
+                    listOf(Color(0xFF075B36), Color(0xFF07C160)),
                 ),
             )
             .padding(horizontal = 22.dp, vertical = 22.dp),
@@ -1861,12 +1952,12 @@ private fun TaskCard(task: AvailableTask, canInspectScript: Boolean, onRun: () -
             ) {
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = FlowPilotPalette.PurpleSoft,
+                    color = FlowPilotPalette.AccentSoft,
                 ) {
                     Text(
                         "⌘",
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                        color = FlowPilotPalette.PurpleDark,
+                        color = FlowPilotPalette.AccentDark,
                         style = MaterialTheme.typography.titleMedium,
                     )
                 }

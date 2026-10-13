@@ -9,7 +9,7 @@ class StatusBadgeTest {
     fun matchesDemoColorsForSuccessRunningAndOfflineStates() {
         assertEquals(Color(0xFFEAF8F2), runStatusBadgeStyle("success").background)
         assertEquals(Color(0xFFEAF8F2), runStatusBadgeStyle("active").background)
-        assertEquals(FlowPilotPalette.PurpleSoft, runStatusBadgeStyle("running").background)
+        assertEquals(FlowPilotPalette.AccentSoft, runStatusBadgeStyle("running").background)
         assertEquals(Color(0xFFFFF6E9), runStatusBadgeStyle("offline").background)
     }
 
