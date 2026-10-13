@@ -397,6 +397,10 @@ class RegisterDeviceInput(BaseModel):
     app_version: str = Field(default="1.0.0", max_length=32)
 
 
+class DeviceHeartbeatInput(BaseModel):
+    app_version: str | None = Field(default=None, min_length=1, max_length=32)
+
+
 class UserUpdateInput(BaseModel):
     status: Literal["active", "disabled"] | None = None
     device_limit: int | None = Field(default=None, ge=1, le=50)
@@ -1470,11 +1474,23 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         return {"id": publication_id, "task_id": publication["task_id"], "version": publication["version"], "status": "accepted"}
 
     @app.post("/devices/{device_id}/heartbeat")
-    def device_heartbeat(device_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
+    def device_heartbeat(
+        device_id: str,
+        body: DeviceHeartbeatInput | None = None,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
         device = _device_for_user(db, device_id, user)
         if user["role"] != "user" or device["user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="只有设备所属用户可以发送设备心跳")
-        _touch_device(db, device_id)
+        app_version = body.app_version.strip() if body and body.app_version else None
+        if body and body.app_version is not None and not app_version:
+            raise HTTPException(status_code=422, detail="App 版本不能为空")
+        db.execute(
+            """UPDATE devices SET status='online',last_active=?,app_version=COALESCE(?,app_version)
+               WHERE id=?""",
+            (utc_now(), app_version, device_id),
+        )
         return {"device_id": device_id, "status": "online", "last_active": utc_now()}
 
     @app.get("/devices/{device_id}/tasks/{task_id}/versions/{version}/content")

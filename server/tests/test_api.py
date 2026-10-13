@@ -411,13 +411,31 @@ def test_device_liveness_expires_and_device_activity_restores_online_status(clie
         if device["id"] == "d-001"
     )["status"] == "offline"
 
-    heartbeat = client.post("/devices/d-001/heartbeat", headers=auth(user))
+    heartbeat = client.post(
+        "/devices/d-001/heartbeat",
+        headers=auth(user),
+        json={"app_version": "2.4.1"},
+    )
     assert heartbeat.status_code == 200
     assert heartbeat.json()["status"] == "online"
+    device = next(
+        device for device in client.get("/devices", headers=auth(admin)).json()
+        if device["id"] == "d-001"
+    )
+    assert device["status"] == "online"
+    assert device["app_version"] == "2.4.1"
+
+    legacy_heartbeat = client.post("/devices/d-001/heartbeat", headers=auth(user))
+    assert legacy_heartbeat.status_code == 200
     assert next(
         device for device in client.get("/devices", headers=auth(admin)).json()
         if device["id"] == "d-001"
-    )["status"] == "online"
+    )["app_version"] == "2.4.1"
+    assert client.post(
+        "/devices/d-001/heartbeat",
+        headers=auth(user),
+        json={"app_version": "   "},
+    ).status_code == 422
 
     request = client.post(
         "/remote-runs",

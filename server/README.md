@@ -74,7 +74,7 @@ Back up the MinIO object volume independently (or use a managed S3 provider with
 
 - `POST /auth/login`、`POST /auth/refresh`、`GET /me`
 - `GET/POST /users`、`PATCH /users/{id}`（管理员调整用户状态及设备数量上限）
-- `GET/POST /devices`、`PATCH/DELETE /devices/{id}`、`POST /devices/{id}/sync`、`POST /devices/{id}/heartbeat`（只有设备所属用户可同步或发送心跳）
+- `GET/POST /devices`、`PATCH/DELETE /devices/{id}`、`POST /devices/{id}/sync`、`POST /devices/{id}/heartbeat`（只有设备所属用户可同步或发送心跳；心跳可附带更新后的 App 版本，旧客户端省略时保留原版本）
 - `POST /devices/{id}/runs`（设备用户确认后上报本地启动）
 - `GET/POST /tasks`、`PATCH /tasks/{id}`（管理员暂停/恢复）、`GET /tasks/{id}/versions`、`POST /tasks/{id}/versions`、`PATCH /tasks/{id}/versions/{version}/activate`
 - `POST /tasks/{id}/versions/upload-url`、`POST /tasks/{id}/versions/complete-upload`（生产对象存储直传及服务端内容校验）

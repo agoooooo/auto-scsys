@@ -139,7 +139,7 @@ internal class ApiClient(baseUrl: String) {
             payload = JSONObject()
                 .put("name", name)
                 .put("model", model)
-                .put("app_version", "0.1.0"),
+                .put("app_version", BuildConfig.VERSION_NAME),
         ))
         return BoundDevice(
             id = response.optString("id"),
@@ -190,7 +190,12 @@ internal class ApiClient(baseUrl: String) {
     }
 
     fun heartbeat(token: String, deviceId: String) {
-        request("/devices/${encodePathSegment(deviceId)}/heartbeat", method = "POST", token = token)
+        request(
+            "/devices/${encodePathSegment(deviceId)}/heartbeat",
+            method = "POST",
+            token = token,
+            payload = JSONObject().put("app_version", BuildConfig.VERSION_NAME),
+        )
     }
 
     fun downloadScript(token: String, deviceId: String, task: AvailableTask): DownloadedScript {
