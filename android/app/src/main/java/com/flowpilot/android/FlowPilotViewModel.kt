@@ -357,6 +357,19 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
 
     fun logout() {
         val current = _state.value
+        sessionStore.read()?.let { session ->
+            viewModelScope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        ApiClient(session.apiBaseUrl).logout(session.token)
+                    }
+                } catch (exception: Exception) {
+                    _state.value = _state.value.copy(
+                        error = "本机已退出，但服务端会话撤销失败：${exception.message ?: "服务器不可用"}",
+                    )
+                }
+            }
+        }
         sessionStore.clear()
         val remembered = sessionStore.readRememberedLogin()
         _state.value = AppUiState(

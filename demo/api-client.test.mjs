@@ -7,6 +7,7 @@ import {
   loadSnapshot,
   login,
   readSession,
+  revokeSession,
   saveSession,
   uploadScriptVersion,
 } from "./api-client.mjs";
@@ -53,6 +54,20 @@ test("API requests send JSON and surface structured server errors", async () => 
     apiRequest(session, "/users", {}, async () => new Response(JSON.stringify({ detail: "需要管理员权限" }), { status: 403 })),
     /需要管理员权限/,
   );
+});
+
+test("logout revokes the active server session", async () => {
+  let request;
+  await revokeSession(
+    { baseUrl: "https://api.example.test", token: "active-session-token" },
+    async (url, options) => {
+      request = { url, options };
+      return new Response(null, { status: 204 });
+    },
+  );
+  assert.equal(request.url, "https://api.example.test/auth/logout");
+  assert.equal(request.options.method, "POST");
+  assert.match(request.options.headers.Authorization, /^Bearer /);
 });
 
 test("API requests send multipart bodies without setting a JSON content type", async () => {

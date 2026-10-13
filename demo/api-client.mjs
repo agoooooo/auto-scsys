@@ -18,6 +18,10 @@ export function clearSession(storage = globalThis.sessionStorage) {
   storage?.removeItem(SESSION_KEY);
 }
 
+export function revokeSession(session, fetchImpl = fetch) {
+  return apiRequest(session, "/auth/logout", { method: "POST" }, fetchImpl);
+}
+
 export async function apiRequest(session, path, { method = "GET", body, formData } = {}, fetchImpl = fetch) {
   const headers = {};
   if (session?.token) headers.Authorization = `Bearer ${session.token}`;

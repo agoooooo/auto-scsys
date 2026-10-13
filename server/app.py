@@ -31,6 +31,7 @@ from server.storage import ScriptStorage, create_script_storage
 DEFAULT_DB_PATH = Path(__file__).with_name("flowpilot.sqlite3")
 LOGGER = logging.getLogger(__name__)
 TOKEN_TTL_SECONDS = 60 * 60
+SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 LOGIN_FAILURE_LIMIT = 5
 LOGIN_FAILURE_WINDOW_SECONDS = 15 * 60
 LOGIN_SOURCE_FAILURE_LIMIT = 30
@@ -240,6 +241,15 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
                 window_started INTEGER NOT NULL,
                 failure_count INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                revoked_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, revoked_at);
+            CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
             CREATE INDEX IF NOT EXISTS idx_runs_device ON runs(device_id, started_at);
             CREATE INDEX IF NOT EXISTS idx_remote_device ON remote_runs(device_id, status, expires_at);
@@ -570,16 +580,31 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         with _connect(database_path) as db:
             yield db
 
-    def current_user(authorization: str | None = Header(default=None), db: sqlite3.Connection = Depends(connection)):
+    def current_user(
+        request: Request,
+        authorization: str | None = Header(default=None),
+        db: sqlite3.Connection = Depends(connection),
+    ):
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="需要登录")
         payload = _token_decode(authorization[7:], secret)
+        session_id = payload.get("sid")
+        if not isinstance(session_id, str):
+            raise HTTPException(status_code=401, detail="登录会话无效，请重新登录")
+        session = db.execute(
+            "SELECT user_id,expires_at FROM auth_sessions WHERE id=? AND revoked_at IS NULL AND expires_at>?",
+            (session_id, int(time.time())),
+        ).fetchone()
+        if not session or session["user_id"] != payload.get("sub"):
+            raise HTTPException(status_code=401, detail="登录会话已失效，请重新登录")
         user = db.execute(
             "SELECT id,name,email,role,status,device_limit FROM users WHERE id=?",
             (payload.get("sub"),),
         ).fetchone()
         if not user or user["status"] != "active":
             raise HTTPException(status_code=401, detail="账号不可用")
+        request.state.auth_session_id = session_id
+        request.state.auth_session_expires_at = session["expires_at"]
         return dict(user)
 
     def require_admin(user: dict = Depends(current_user)) -> dict:
@@ -769,8 +794,22 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             raise HTTPException(status_code=401, detail="邮箱或密码错误")
         db.begin_immediate()
         db.execute("DELETE FROM auth_login_attempts WHERE attempt_key=?", (account_key,))
+        now = int(time.time())
+        session_id = str(uuid.uuid4())
+        session_expires_at = now + SESSION_TTL_SECONDS
+        db.execute(
+            "DELETE FROM auth_sessions WHERE user_id=? AND (expires_at<=? OR revoked_at IS NOT NULL)",
+            (user["id"], now),
+        )
+        db.execute(
+            "INSERT INTO auth_sessions(id,user_id,created_at,expires_at) VALUES(?,?,?,?)",
+            (session_id, user["id"], now, session_expires_at),
+        )
         db.commit()
-        token = _token_encode({"sub": user["id"], "exp": int(time.time()) + TOKEN_TTL_SECONDS}, secret)
+        token = _token_encode(
+            {"sub": user["id"], "sid": session_id, "exp": now + TOKEN_TTL_SECONDS},
+            secret,
+        )
         return {
             "access_token": token,
             "token_type": "bearer",
@@ -783,9 +822,27 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         return user
 
     @app.post("/auth/refresh")
-    def refresh_access_token(user: dict = Depends(current_user)):
-        token = _token_encode({"sub": user["id"], "exp": int(time.time()) + TOKEN_TTL_SECONDS}, secret)
-        return {"access_token": token, "token_type": "bearer", "expires_in": TOKEN_TTL_SECONDS}
+    def refresh_access_token(request: Request, user: dict = Depends(current_user)):
+        session = request.state.auth_session_id
+        session_expires_in = max(0, request.state.auth_session_expires_at - int(time.time()))
+        token = _token_encode(
+            {"sub": user["id"], "sid": session, "exp": int(time.time()) + TOKEN_TTL_SECONDS},
+            secret,
+        )
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "expires_in": TOKEN_TTL_SECONDS,
+            "session_expires_in": session_expires_in,
+        }
+
+    @app.post("/auth/logout", status_code=204)
+    def logout(request: Request, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
+        db.execute(
+            "UPDATE auth_sessions SET revoked_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL",
+            (int(time.time()), request.state.auth_session_id, user["id"]),
+        )
+        return Response(status_code=204)
 
     @app.get("/users")
     def list_users(user: dict = Depends(require_admin), db: sqlite3.Connection = Depends(connection)):
@@ -836,6 +893,10 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             db.execute("UPDATE users SET status=? WHERE id=?", (body.status, user_id))
         if body.status == "disabled" and target["status"] != "disabled":
             now = utc_now()
+            db.execute(
+                "UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+                (int(time.time()), user_id),
+            )
             db.execute("UPDATE run_authorizations SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (now, user_id))
             db.execute(
                 """UPDATE task_publications SET status='revoked'
@@ -861,6 +922,26 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             (user_id,),
         ).fetchone()
         return dict(updated)
+
+    @app.post("/users/{user_id}/sessions/revoke")
+    def revoke_user_sessions(
+        user_id: str,
+        user: dict = Depends(require_admin),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        target = db.execute(
+            "SELECT id FROM users WHERE id=? AND role='user'",
+            (user_id,),
+        ).fetchone()
+        if not target:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        revoked_at = int(time.time())
+        result = db.execute(
+            "UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+            (revoked_at, user_id),
+        )
+        audit(db, user["id"], "user.sessions_revoked", "user", user_id)
+        return {"revoked_sessions": result.rowcount}
 
     @app.get("/devices")
     def list_devices(user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):

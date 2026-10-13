@@ -50,6 +50,58 @@ def test_login_roles_and_disabled_accounts(client):
     assert client.get("/me", headers=auth(user)).status_code == 401
 
 
+def test_logout_revokes_session_and_refresh_preserves_absolute_session(client):
+    logged_in = client.post(
+        "/auth/login",
+        json={"email": "chen.xiao@example.com", "password": "user-demo"},
+    )
+    assert logged_in.status_code == 200
+    original_token = logged_in.json()["access_token"]
+    refreshed = client.post("/auth/refresh", headers=auth(original_token))
+    assert refreshed.status_code == 200
+    assert 0 < refreshed.json()["session_expires_in"] <= server_app.SESSION_TTL_SECONDS
+    refreshed_token = refreshed.json()["access_token"]
+    assert client.get("/me", headers=auth(refreshed_token)).status_code == 200
+
+    assert client.post("/auth/logout", headers=auth(original_token)).status_code == 204
+    assert client.get("/me", headers=auth(original_token)).status_code == 401
+    assert client.get("/me", headers=auth(refreshed_token)).status_code == 401
+    assert client.post("/auth/refresh", headers=auth(refreshed_token)).status_code == 401
+
+    final_token = login(client)
+    session_id = server_app._token_decode(final_token, client.app.state.token_secret)["sid"]
+    with sqlite3.connect(client.app.state.db_path) as db:
+        db.execute("UPDATE auth_sessions SET expires_at=? WHERE id=?", (int(time.time()) - 1, session_id))
+    assert client.get("/me", headers=auth(final_token)).status_code == 401
+    assert client.post("/auth/refresh", headers=auth(final_token)).status_code == 401
+
+
+def test_admin_can_revoke_user_sessions_and_disabling_user_revokes_sessions(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    first_session_token = login(client)
+    revoked = client.post(
+        "/users/u-1001/sessions/revoke",
+        headers=auth(admin),
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["revoked_sessions"] == 1
+    assert client.get("/me", headers=auth(first_session_token)).status_code == 401
+    events = client.get("/admin/audit", headers=auth(admin)).json()
+    assert any(
+        event["action"] == "user.sessions_revoked" and event["resource_id"] == "u-1001"
+        for event in events
+    )
+
+    second_session_token = login(client)
+    disabled = client.patch(
+        "/users/u-1001",
+        headers=auth(admin),
+        json={"status": "disabled"},
+    )
+    assert disabled.status_code == 200
+    assert client.get("/me", headers=auth(second_session_token)).status_code == 401
+
+
 def test_health_readiness_checks_database_and_liveness_stays_available(client, monkeypatch):
     assert client.get("/health/live").status_code == 200
     assert client.get("/health/live").json() == {"status": "ok"}

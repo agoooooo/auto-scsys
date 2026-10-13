@@ -22,6 +22,7 @@ import {
   loadSnapshot,
   login,
   readSession,
+  revokeSession,
   uploadScriptVersion,
 } from "./api-client.mjs";
 import { mapUsersForCsv, toCsv, userCsvColumns } from "./csv.mjs";
@@ -233,7 +234,7 @@ function userRows(users = paginateItems(filteredUsers(), userListPage, 10).items
       <td><div class="person-cell"><span class="avatar a${(index % 4) + 1}">${escapeHtml(user.name.slice(0, 1))}</span><span class="person-details"><strong>${escapeHtml(user.name)}</strong><small>${escapeHtml(user.email)}</small></span></div></td>
       <td>${statusPill(user.status)}</td><td>${count} / ${user.deviceLimit} 台 <button class="text-button" data-action="edit-device-limit" data-id="${escapeHtml(user.id)}">调整</button></td><td>${escapeHtml(user.joined)}</td>
       <td><span style="color:#9aa2b1">基础用户</span></td>
-      <td><button class="table-action" data-action="toggle-user" data-id="${escapeHtml(user.id)}" title="${user.status === "active" ? "停用用户" : "启用用户"}">${user.status === "active" ? "···" : "↻"}</button></td>
+      <td>${session ? `<button class="text-button" data-action="revoke-user-sessions" data-id="${escapeHtml(user.id)}">撤销会话</button>` : ""}<button class="table-action" data-action="toggle-user" data-id="${escapeHtml(user.id)}" title="${user.status === "active" ? "停用用户" : "启用用户"}">${user.status === "active" ? "···" : "↻"}</button></td>
     </tr>`;
   }).join("");
 }
@@ -606,6 +607,7 @@ async function refreshFromApi() {
 }
 
 function signOut() {
+  const activeSession = session;
   clearSession();
   session = null;
   demoMode = false;
@@ -615,6 +617,11 @@ function signOut() {
   auditEvents = [];
   auditLoading = false;
   render();
+  if (activeSession) {
+    revokeSession(activeSession).catch((error) => {
+      showToast(`本地已退出，但服务端会话撤销失败：${error.message}`);
+    });
+  }
 }
 
 async function refreshAudit() {
@@ -1085,6 +1092,15 @@ document.addEventListener("submit", async (event) => {
     } catch (error) {
       showToast(error.message);
     }
+  } else if (action === "revoke-user-sessions") {
+    const target = state.users.find((user) => user.id === id);
+    if (!session || !target || !window.confirm(`确定撤销 ${target.name} 的所有登录会话？对方需要重新登录。`)) return;
+    try {
+      const result = await apiRequest(session, `/users/${encodeURIComponent(id)}/sessions/revoke`, {
+        method: "POST",
+      });
+      showToast(`已撤销 ${result.revoked_sessions} 个登录会话`);
+    } catch (error) { showToast(error.message); }
   } else if (event.target.id === "device-limit-form") {
     event.preventDefault();
     const formData = new FormData(event.target);

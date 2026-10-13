@@ -112,6 +112,10 @@ internal class ApiClient(baseUrl: String) {
         return refreshed to response.optLong("expires_in")
     }
 
+    fun logout(token: String) {
+        request("/auth/logout", method = "POST", token = token)
+    }
+
     fun getCurrentUser(token: String): SignedInUser {
         val user = JSONObject(request("/me", token = token))
         return SignedInUser(
