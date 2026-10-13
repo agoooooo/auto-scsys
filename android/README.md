@@ -6,7 +6,7 @@
 
 客户端将支持普通用户自助注册及常用账号体验：姓名/邮箱/密码注册（首版不强制邮箱验证）、登录/退出、保持登录、会话过期提示、个人资料查看/修改和登录后修改密码。当前已实现普通用户注册入口和服务端 API；其他新增账号功能仍待开发。管理员不可通过公开注册创建。密码遗忘后通过邮件验证码重置属于计划功能，需先配置邮件发送服务；配置前不显示可用的重置入口。
 
-产品需求现明确控制端和受控端是两个分开的 Android 应用：控制端 App 负责查看本人有权操作的设备、下发/跟踪/停止任务，不包含脚本执行运行时；受控端 App 绑定设备并接收/执行任务，不提供控制其他设备的派发界面。它们与 Web 控制台共用账号、服务端 API 和设备授权规则，可复用非 UI 代码，但必须独立安装和发布。当前仓库中的 Android App 是受控端；独立控制端 App 尚未实现。本 README 后续的首次使用说明记录的是当前受控端能力。
+产品需求现明确控制端和受控端是两个分开的 Android 应用：控制端 App 负责查看本人有权操作的设备、下发/跟踪/停止任务，不包含脚本执行运行时；受控端 App 绑定设备并接收/执行任务，不提供控制其他设备的派发界面。它们与 Web 控制台共用账号、服务端 API 和设备授权规则，可复用非 UI 代码，但必须独立安装和发布。当前 `:controller` 是控制端 MVP，支持普通用户注册/登录、查看设备和已发布任务、向在线设备下发远程任务、取消等待中的请求并跟踪运行状态；`:app`（包名 `com.flowpilot.android`）是受控端。本阶段控制端尚不能停止运行中的任务，因为服务端与受控端之间还没有停止信令协议。本 README 后续的首次使用说明记录的是受控端能力。
 客户端按服务地址、账号、设备和任务隔离保存最近两个成功校验的脚本版本；新版本无法下载或校验时，可审阅并运行最近一次成功校验的旧版本（远程请求始终严格匹配其指定版本）。用户可解绑本机设备；任务执行期间禁止解绑。缓存不是沙箱或安全保证，运行仍需服务端授权和 Android 系统权限。
 
 客户端使用与 Web demo 一致的浅灰底色、FlowPilot 紫色强调色、渐变欢迎横幅和白色圆角卡片。
@@ -28,9 +28,12 @@ Debug 构建为了可信局域网内的演示服务显式允许 HTTP；Release �
 cd android
 ./gradlew :app:assembleDebug
 ./gradlew :app:testDebugUnitTest
+./gradlew :controller:assembleDebug
+./gradlew :controller:testDebugUnitTest
 ```
 
 APK 位于 `android/app/build/outputs/apk/debug/app-debug.apk`。当前配置为私有 APK，支持 `arm64-v8a` 真机和 `x86_64` 模拟器。
+独立控制端 APK 位于 `android/controller/build/outputs/apk/debug/controller-debug.apk`，包名为 `com.flowpilot.controller`。控制端详细范围和已知限制见 [`controller/README.md`](controller/README.md)。
 连接已启用 USB 或无线调试的设备后，可运行 `./gradlew :app:connectedDebugAndroidTest` 验证 Python 桥接及设备端 OCR；OCR 使用本地生成的测试图，不需要开启无障碍或屏幕捕获权限。
 
 ### 私有 APK 发布

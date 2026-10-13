@@ -17,4 +17,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "FlowPilot"
-include(":app")
+include(":app", ":controller")
