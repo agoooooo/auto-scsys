@@ -199,3 +199,42 @@ test("snapshot loading maps API resources and requests only online devices", asy
   assert.equal(snapshot.remoteRuns[0].runId, "r2");
   assert.equal(calls.includes("/devices/d2/remote-runs"), false);
 });
+
+test("admin task device counts come from distinct active publication targets", async () => {
+  const calls = [];
+  const payloads = {
+    "/devices": [{
+      id: "owner-phone", user_id: "u-admin", name: "Admin phone", model: "Android",
+      status: "offline", app_version: "1.0.0", last_active: "yesterday",
+    }, {
+      id: "target-1", user_id: "u1", name: "User phone", model: "Android",
+      status: "offline", app_version: "1.0.0", last_active: "yesterday",
+    }],
+    "/tasks": [{
+      id: "admin-task", name: "Published task", description: "", category: "OCR",
+      status: "published", owner_id: "u-admin", source: "Admin", capabilities: [],
+      active_version: "v2.0.0", versions: [{ version: "v2.0.0" }],
+    }],
+    "/runs": [],
+    "/run-authorizations": [],
+    "/users": [],
+    "/tasks/admin-task/publications": [
+      { device_id: "target-1", version: "v1.0.0", status: "accepted" },
+      { device_id: "target-1", version: "v2.0.0", status: "pending" },
+      { device_id: "target-2", version: "v2.0.0", status: "pending" },
+      { device_id: "target-3", version: "v1.0.0", status: "revoked" },
+    ],
+  };
+  const snapshot = await loadSnapshot({
+    baseUrl: "http://localhost:8001",
+    token: "admin-token",
+    user: { id: "u-admin", name: "Admin", role: "admin" },
+  }, async (url) => {
+    const path = new URL(url).pathname;
+    calls.push(path);
+    return new Response(JSON.stringify(payloads[path] ?? []), { status: 200 });
+  });
+
+  assert.equal(snapshot.tasks[0].devices, 2);
+  assert.ok(calls.includes("/tasks/admin-task/publications"));
+});
