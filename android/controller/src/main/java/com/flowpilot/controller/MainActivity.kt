@@ -27,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -869,28 +870,37 @@ private fun ControllerScreen(
                         )
                     }
                 } else {
-                    state.devices.forEach { device ->
-                        ControllerCard(Modifier.fillMaxWidth()) {
-                            Column(
-                                Modifier.fillMaxWidth().padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
+                    ControllerCard(Modifier.fillMaxWidth()) {
+                        Column {
+                            state.devices.forEachIndexed { index, device ->
+                                Column(
+                                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
-                                    Text(device.name, style = MaterialTheme.typography.titleMedium)
-                                    Text(controllerDeviceStatusLabel(device.status), color = MaterialTheme.colorScheme.primary)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(device.name, style = MaterialTheme.typography.titleSmall)
+                                        Text(controllerDeviceStatusLabel(device.status), color = MaterialTheme.colorScheme.primary)
+                                    }
+                                    Text(device.model, style = MaterialTheme.typography.bodySmall)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text("ID ${device.id.take(8)}", style = MaterialTheme.typography.labelSmall)
+                                        TextButton(
+                                            onClick = { onSelectDevice(device.id) },
+                                            enabled = !state.loading,
+                                        ) {
+                                            Text(if (state.selectedDeviceId == device.id) "派发目标 ✓" else "设为目标")
+                                        }
+                                    }
                                 }
-                                Text(device.model, style = MaterialTheme.typography.bodyMedium)
-                                Text("设备 ID：${device.id}", style = MaterialTheme.typography.bodySmall)
-                                OutlinedButton(
-                                    onClick = { onSelectDevice(device.id) },
-                                    enabled = !state.loading,
-                                ) {
-                                    Text(if (state.selectedDeviceId == device.id) "当前派发设备" else "设为派发设备")
-                                }
+                                if (index < state.devices.lastIndex) HorizontalDivider()
                             }
                         }
                     }
@@ -914,24 +924,32 @@ private fun ControllerScreen(
                         Text("暂无已发布任务。", modifier = Modifier.padding(18.dp))
                     }
                 } else {
-                    availableTasks.forEach { taskItem ->
-                        ControllerCard(Modifier.fillMaxWidth()) {
-                            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
+                    ControllerCard(Modifier.fillMaxWidth()) {
+                        Column {
+                            availableTasks.forEachIndexed { index, taskItem ->
+                                Column(
+                                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
-                                    Text(taskItem.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                                    Text(taskItem.version, color = MaterialTheme.colorScheme.primary)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(taskItem.name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                                        Text(taskItem.version, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    if (taskItem.description.isNotBlank()) {
+                                        Text(taskItem.description, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    TextButton(
+                                        onClick = { onSelectTask(taskItem.id) },
+                                        enabled = !state.loading,
+                                    ) {
+                                        Text(if (state.selectedTaskId == taskItem.id) "已选择 ✓" else "选择任务")
+                                    }
                                 }
-                                if (taskItem.description.isNotBlank()) Text(taskItem.description)
-                                TextButton(
-                                    onClick = { onSelectTask(taskItem.id) },
-                                    enabled = !state.loading,
-                                ) {
-                                    Text(if (state.selectedTaskId == taskItem.id) "已选择此任务" else "选择此任务")
-                                }
+                                if (index < availableTasks.lastIndex) HorizontalDivider()
                             }
                         }
                     }

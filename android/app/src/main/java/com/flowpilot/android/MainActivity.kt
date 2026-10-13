@@ -45,6 +45,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -1342,39 +1343,43 @@ private fun FlowPilotScreen(
               } else {
                 if (state.pendingPublications.isNotEmpty()) {
                     Text("待确认的脚本发布（${state.pendingPublications.size}）", style = MaterialTheme.typography.titleLarge)
-                    state.pendingPublications.forEach { publication ->
-                        FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-                            Column(
-                                modifier = Modifier.padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Text(publication.taskName, style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    "版本 ${publication.version} · 来源 ${sourceLabel(publication.source)}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Text(
-                                    "分发者：${publication.publisher}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                if (publication.description.isNotBlank()) Text(publication.description)
-                                if (publication.notes.isNotBlank()) {
-                                    Text("版本说明：${publication.notes}", style = MaterialTheme.typography.bodySmall)
-                                }
-                                Text(
-                                    "能力：${publication.capabilities.joinToString("、")}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                                Text("确认接收后，设备才能下载并运行此版本。")
-                                Button(
-                                    onClick = { viewModel.acceptPublication(publication) },
-                                    enabled = !state.loading,
-                                    modifier = Modifier.fillMaxWidth(),
+                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                        Column {
+                            state.pendingPublications.forEachIndexed { index, publication ->
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp),
                                 ) {
-                                    Text("确认接收脚本")
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(publication.taskName, style = MaterialTheme.typography.titleSmall)
+                                        Text(publication.version, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    Text(
+                                        "${sourceLabel(publication.source)} · ${publication.publisher}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    if (publication.description.isNotBlank()) Text(publication.description, style = MaterialTheme.typography.bodySmall)
+                                    if (publication.notes.isNotBlank()) {
+                                        Text("版本说明：${publication.notes}", style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    Text(
+                                        "能力：${publication.capabilities.joinToString("、")}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    TextButton(
+                                        onClick = { viewModel.acceptPublication(publication) },
+                                        enabled = !state.loading,
+                                    ) {
+                                        Text("确认接收")
+                                    }
                                 }
+                                if (index < state.pendingPublications.lastIndex) HorizontalDivider()
                             }
                         }
                     }
@@ -1384,17 +1389,20 @@ private fun FlowPilotScreen(
                 if (state.tasks.isEmpty()) {
                     Text("当前没有分配给此账号的已发布任务。")
                 } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        state.tasks.forEach { task ->
-                            TaskCard(
-                                task = task,
-                                canInspectScript = canInspectTaskScript(device.status, state.runStatus?.status),
-                                onRun = {
-                                    selectedTask = task
-                                    confirmScriptRun = false
-                                    scriptReviewAttempt = null
-                                },
-                            )
+                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                        Column {
+                            state.tasks.forEachIndexed { index, task ->
+                                TaskCard(
+                                    task = task,
+                                    canInspectScript = canInspectTaskScript(device.status, state.runStatus?.status),
+                                    onRun = {
+                                        selectedTask = task
+                                        confirmScriptRun = false
+                                        scriptReviewAttempt = null
+                                    },
+                                )
+                                if (index < state.tasks.lastIndex) HorizontalDivider(Modifier.padding(horizontal = 14.dp))
+                            }
                         }
                     }
                 }
@@ -1408,12 +1416,12 @@ private fun FlowPilotScreen(
               } else {
                 if (state.remoteRuns.isNotEmpty()) {
                     Text("远程请求（${state.remoteRuns.size}）", style = MaterialTheme.typography.titleLarge)
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        state.remoteRuns.forEach { request ->
-                            FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                        Column {
+                            state.remoteRuns.forEachIndexed { index, request ->
                                 Column(
-                                    modifier = Modifier.padding(16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp),
                                 ) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -1473,6 +1481,9 @@ private fun FlowPilotScreen(
                                         )
                                     }
                                 }
+                                if (index < state.remoteRuns.lastIndex) {
+                                    HorizontalDivider(Modifier.padding(horizontal = 14.dp))
+                                }
                             }
                         }
                     }
@@ -1512,11 +1523,12 @@ private fun FlowPilotScreen(
                     }
                 }
                 if (state.runHistory.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        visibleRunHistory(state.runHistory).forEach { run ->
-                            FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
+                        Column {
+                            val visibleRuns = visibleRunHistory(state.runHistory)
+                            visibleRuns.forEachIndexed { index, run ->
                                 Column(
-                                    modifier = Modifier.padding(12.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
                                     verticalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
                                     Row(
@@ -1542,6 +1554,9 @@ private fun FlowPilotScreen(
                                     )
                                     run.resultSummary.takeIf(String::isNotBlank)?.let { summary ->
                                         Text(summary, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    if (index < visibleRuns.lastIndex) {
+                                        HorizontalDivider(Modifier.padding(horizontal = 14.dp))
                                     }
                                 }
                             }
@@ -2051,27 +2066,15 @@ private fun FlowPilotCard(
 
 @Composable
 private fun TaskCard(task: AvailableTask, canInspectScript: Boolean, onRun: () -> Unit) {
-    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = FlowPilotPalette.AccentSoft,
-                ) {
-                    Text(
-                        "⌘",
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                        color = FlowPilotPalette.AccentDark,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                }
                 Column(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(5.dp),
@@ -2089,32 +2092,23 @@ private fun TaskCard(task: AvailableTask, canInspectScript: Boolean, onRun: () -
                     )
                 }
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("当前发布版本", style = MaterialTheme.typography.bodySmall)
-                StatusBadge(
-                    label = task.version.ifBlank { "未发布" },
-                    status = if (task.version.isBlank()) "unknown" else "published",
-                )
-            }
-            if (task.description.isNotBlank()) Text(task.description)
+            Text("版本 ${task.version.ifBlank { "未发布" }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            if (task.description.isNotBlank()) Text(task.description, style = MaterialTheme.typography.bodySmall)
             if (task.capabilities.isNotEmpty()) {
                 Text(
-                    "所需能力 · ${task.capabilities.joinToString(" · ")}",
+                    "需要：${task.capabilities.joinToString(" · ")}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Button(
-                onClick = onRun,
-                enabled = canInspectScript && task.version.isNotBlank(),
-            ) {
-                Text("查看脚本")
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(
+                    onClick = onRun,
+                    enabled = canInspectScript && task.version.isNotBlank(),
+                ) {
+                    Text("查看脚本")
+                }
             }
-        }
     }
 }
 
