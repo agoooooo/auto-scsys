@@ -194,20 +194,31 @@ class TaskActionPolicyTest {
     }
 
     @Test
-    fun permissionOnboardingAppearsOnceForSignedInUserAfterLoading() {
-        assertTrue(shouldShowPermissionOnboarding("user-1", loading = false, alreadyShownForUser = false))
-        assertFalse(shouldShowPermissionOnboarding("user-1", loading = true, alreadyShownForUser = false))
-        assertFalse(shouldShowPermissionOnboarding("user-1", loading = false, alreadyShownForUser = true))
-        assertFalse(shouldShowPermissionOnboarding(null, loading = false, alreadyShownForUser = false))
-        assertFalse(shouldShowPermissionOnboarding("", loading = false, alreadyShownForUser = false))
-    }
-
-    @Test
-    fun permissionOnboardingAcknowledgementIsScopedToServerAndUser() {
-        val userOne = permissionOnboardingPreferenceKey("http://server-a", "user-1")
-        assertEquals(userOne, permissionOnboardingPreferenceKey("http://server-a", "user-1"))
-        assertTrue(userOne != permissionOnboardingPreferenceKey("http://server-b", "user-1"))
-        assertTrue(userOne != permissionOnboardingPreferenceKey("http://server-a", "user-2"))
+    fun defaultStandbyStartsOnceAfterSignedInDeviceIsReady() {
+        assertNull(defaultStandbyRequestKey("user-1", "device-1", loading = true, requestedFor = null))
+        assertNull(defaultStandbyRequestKey(null, "device-1", loading = false, requestedFor = null))
+        assertNull(defaultStandbyRequestKey("user-1", null, loading = false, requestedFor = null))
+        assertEquals(
+            "user-1:device-1",
+            defaultStandbyRequestKey("user-1", "device-1", loading = false, requestedFor = null),
+        )
+        assertNull(
+            defaultStandbyRequestKey(
+                "user-1",
+                "device-1",
+                loading = false,
+                requestedFor = "user-1:device-1",
+            ),
+        )
+        assertEquals(
+            "user-1:device-2",
+            defaultStandbyRequestKey(
+                "user-1",
+                "device-2",
+                loading = false,
+                requestedFor = "user-1:device-1",
+            ),
+        )
     }
 
     @Test

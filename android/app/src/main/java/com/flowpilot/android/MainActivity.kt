@@ -10,7 +10,6 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -77,6 +76,7 @@ class MainActivity : ComponentActivity() {
     private val notificationPermissionGranted = mutableStateOf(false)
     private var startMonitoringAfterNotificationGrant = false
     private var startOcrStandbyAfterNotificationGrant = false
+    private var startDefaultOcrAfterNotificationGrant = false
     private var pendingOcrStandbyStart = false
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -84,20 +84,15 @@ class MainActivity : ComponentActivity() {
         notificationPermissionGranted.value = granted || Build.VERSION.SDK_INT < 33
         val shouldStartMonitoring = startMonitoringAfterNotificationGrant
         val shouldStartOcrStandby = startOcrStandbyAfterNotificationGrant
+        val shouldStartDefaultOcr = startDefaultOcrAfterNotificationGrant
         startMonitoringAfterNotificationGrant = false
         startOcrStandbyAfterNotificationGrant = false
-        if (granted && shouldStartMonitoring) startRemoteMonitoring()
+        startDefaultOcrAfterNotificationGrant = false
+        if (granted && shouldStartDefaultOcr) {
+            if (remoteMonitoring.value || startRemoteMonitoring()) requestDefaultOcrStandby()
+        }
+        else if (granted && shouldStartMonitoring) startRemoteMonitoring()
         else if (granted && shouldStartOcrStandby) requestOcrStandbyCapturePermission()
-        else if (granted && guidedAuthorizationWaitingForNotification) {
-            guidedAuthorizationWaitingForNotification = false
-            continueGuidedAuthorizationSetup()
-        }
-        else if (!granted && guidedAuthorizationWaitingForNotification) {
-            guidedAuthorizationWaitingForNotification = false
-            guidedAuthorizationSetupActive = false
-            authorizationSetupInProgress.value = false
-            flowPilotViewModel.showError("未授予通知权限，一键授权流程已停止")
-        }
         else if (!granted) flowPilotViewModel.showError("未授予通知权限，无法显示远程待命和运行状态")
     }
     private val screenCapturePermission = registerForActivityResult(
@@ -106,12 +101,6 @@ class MainActivity : ComponentActivity() {
         if (pendingOcrStandbyStart) {
             pendingOcrStandbyStart = false
             if (result.resultCode != Activity.RESULT_OK || result.data == null) {
-                if (guidedAuthorizationSetupActive) {
-                    guidedAuthorizationSetupActive = false
-                    authorizationSetupInProgress.value = false
-                    flowPilotViewModel.showError("未授予屏幕捕获权限，一键授权流程已停止")
-                    return@registerForActivityResult
-                }
                 flowPilotViewModel.showError("未授予屏幕捕获权限，持续 OCR 待命未开启")
                 return@registerForActivityResult
             }
@@ -119,12 +108,9 @@ class MainActivity : ComponentActivity() {
                 OcrStandbyService.start(this, result.resultCode, result.data!!)
                 ocrStandbyActive.value = OcrStandbyService.isActive(this)
             } catch (exception: Exception) {
-                guidedAuthorizationSetupActive = false
-                authorizationSetupInProgress.value = false
                 flowPilotViewModel.showError("无法开启持续 OCR 待命：${exception.message ?: "未知错误"}")
                 return@registerForActivityResult
             }
-            if (guidedAuthorizationSetupActive) completeGuidedAuthorizationSetup()
             return@registerForActivityResult
         }
         val pending = pendingExecution
@@ -210,10 +196,6 @@ class MainActivity : ComponentActivity() {
     private val accessibilityEnabled = mutableStateOf(false)
     private val remoteMonitoring = mutableStateOf(false)
     private val ocrStandbyActive = mutableStateOf(false)
-    private val authorizationSetupInProgress = mutableStateOf(false)
-    private var guidedAuthorizationSetupActive = false
-    private var guidedAuthorizationWaitingForNotification = false
-    private var guidedAuthorizationWaitingForAccessibility = false
     private var pendingExecution: PendingExecution? = null
     private val runStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -254,11 +236,7 @@ class MainActivity : ComponentActivity() {
                         notificationPermissionGranted = notificationPermissionGranted.value,
                         remoteMonitoring = remoteMonitoring.value,
                         ocrStandbyActive = ocrStandbyActive.value,
-                        authorizationSetupInProgress = authorizationSetupInProgress.value,
-                        onRequestNotificationPermission = {
-                            requestNotificationPermission()
-                        },
-                        onStartAuthorizationSetup = ::startGuidedAuthorizationSetup,
+                        onStartDefaultStandby = ::startDefaultStandby,
                         onSetOcrStandby = ::setOcrStandby,
                         onAutoRunRemoteRequest = ::autoRunRemoteRequest,
                         onRunTask = ::beginExecution,
@@ -294,16 +272,6 @@ class MainActivity : ComponentActivity() {
                 android.content.pm.PackageManager.PERMISSION_GRANTED
         remoteMonitoring.value = RemoteRunMonitorService.isMonitoring(this)
         ocrStandbyActive.value = OcrStandbyService.isActive(this)
-        if (guidedAuthorizationWaitingForAccessibility) {
-            guidedAuthorizationWaitingForAccessibility = false
-            if (accessibilityEnabled.value) {
-                continueGuidedAuthorizationSetup()
-            } else {
-                guidedAuthorizationSetupActive = false
-                authorizationSetupInProgress.value = false
-                flowPilotViewModel.showError("未启用 FlowPilot 无障碍服务，一键授权流程已停止")
-            }
-        }
         OcrStandbyService.consumeLastError(this)?.let(flowPilotViewModel::showError)
         flowPilotViewModel.refreshRunStatus()
         flowPilotViewModel.refreshRunHistory()
@@ -526,78 +494,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startGuidedAuthorizationSetup() {
+    private fun startDefaultStandby() {
         if (flowPilotViewModel.state.value.device == null) {
-            flowPilotViewModel.showError("请先绑定此设备，再开启授权和远程待命")
+            flowPilotViewModel.showError("请先绑定此设备，远程待命才能启动")
             return
         }
+        if (Build.VERSION.SDK_INT >= 33 && !notificationPermissionGranted.value) {
+            startDefaultOcrAfterNotificationGrant = true
+            requestNotificationPermission()
+            return
+        }
+        if (!remoteMonitoring.value && !startRemoteMonitoring()) return
+        requestDefaultOcrStandby()
+    }
+
+    private fun requestDefaultOcrStandby() {
         if (!canStartOcrStandby(RunStatusStore(this).snapshot().status)) {
-            flowPilotViewModel.showError("当前任务运行中，完成或停止任务后再开启授权和待命")
+            flowPilotViewModel.showError("远程待命已开启；当前任务运行中，稍后可重新开启持续 OCR 待命")
             return
         }
-        guidedAuthorizationSetupActive = true
-        authorizationSetupInProgress.value = true
-        continueGuidedAuthorizationSetup()
-    }
-
-    private fun continueGuidedAuthorizationSetup() {
-        if (!guidedAuthorizationSetupActive) return
-        when (nextAuthorizationSetupStep(
-            notificationGranted = notificationPermissionGranted.value,
-            accessibilityEnabled = accessibilityEnabled.value,
-            screenCaptureActive = ocrStandbyActive.value,
-        )) {
-            AuthorizationSetupStep.NOTIFICATION -> {
-                if (Build.VERSION.SDK_INT >= 33) {
-                    guidedAuthorizationWaitingForNotification = true
-                    notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                } else {
-                    notificationPermissionGranted.value = true
-                    continueGuidedAuthorizationSetup()
-                }
-            }
-            AuthorizationSetupStep.ACCESSIBILITY -> {
-                guidedAuthorizationWaitingForAccessibility = true
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
-            AuthorizationSetupStep.SCREEN_CAPTURE -> requestOcrStandbyCapturePermission()
-            AuthorizationSetupStep.COMPLETE -> completeGuidedAuthorizationSetup()
-        }
-    }
-
-    private fun completeGuidedAuthorizationSetup() {
-        if (!guidedAuthorizationSetupActive) return
-        lifecycleScope.launch {
-            repeat(30) {
-                if (OcrStandbyService.isActive(this@MainActivity)) {
-                    ocrStandbyActive.value = true
-                    if (!remoteMonitoring.value && !startRemoteMonitoring()) {
-                        OcrStandbyService.stop(this@MainActivity)
-                        ocrStandbyActive.value = false
-                        guidedAuthorizationSetupActive = false
-                        authorizationSetupInProgress.value = false
-                        return@launch
-                    }
-                    guidedAuthorizationSetupActive = false
-                    authorizationSetupInProgress.value = false
-                    Toast.makeText(
-                        this@MainActivity,
-                        "授权完成，远程待命和持续 OCR 已开启",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    return@launch
-                }
-                OcrStandbyService.consumeLastError(this@MainActivity)?.let { error ->
-                    guidedAuthorizationSetupActive = false
-                    authorizationSetupInProgress.value = false
-                    flowPilotViewModel.showError("持续 OCR 待命启动失败：$error")
-                    return@launch
-                }
-                delay(100)
-            }
-            guidedAuthorizationSetupActive = false
-            authorizationSetupInProgress.value = false
-            flowPilotViewModel.showError("持续 OCR 待命未能启动，请重试")
+        if (OcrStandbyService.isActive(this)) {
+            ocrStandbyActive.value = true
+        } else {
+            requestOcrStandbyCapturePermission()
         }
     }
 
@@ -667,9 +586,7 @@ private fun FlowPilotScreen(
     notificationPermissionGranted: Boolean,
     remoteMonitoring: Boolean,
     ocrStandbyActive: Boolean,
-    authorizationSetupInProgress: Boolean,
-    onRequestNotificationPermission: () -> Unit,
-    onStartAuthorizationSetup: () -> Unit,
+    onStartDefaultStandby: () -> Unit,
     onSetOcrStandby: (Boolean) -> Unit,
     onRunTask: (AvailableTask, String?, String?) -> Unit,
     onAutoRunRemoteRequest: (RemoteRun) -> Unit,
@@ -688,25 +605,20 @@ private fun FlowPilotScreen(
     var email by rememberSaveable { mutableStateOf(state.loginEmail) }
     var password by rememberSaveable { mutableStateOf(state.loginPassword) }
     var rememberLoginInfo by rememberSaveable { mutableStateOf(state.rememberLoginInfo) }
-    var permissionOnboardingVisible by remember { mutableStateOf(false) }
-    var permissionOnboardingShownForUser by remember { mutableStateOf<String?>(null) }
+    var defaultStandbyRequestedFor by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedTask by remember { mutableStateOf<AvailableTask?>(null) }
     var confirmDeviceUnbind by rememberSaveable { mutableStateOf(false) }
     var scriptReviewAttempt by remember { mutableStateOf<String?>(null) }
     var confirmScriptRun by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(user?.id, state.loading) {
+    LaunchedEffect(user?.id, device?.id, state.loading) {
         if (user == null) {
-            permissionOnboardingShownForUser = null
-            permissionOnboardingVisible = false
-        } else if (shouldShowPermissionOnboarding(
-                userId = user.id,
-                loading = state.loading,
-                alreadyShownForUser = permissionOnboardingShownForUser == user.id ||
-                    viewModel.hasSeenPermissionOnboarding(user.id),
-            )
-        ) {
-            permissionOnboardingShownForUser = user.id
-            permissionOnboardingVisible = true
+            defaultStandbyRequestedFor = null
+        } else {
+            defaultStandbyRequestKey(user.id, device?.id, state.loading, defaultStandbyRequestedFor)
+                ?.let { deviceKey ->
+                    defaultStandbyRequestedFor = deviceKey
+                    onStartDefaultStandby()
+                }
         }
     }
     LaunchedEffect(user?.id, device?.id, ocrStandbyActive) {
@@ -934,33 +846,6 @@ private fun FlowPilotScreen(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text("一键授权与待命设置", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "按顺序请求通知、无障碍和屏幕捕获授权；完成后开启远程运行待命与持续 OCR。Android 系统仍会要求你逐项确认，无障碍需在系统设置中手动开启。两个待命服务会持续运行并显示通知，可随时分别停止。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Button(
-                            onClick = onStartAuthorizationSetup,
-                            enabled = !authorizationSetupInProgress && !state.loading,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(
-                                if (authorizationSetupInProgress) {
-                                    "请按系统提示完成授权…"
-                                } else {
-                                    "一键授权并开启待命"
-                                },
-                            )
-                        }
-                    }
-                }
-
-                FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -975,6 +860,12 @@ private fun FlowPilotScreen(
                         Text(
                             "待命期间会显示持续服务通知。所有远程请求都会自动运行，无需逐项审阅或确认；任务可随时停止。若任务需要无障碍或屏幕捕获，仍须先在 Android 系统中启用或授权。持续 OCR 待命开启时可复用当前屏幕捕获授权；否则收到请求后打开 App 并按系统提示授权。",
                         )
+                        if (!notificationPermissionGranted) {
+                            Text(
+                                "未授予通知权限，远程待命无法启动。点击下方按钮可再次请求通知权限。",
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                         Button(
                             onClick = { onSetRemoteMonitoring(!remoteMonitoring) },
                             modifier = Modifier.fillMaxWidth(),
@@ -1001,7 +892,7 @@ private fun FlowPilotScreen(
                             )
                         }
                         Text(
-                            "你可以在此主动授权屏幕捕获。待命时屏幕捕获会持续运行并显示独立的 Android 前台服务通知；确认过的远程 OCR 请求可复用本次会话，减少重复系统授权。停止待命、系统回收或撤销共享后，会话失效，后续 OCR 需要重新授权。",
+                            "登录并绑定设备后会自动请求屏幕捕获授权；也可在此重新授权。待命时屏幕捕获会持续运行并显示独立的 Android 前台服务通知；确认过的远程 OCR 请求可复用本次会话，减少重复系统授权。停止待命、系统回收或撤销共享后，会话失效，后续 OCR 需要重新授权。",
                         )
                         Button(
                             onClick = { onSetOcrStandby(!ocrStandbyActive) },
@@ -1326,89 +1217,6 @@ private fun FlowPilotScreen(
             Text(message, color = MaterialTheme.colorScheme.error)
         }
         Spacer(Modifier.height(8.dp))
-    }
-
-    if (permissionOnboardingVisible && user != null) {
-        val dismissPermissionOnboarding = {
-            viewModel.markPermissionOnboardingSeen(user.id)
-            permissionOnboardingVisible = false
-        }
-        AlertDialog(
-            onDismissRequest = dismissPermissionOnboarding,
-            title = { Text("FlowPilot 权限设置") },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .heightIn(max = 420.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Text("请了解并按需开启以下权限。Android 系统控制权限授予，FlowPilot 不会绕过系统确认或隐藏运行。")
-                    if (device != null) {
-                        Button(
-                            onClick = onStartAuthorizationSetup,
-                            enabled = !authorizationSetupInProgress && !state.loading,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(
-                                if (authorizationSetupInProgress) {
-                                    "请按系统提示完成授权…"
-                                } else {
-                                    "一键授权并开启待命"
-                                },
-                            )
-                        }
-                    }
-                    Text("网络访问：用于连接 FlowPilot 服务，由 Android 在安装时授权。")
-                    Text(
-                        "通知权限（Android 13 及以上）：${if (notificationPermissionGranted) "已允许" else "未允许"}。远程待命及任务状态需要通知权限。",
-                    )
-                    if (!notificationPermissionGranted) {
-                        TextButton(onClick = onRequestNotificationPermission) {
-                            Text("请求通知权限")
-                        }
-                    }
-                    Text(
-                        "无障碍服务：${if (accessibilityEnabled) "已启用" else "未启用"}。仅在任务需要屏幕交互时使用；需在 Android 设置中由你手动启用。",
-                    )
-                    if (!accessibilityEnabled) {
-                        TextButton(onClick = onOpenAccessibilitySettings) {
-                            Text("打开无障碍设置")
-                        }
-                    }
-                    Text(
-                        "前台服务：由 Android 管理并声明，用于远程待命和任务运行；运行期间必须显示持续通知，可随时停止。当前远程待命：${if (remoteMonitoring) "运行中" else "未运行"}。",
-                    )
-                    if (device != null) {
-                        TextButton(
-                            onClick = { onSetRemoteMonitoring(!remoteMonitoring) },
-                        ) {
-                            Text(if (remoteMonitoring) "停止远程待命" else "开启远程待命")
-                        }
-                    } else {
-                        Text("绑定设备后可开启远程待命。")
-                    }
-                    Text(
-                        "屏幕捕获（OCR）：可主动开启持续 OCR 待命并由 Android 系统授权一次；待命期间远程 OCR 可复用会话并显示持续通知。结束或系统回收后需重新授权，不能永久保活。当前状态：${if (ocrStandbyActive) "运行中" else "未运行"}。",
-                    )
-                    if (device != null) {
-                        TextButton(onClick = { onSetOcrStandby(!ocrStandbyActive) }) {
-                            Text(if (ocrStandbyActive) "停止持续 OCR 待命" else "开启持续 OCR 待命")
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = dismissPermissionOnboarding) {
-                    Text("完成")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = dismissPermissionOnboarding) {
-                    Text("稍后")
-                }
-            },
-        )
     }
 
     selectedTask?.let { task ->

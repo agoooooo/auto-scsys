@@ -30,6 +30,17 @@ internal fun requiresNewScreenCaptureAuthorization(
 internal fun canStartOcrStandby(runStatus: String?): Boolean =
     runStatus !in setOf("running", "awaiting_permission")
 
+internal fun defaultStandbyRequestKey(
+    userId: String?,
+    deviceId: String?,
+    loading: Boolean,
+    requestedFor: String?,
+): String? {
+    if (loading || userId.isNullOrBlank() || deviceId.isNullOrBlank()) return null
+    val key = "$userId:$deviceId"
+    return key.takeIf { it != requestedFor }
+}
+
 internal fun shouldDirectlyRunRemoteRequest(
     status: String,
     runId: String?,
@@ -39,12 +50,6 @@ internal fun shouldDirectlyRunRemoteRequest(
 ): Boolean = (status == "pending" || (status == "running" && !runId.isNullOrBlank())) &&
     (!accessibilityRequired || accessibilityEnabled) &&
     canStartOcrStandby(deviceRunStatus)
-
-internal fun shouldShowPermissionOnboarding(
-    userId: String?,
-    loading: Boolean,
-    alreadyShownForUser: Boolean,
-): Boolean = !userId.isNullOrBlank() && !loading && !alreadyShownForUser
 
 internal fun requiresAccessibility(capabilities: List<String>): Boolean =
     capabilities.any { capability ->
