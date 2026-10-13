@@ -64,9 +64,14 @@ def _device_is_recent(device: sqlite3.Row, now: datetime | None = None) -> bool:
     return (current - last_active.astimezone(timezone.utc)).total_seconds() <= DEVICE_OFFLINE_AFTER_SECONDS
 
 
-def _refresh_device_statuses(db: sqlite3.Connection) -> None:
+def _refresh_device_statuses(db: sqlite3.Connection, device_id: str | None = None) -> None:
     now = datetime.now(timezone.utc)
-    for device in db.execute("SELECT id,last_active FROM devices WHERE status='online'").fetchall():
+    query = "SELECT id,last_active FROM devices WHERE status='online'"
+    parameters = ()
+    if device_id is not None:
+        query += " AND id=?"
+        parameters = (device_id,)
+    for device in db.execute(query, parameters).fetchall():
         if not _device_is_recent(device, now):
             db.execute("UPDATE devices SET status='offline' WHERE id=?", (device["id"],))
 
@@ -205,7 +210,8 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
                 created_at TEXT NOT NULL,
                 expires_at INTEGER NOT NULL,
                 run_id TEXT,
-                stop_requested_at TEXT
+                stop_requested_at TEXT,
+                idempotency_key TEXT
             );
             CREATE TABLE IF NOT EXISTS run_authorizations (
                 id TEXT PRIMARY KEY,
@@ -251,7 +257,7 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, revoked_at);
             CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at);
-            CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
+            CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id            );
             CREATE INDEX IF NOT EXISTS idx_runs_device ON runs(device_id, started_at);
             CREATE INDEX IF NOT EXISTS idx_remote_device ON remote_runs(device_id, status, expires_at);
             """
@@ -273,6 +279,26 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
         remote_run_columns = db.table_columns("remote_runs")
         if "stop_requested_at" not in remote_run_columns:
             db.execute("ALTER TABLE remote_runs ADD COLUMN stop_requested_at TEXT")
+        if "idempotency_key" not in remote_run_columns:
+            db.execute("ALTER TABLE remote_runs ADD COLUMN idempotency_key TEXT")
+        active_run_conflict = db.execute(
+            """SELECT device_id FROM runs WHERE status='running'
+               GROUP BY device_id HAVING COUNT(*)>1 LIMIT 1"""
+        ).fetchone()
+        if active_run_conflict:
+            raise RuntimeError(
+                "Cannot enforce one active run per device: "
+                f"device {active_run_conflict['device_id']} already has multiple running records"
+            )
+        db.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_per_device
+               ON runs(device_id) WHERE status='running'"""
+        )
+        db.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_run_idempotency
+               ON remote_runs(requested_by,device_id,idempotency_key)
+               WHERE idempotency_key IS NOT NULL"""
+        )
         if seed_demo and db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
             _seed_database(db)
         db.execute("UPDATE task_versions SET content_size=length(content) WHERE content_size=0 AND content IS NOT NULL")
@@ -590,7 +616,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         ])),
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     )
 
     def connection():
@@ -695,11 +721,13 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if not publication:
             raise HTTPException(status_code=403, detail="设备尚未确认接收此脚本版本")
 
-    def _expire_requests(db: sqlite3.Connection) -> None:
-        db.execute(
-            "UPDATE remote_runs SET status='expired' WHERE status='pending' AND expires_at<=?",
-            (int(time.time()),),
-        )
+    def _expire_requests(db: sqlite3.Connection, request_id: str | None = None) -> None:
+        query = "UPDATE remote_runs SET status='expired' WHERE status='pending' AND expires_at<=?"
+        parameters: tuple = (int(time.time()),)
+        if request_id is not None:
+            query += " AND id=?"
+            parameters += (request_id,)
+        db.execute(query, parameters)
 
     def _ensure_device_idle(db: sqlite3.Connection, device_id: str) -> None:
         active_run = db.execute(
@@ -711,11 +739,14 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
 
     def _start_run(db: sqlite3.Connection, request: sqlite3.Row) -> str:
         run_id = str(uuid.uuid4())
-        db.execute(
-            """INSERT INTO runs(id,task_id,version,device_id,remote_run_id,status,started_at)
-               VALUES(?,?,?,?,?,'running',?)""",
-            (run_id, request["task_id"], request["version"], request["device_id"], request["id"], utc_now()),
-        )
+        try:
+            db.execute(
+                """INSERT INTO runs(id,task_id,version,device_id,remote_run_id,status,started_at)
+                   VALUES(?,?,?,?,?,'running',?)""",
+                (run_id, request["task_id"], request["version"], request["device_id"], request["id"], utc_now()),
+            )
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(status_code=409, detail="设备当前有任务运行") from error
         db.execute("UPDATE remote_runs SET status='running',run_id=? WHERE id=?", (run_id, request["id"]))
         return run_id
 
@@ -1678,13 +1709,47 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         )
 
     @app.post("/remote-runs", status_code=201)
-    def create_remote_run(body: RemoteRunInput, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
-        _refresh_device_statuses(db)
+    def create_remote_run(
+        body: RemoteRunInput,
+        idempotency_key: str | None = Header(
+            default=None,
+            alias="Idempotency-Key",
+            min_length=1,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9._:-]+$",
+        ),
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
         if user["role"] != "user":
             raise HTTPException(status_code=403, detail="只有普通用户可以为自己的设备发起远程运行")
         device = _device_for_user(db, body.device_id, user)
         if device["user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="只能为自己的设备发起远程运行")
+        db.lock_device(device["id"])
+        device = _device_for_user(db, body.device_id, user)
+        _refresh_device_statuses(db, device["id"])
+        device = _device_for_user(db, body.device_id, user)
+        if idempotency_key is not None:
+            existing = db.execute(
+                """SELECT * FROM remote_runs
+                   WHERE requested_by=? AND device_id=? AND idempotency_key=?""",
+                (user["id"], device["id"], idempotency_key),
+            ).fetchone()
+            if existing:
+                if existing["task_id"] != body.task_id:
+                    raise HTTPException(status_code=409, detail="幂等键已用于其他派发请求")
+                return {
+                    "id": existing["id"],
+                    "task_id": existing["task_id"],
+                    "version": existing["version"],
+                    "device_id": existing["device_id"],
+                    "status": existing["status"],
+                    "created_at": existing["created_at"],
+                    "expires_at": existing["expires_at"],
+                    "run_id": existing["run_id"],
+                    "idempotent_replay": True,
+                }
         if device["status"] != "online":
             raise HTTPException(status_code=409, detail="只能向在线设备发起运行请求")
         _ensure_device_idle(db, device["id"])
@@ -1695,20 +1760,36 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         request_id = str(uuid.uuid4())
         now = int(time.time())
         expires_at = now + REMOTE_REQUEST_TTL_SECONDS
+        created_at = utc_now()
         db.execute(
-            """INSERT INTO remote_runs(id,task_id,version,device_id,requested_by,status,created_at,expires_at)
-               VALUES(?,?,?,?,?,'pending',?,?)""",
-            (request_id, task["id"], task["active_version"], body.device_id, user["id"], utc_now(), expires_at),
+            """INSERT INTO remote_runs(
+                   id,task_id,version,device_id,requested_by,status,created_at,expires_at,idempotency_key
+               ) VALUES(?,?,?,?,?,'pending',?,?,?)""",
+            (
+                request_id, task["id"], task["active_version"], body.device_id, user["id"],
+                created_at, expires_at, idempotency_key,
+            ),
         )
-        _expire_requests(db)
         audit(db, user["id"], "remote_run.requested", "remote_run", request_id)
-        return {"id": request_id, "task_id": task["id"], "version": task["active_version"], "device_id": body.device_id, "status": "pending", "created_at": utc_now(), "expires_at": expires_at, "run_id": None}
+        return {
+            "id": request_id,
+            "task_id": task["id"],
+            "version": task["active_version"],
+            "device_id": body.device_id,
+            "status": "pending",
+            "created_at": created_at,
+            "expires_at": expires_at,
+            "run_id": None,
+            "idempotent_replay": False,
+        }
 
     @app.post("/devices/{device_id}/runs", status_code=201)
     def start_local_run(device_id: str, body: LocalRunInput, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         device = _device_for_user(db, device_id, user)
         if user["role"] != "user" or device["user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="只能在自己的设备上确认本地运行")
+        db.lock_device(device["id"])
+        device = _device_for_user(db, device_id, user)
         _touch_device(db, device_id)
         task = _task_for_user(db, body.task_id, user)
         version = db.execute(
@@ -1720,11 +1801,14 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         _ensure_device_has_task_version(db, task, device, body.version)
         _ensure_device_idle(db, device["id"])
         run_id = str(uuid.uuid4())
-        db.execute(
-            """INSERT INTO runs(id,task_id,version,device_id,status,started_at)
-               VALUES(?,?,?,?,'running',?)""",
-            (run_id, task["id"], body.version, device_id, utc_now()),
-        )
+        try:
+            db.execute(
+                """INSERT INTO runs(id,task_id,version,device_id,status,started_at)
+                   VALUES(?,?,?,?,'running',?)""",
+                (run_id, task["id"], body.version, device_id, utc_now()),
+            )
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(status_code=409, detail="设备当前有任务运行") from error
         audit(db, user["id"], "run.local_started", "run", run_id)
         return {"id": run_id, "task_id": task["id"], "version": body.version, "device_id": device_id, "status": "running"}
 
@@ -1828,13 +1912,18 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
 
     @app.patch("/remote-runs/{request_id}")
     def decide_remote_run(request_id: str, body: RemoteRunDecision, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
-        _expire_requests(db)
         request = db.execute("SELECT * FROM remote_runs WHERE id=?", (request_id,)).fetchone()
         if not request:
             raise HTTPException(status_code=404, detail="运行请求不存在")
         device = _device_for_user(db, request["device_id"], user)
         if user["role"] != "user" or device["user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="只有目标设备所属用户可以处理运行请求")
+        db.lock_device(device["id"])
+        request = db.execute("SELECT * FROM remote_runs WHERE id=?", (request_id,)).fetchone()
+        if not request:
+            raise HTTPException(status_code=404, detail="运行请求不存在")
+        _expire_requests(db, request_id)
+        request = db.execute("SELECT * FROM remote_runs WHERE id=?", (request_id,)).fetchone()
         _touch_device(db, device["id"])
         if request["status"] == "expired":
             raise HTTPException(status_code=410, detail="运行请求已过期")
@@ -1874,6 +1963,10 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         device = _device_for_user(db, run["device_id"], user)
         if user["role"] != "user" or device["user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="只有目标设备所属用户可以更新运行状态")
+        db.lock_device(device["id"])
+        run = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+        if not run:
+            raise HTTPException(status_code=404, detail="运行记录不存在")
         _touch_device(db, device["id"])
         if run["status"] != "running":
             raise HTTPException(status_code=409, detail="运行记录已结束")

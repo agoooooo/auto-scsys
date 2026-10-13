@@ -5,6 +5,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -311,11 +312,12 @@ def test_configured_cors_origin_is_allowed_but_unconfigured_origin_is_rejected(t
             headers={
                 "Origin": "http://192.168.0.101:8000",
                 "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "content-type",
+                "Access-Control-Request-Headers": "content-type,idempotency-key",
             },
         )
         assert allowed.status_code == 200
         assert allowed.headers["access-control-allow-origin"] == "http://192.168.0.101:8000"
+        assert "idempotency-key" in allowed.headers["access-control-allow-headers"].lower()
         rejected = test_client.options(
             "/auth/login",
             headers={
@@ -1446,6 +1448,9 @@ def test_existing_database_migrates_active_version_and_authorization_scope(clien
     with sqlite3.connect(db_path) as db:
         db.execute("ALTER TABLE tasks DROP COLUMN active_version")
         db.execute("ALTER TABLE run_authorizations DROP COLUMN all_versions")
+        db.execute("DROP INDEX idx_remote_run_idempotency")
+        db.execute("DROP INDEX idx_runs_one_active_per_device")
+        db.execute("ALTER TABLE remote_runs DROP COLUMN idempotency_key")
         db.execute("ALTER TABLE remote_runs DROP COLUMN stop_requested_at")
 
     app = create_app(db_path, b"test-secret-must-be-at-least-32-bytes")
@@ -1461,8 +1466,14 @@ def test_existing_database_migrates_active_version_and_authorization_scope(clien
             remote_run_columns = {
                 row[1] for row in db.execute("PRAGMA table_info(remote_runs)")
             }
+            index_names = {
+                row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'")
+            }
         assert "all_versions" in authorization_columns
         assert "stop_requested_at" in remote_run_columns
+        assert "idempotency_key" in remote_run_columns
+        assert "idx_runs_one_active_per_device" in index_names
+        assert "idx_remote_run_idempotency" in index_names
 
 
 def test_remote_run_confirmation_rejection_and_run_record(client):
@@ -1697,6 +1708,89 @@ def test_device_rejects_concurrent_remote_and_local_runs(client):
         headers=auth(user),
         json={"decision": "approve"},
     ).status_code == 200
+
+
+def test_remote_run_idempotency_key_replays_and_rejects_conflicting_payload(client):
+    user = login(client)
+    headers = {**auth(user), "Idempotency-Key": "dispatch-request-001"}
+    first = client.post(
+        "/remote-runs",
+        headers=headers,
+        json={"task_id": "t-001", "device_id": "d-001"},
+    )
+    replay = client.post(
+        "/remote-runs",
+        headers=headers,
+        json={"task_id": "t-001", "device_id": "d-001"},
+    )
+
+    assert first.status_code == replay.status_code == 201
+    assert first.json()["id"] == replay.json()["id"]
+    assert first.json()["idempotent_replay"] is False
+    assert replay.json()["idempotent_replay"] is True
+    with sqlite3.connect(client.app.state.db_path) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM remote_runs WHERE idempotency_key=?",
+            ("dispatch-request-001",),
+        ).fetchone()[0] == 1
+
+    conflict = client.post(
+        "/remote-runs",
+        headers=headers,
+        json={"task_id": "t-999", "device_id": "d-001"},
+    )
+    assert conflict.status_code == 409
+
+
+def test_concurrent_remote_run_retries_with_same_key_create_one_request(client):
+    user = login(client)
+    headers = {**auth(user), "Idempotency-Key": "concurrent-dispatch-001"}
+    barrier = threading.Barrier(2)
+
+    def submit():
+        barrier.wait()
+        return client.post(
+            "/remote-runs",
+            headers=headers,
+            json={"task_id": "t-001", "device_id": "d-001"},
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        responses = list(executor.map(lambda _: submit(), range(2)))
+
+    assert [response.status_code for response in responses] == [201, 201]
+    assert len({response.json()["id"] for response in responses}) == 1
+    assert sorted(response.json()["idempotent_replay"] for response in responses) == [False, True]
+
+
+def test_concurrent_approvals_start_only_one_run_for_a_device(client):
+    user = login(client)
+    requests = [
+        client.post(
+            "/remote-runs",
+            headers=auth(user),
+            json={"task_id": "t-001", "device_id": "d-001"},
+        ).json()
+        for _ in range(2)
+    ]
+    barrier = threading.Barrier(2)
+
+    def approve(request):
+        barrier.wait()
+        return client.patch(
+            f"/remote-runs/{request['id']}",
+            headers=auth(user),
+            json={"decision": "approve"},
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        responses = list(executor.map(approve, requests))
+
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    with sqlite3.connect(client.app.state.db_path) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM runs WHERE device_id='d-001' AND status='running'"
+        ).fetchone()[0] == 1
 
 
 def test_legacy_preauthorization_does_not_auto_start_current_remote_runs(client):

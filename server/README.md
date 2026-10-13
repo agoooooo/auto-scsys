@@ -128,7 +128,7 @@ The helper intentionally does not create the destination, encrypt, upload, rotat
 - `GET /devices/{id}/tasks/{task_id}/versions/{version}/content-url`（授权后签发 5 分钟脚本下载地址；SQLite 返回直连兼容模式）
 - `GET /devices/{id}/tasks/{task_id}/versions/{version}/content`（SQLite/旧客户端兼容下载）
 - `POST /devices/{id}/publications/{publication_id}/accept`（设备用户确认接收指定脚本版本）
-- `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`GET /remote-runs/{id}`、`PATCH /remote-runs/{id}`、`POST /remote-runs/{id}/stop`；只有普通用户可为自己的设备创建远程运行请求或请求停止。新请求一律保持待处理状态，Android 客户端须在服务端重新校验并批准后才会建立运行记录；历史预授权不会自动启动当前客户端的请求。设备轮询结果包含待处理请求、运行中的请求及最近 50 条过期请求，方便设备端显示过期状态；运行中的请求包含 `run_id` 和 `stop_requested`。运行中的停止请求以幂等标记传给受控端，受控端执行期间每 5 秒查询，脚本在下一个停止检查点退出；此信令不强行终止 Android 进程或任意阻塞代码。Web/App 查询请求状态时也会看到停止标记，结束状态仍由受控端上报。设备只向服务端上报固定的安全诊断摘要，不会上传任意脚本异常或屏幕内容
+- `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`GET /remote-runs/{id}`、`PATCH /remote-runs/{id}`、`POST /remote-runs/{id}/stop`；只有普通用户可为自己的设备创建远程运行请求或请求停止。新请求一律保持待处理状态，Android 客户端须在服务端重新校验并批准后才会建立运行记录；历史预授权不会自动启动当前客户端的请求。创建请求可带 `Idempotency-Key`（1–128 个字母、数字、点、下划线、冒号或连字符）；同一用户、设备和幂等键重试同一任务时返回原请求，复用该键派发其他任务返回 `409`。Web 和控制端 App 都会发送幂等键。服务端按目标设备锁定派发/批准/本地启动及完成事务，并以数据库唯一部分索引保证每台设备至多一个运行中的任务；若升级时发现同设备已有多条运行中记录，服务端会明确拒绝启动，须先核实并修复记录。设备轮询结果包含待处理请求、运行中的请求及最近 50 条过期请求，方便设备端显示过期状态；运行中的请求包含 `run_id` 和 `stop_requested`。运行中的停止请求以幂等标记传给受控端，受控端执行期间每 5 秒查询，脚本在下一个停止检查点退出；此信令不强行终止 Android 进程或任意阻塞代码。Web/App 查询请求状态时也会看到停止标记，结束状态仍由受控端上报。设备只向服务端上报固定的安全诊断摘要，不会上传任意脚本异常或屏幕内容
 - `POST /runs/{id}`、`GET /runs`（包含可用于关联远程请求的 `remote_run_id`）
 - `GET/POST/DELETE /run-authorizations`、`GET /admin/audit`
 

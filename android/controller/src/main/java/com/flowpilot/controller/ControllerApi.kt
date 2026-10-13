@@ -7,6 +7,7 @@ import java.net.URI
 import java.net.URISyntaxException
 import java.net.URL
 import java.util.Locale
+import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -108,13 +109,19 @@ internal class ControllerApi(baseUrl: String) {
                 )
             }
 
-    fun dispatch(token: String, taskId: String, deviceId: String): String {
+    fun dispatch(
+        token: String,
+        taskId: String,
+        deviceId: String,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+    ): String {
         val response = JSONObject(
             request(
                 "/remote-runs",
                 "POST",
                 token,
                 JSONObject().put("task_id", taskId).put("device_id", deviceId),
+                idempotencyKey,
             ),
         )
         return response.optString("id").takeIf(String::isNotBlank)
@@ -161,6 +168,7 @@ internal class ControllerApi(baseUrl: String) {
         method: String = "GET",
         token: String? = null,
         payload: JSONObject? = null,
+        idempotencyKey: String? = null,
     ): String {
         val connection = URL("$baseUrl$path").openConnection() as HttpURLConnection
         try {
@@ -169,6 +177,7 @@ internal class ControllerApi(baseUrl: String) {
             connection.readTimeout = 10_000
             connection.setRequestProperty("Accept", "application/json")
             token?.let { connection.setRequestProperty("Authorization", "Bearer $it") }
+            idempotencyKey?.let { connection.setRequestProperty("Idempotency-Key", it) }
             if (payload != null) {
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")

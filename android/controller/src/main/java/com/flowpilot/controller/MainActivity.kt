@@ -41,6 +41,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 private data class ControllerScreenState(
     val apiUrl: String = defaultControllerApiUrl(),
@@ -56,6 +57,7 @@ private data class ControllerScreenState(
     val run: ControllerRunStatus? = null,
     val loading: Boolean = false,
     val dispatchUncertain: Boolean = false,
+    val dispatchIdempotencyKey: String? = null,
     val error: String? = null,
     val message: String? = null,
 )
@@ -87,7 +89,13 @@ class MainActivity : ComponentActivity() {
                         onLoginOrRegister = ::loginOrRegister,
                         onRefresh = ::refreshDashboard,
                         onSelectDevice = ::selectDevice,
-                        onSelectTask = { state = state.copy(selectedTaskId = it) },
+                        onSelectTask = {
+                            state = state.copy(
+                                selectedTaskId = it,
+                                dispatchIdempotencyKey = null,
+                                dispatchUncertain = false,
+                            )
+                        },
                         onDispatch = ::dispatch,
                         onCancelPending = ::cancelPendingRun,
                         onStopRunning = ::stopRunningRun,
@@ -198,6 +206,7 @@ class MainActivity : ComponentActivity() {
             run = null,
             loading = true,
             dispatchUncertain = false,
+            dispatchIdempotencyKey = null,
             error = null,
             message = null,
         )
@@ -219,15 +228,23 @@ class MainActivity : ComponentActivity() {
         val device = state.devices.firstOrNull { it.id == state.selectedDeviceId } ?: return
         val task = state.tasks.firstOrNull { it.id == state.selectedTaskId } ?: return
         if (!canDispatchControllerTask(device.status, task.status, task.version) || state.loading) return
-        state = state.copy(loading = true, error = null, message = null, run = null)
+        val idempotencyKey = state.dispatchIdempotencyKey ?: UUID.randomUUID().toString()
+        state = state.copy(
+            loading = true,
+            error = null,
+            message = null,
+            run = null,
+            dispatchIdempotencyKey = idempotencyKey,
+        )
         lifecycleScope.launch {
             try {
                 val requestId = withContext(Dispatchers.IO) {
-                    ControllerApi(session.apiUrl).dispatch(session.token, task.id, device.id)
+                    ControllerApi(session.apiUrl).dispatch(session.token, task.id, device.id, idempotencyKey)
                 }
                 state = state.copy(
                     loading = false,
                     dispatchUncertain = false,
+                    dispatchIdempotencyKey = null,
                     run = ControllerRunStatus(requestId, "pending", null, ""),
                     message = "任务已下发；请保持本页面打开以跟踪状态",
                 )

@@ -27,10 +27,11 @@ export function revokeSession(session, fetchImpl = fetch) {
   return apiRequest(session, "/auth/logout", { method: "POST" }, fetchImpl);
 }
 
-export async function apiRequest(session, path, { method = "GET", body, formData } = {}, fetchImpl = fetch) {
+export async function apiRequest(session, path, { method = "GET", body, formData, headers: extraHeaders = {} } = {}, fetchImpl = fetch) {
   const headers = {};
   if (session?.token) headers.Authorization = `Bearer ${session.token}`;
   if (body !== undefined) headers["Content-Type"] = "application/json";
+  Object.assign(headers, extraHeaders);
   let response;
   try {
     response = await fetchImpl(`${session.baseUrl.replace(/\/+$/, "")}${path}`, {
@@ -54,7 +55,14 @@ export async function apiRequest(session, path, { method = "GET", body, formData
   return payload;
 }
 
-export async function createRemoteRunRequest(session, taskId, deviceId, fetchImpl = fetch) {
+export async function createRemoteRunRequest(
+  session,
+  taskId,
+  deviceId,
+  fetchImpl = fetch,
+  idempotencyKey = globalThis.crypto?.randomUUID?.(),
+) {
+  if (!idempotencyKey) throw new Error("当前环境无法生成安全的派发请求标识");
   const devices = await apiRequest(session, "/devices", {}, fetchImpl);
   const device = devices.find((item) => item.id === deviceId);
   if (!device || device.user_id !== session.user.id) {
@@ -65,6 +73,7 @@ export async function createRemoteRunRequest(session, taskId, deviceId, fetchImp
   }
   return apiRequest(session, "/remote-runs", {
     method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
     body: { task_id: taskId, device_id: deviceId },
   }, fetchImpl);
 }

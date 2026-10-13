@@ -52,6 +52,8 @@ let activityQuery = "";
 let activityFilter = "all";
 let auditEvents = [];
 let auditLoading = false;
+let remoteRunIdempotencyKey = null;
+let remoteRunIdempotencyTarget = null;
 
 const workspace = document.querySelector("#workspace");
 const appShell = document.querySelector("#app-shell");
@@ -1170,11 +1172,24 @@ document.addEventListener("submit", async (event) => {
     submitButton.textContent = "正在发送…";
     try {
       const deviceId = new FormData(form).get("deviceId");
+      const idempotencyTarget = `${taskId}:${deviceId}`;
+      if (remoteRunIdempotencyTarget !== idempotencyTarget || !remoteRunIdempotencyKey) {
+        remoteRunIdempotencyTarget = idempotencyTarget;
+        remoteRunIdempotencyKey = globalThis.crypto?.randomUUID?.() ?? null;
+      }
       let request;
       if (!session || !canInitiateRemoteRun(session.user.role)) {
         throw new Error("请先登录服务端用户账号；离线演示不能向手机派发任务");
       }
-      request = await createRemoteRunRequest(session, taskId, deviceId);
+      request = await createRemoteRunRequest(
+        session,
+        taskId,
+        deviceId,
+        fetch,
+        remoteRunIdempotencyKey,
+      );
+      remoteRunIdempotencyKey = null;
+      remoteRunIdempotencyTarget = null;
       if (remoteRunFollowUpView(session?.user.role) === "mobile") {
         currentPhoneDeviceId = deviceId;
         currentView = "mobile";

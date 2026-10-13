@@ -114,11 +114,12 @@ test("remote-run submission posts the selected task and device", async () => {
       ]), { status: 200 });
     }
     return new Response(JSON.stringify({ id: "request-1", status: "pending" }), { status: 201 });
-  });
+  }, "web-dispatch-001");
   assert.equal(requests.length, 2);
   assert.equal(requests[0].url, "http://localhost:8001/devices");
   assert.equal(requests[1].url, "http://localhost:8001/remote-runs");
   assert.equal(requests[1].options.method, "POST");
+  assert.equal(requests[1].options.headers["Idempotency-Key"], "web-dispatch-001");
   assert.deepEqual(JSON.parse(requests[1].options.body), {
     task_id: "task-1",
     device_id: "device-2",

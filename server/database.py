@@ -98,6 +98,12 @@ class DatabaseConnection:
         else:
             self.execute("BEGIN IMMEDIATE")
 
+    def lock_device(self, device_id: str) -> None:
+        if self.postgres:
+            self.execute("SELECT id FROM devices WHERE id=? FOR UPDATE", (device_id,))
+        else:
+            self.begin_immediate()
+
     def commit(self) -> None:
         self._connection.commit()
 
