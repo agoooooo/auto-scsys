@@ -151,4 +151,4 @@ The helper intentionally does not create the destination, encrypt, upload, rotat
 
 ## 测试
 
-`make test` runs the SQLite server regression suite and frontend tests. PostgreSQL/S3 integration coverage is also available when `FLOWPILOT_TEST_DATABASE_URL` is set to a disposable PostgreSQL database; set all four `FLOWPILOT_TEST_S3_*` variables to exercise S3 storage too.
+`make test` runs the SQLite server regression suite and frontend tests. PostgreSQL integration coverage is also available when `FLOWPILOT_TEST_DATABASE_URL` is set to a disposable PostgreSQL database. To exercise S3 storage, set `FLOWPILOT_TEST_S3_BUCKET`, `FLOWPILOT_TEST_S3_ENDPOINT_URL`, `FLOWPILOT_TEST_S3_ACCESS_KEY` and `FLOWPILOT_TEST_S3_SECRET_KEY`; `FLOWPILOT_TEST_S3_PUBLIC_ENDPOINT_URL` and `FLOWPILOT_TEST_S3_REGION` are optional. The PostgreSQL integration suite exercises concurrent idempotent dispatch and approvals using isolated schemas; S3-backed runs additionally create, retrieve and delete a test script object.
