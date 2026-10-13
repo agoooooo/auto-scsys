@@ -68,6 +68,28 @@ internal class ControllerApi(
         )
     }
 
+    fun passwordRecoveryEnabled(): Boolean =
+        JSONObject(request("/auth/recovery-status")).optBoolean("enabled")
+
+    fun requestPasswordResetCode(email: String) {
+        request(
+            "/auth/forgot-password",
+            "POST",
+            payload = JSONObject().put("email", email),
+        )
+    }
+
+    fun resetPassword(email: String, code: String, newPassword: String) {
+        request(
+            "/auth/reset-password",
+            "POST",
+            payload = JSONObject()
+                .put("email", email)
+                .put("code", code)
+                .put("new_password", newPassword),
+        )
+    }
+
     fun login(email: String, password: String): ControllerLogin {
         val response = JSONObject(
             request("/auth/login", "POST", payload = JSONObject().put("email", email).put("password", password)),

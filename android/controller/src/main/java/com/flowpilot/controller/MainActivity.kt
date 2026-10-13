@@ -49,6 +49,11 @@ private data class ControllerScreenState(
     val email: String = "",
     val password: String = "",
     val isRegistering: Boolean = false,
+    val recoveryEnabled: Boolean = false,
+    val isRecoveringPassword: Boolean = false,
+    val recoveryCodeSent: Boolean = false,
+    val recoveryCode: String = "",
+    val recoveryNewPassword: String = "",
     val session: ControllerSession? = null,
     val profileName: String = "",
     val profileEmail: String = "",
@@ -71,10 +76,12 @@ class MainActivity : ComponentActivity() {
     private lateinit var sessionStore: ControllerSessionStore
     private var state by mutableStateOf(ControllerScreenState())
     private var monitorJob: Job? = null
+    private var recoveryStatusJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         sessionStore = ControllerSessionStore(this)
+        checkPasswordRecovery(state.apiUrl)
         sessionStore.read()?.let { session ->
             state = state.copy(
                 apiUrl = session.apiUrl,
@@ -91,19 +98,44 @@ class MainActivity : ComponentActivity() {
                 Surface(Modifier.fillMaxSize()) {
                     ControllerScreen(
                         state = state,
-                        onApiUrlChange = { state = state.copy(apiUrl = it) },
+                        onApiUrlChange = {
+                            state = state.copy(apiUrl = it, recoveryEnabled = false)
+                            checkPasswordRecovery(it)
+                        },
                         onNameChange = { state = state.copy(name = it) },
                         onEmailChange = { state = state.copy(email = it) },
                         onPasswordChange = { state = state.copy(password = it) },
+                        onRecoveryCodeChange = { state = state.copy(recoveryCode = it) },
+                        onRecoveryNewPasswordChange = { state = state.copy(recoveryNewPassword = it) },
                         onProfileNameChange = { state = state.copy(profileName = it) },
                         onProfileEmailChange = { state = state.copy(profileEmail = it) },
                         onProfileCurrentPasswordChange = { state = state.copy(profileCurrentPassword = it) },
                         onCurrentPasswordChange = { state = state.copy(currentPassword = it) },
                         onNewPasswordChange = { state = state.copy(newPassword = it) },
                         onToggleRegister = {
-                            state = state.copy(isRegistering = !state.isRegistering, error = null, message = null)
+                            state = state.copy(
+                                isRegistering = !state.isRegistering,
+                                isRecoveringPassword = false,
+                                recoveryCodeSent = false,
+                                recoveryCode = "",
+                                recoveryNewPassword = "",
+                                error = null,
+                                message = null,
+                            )
                         },
                         onLoginOrRegister = ::loginOrRegister,
+                        onToggleRecovery = {
+                            state = state.copy(
+                                isRecoveringPassword = !state.isRecoveringPassword,
+                                recoveryCodeSent = false,
+                                recoveryCode = "",
+                                recoveryNewPassword = "",
+                                error = null,
+                                message = null,
+                            )
+                        },
+                        onRequestRecoveryCode = ::requestRecoveryCode,
+                        onResetPassword = ::resetPassword,
                         onRefresh = ::refreshDashboard,
                         onSaveProfile = ::saveProfile,
                         onChangePassword = ::changePassword,
@@ -121,6 +153,65 @@ class MainActivity : ComponentActivity() {
                         onLogout = ::logout,
                     )
                 }
+            }
+        }
+    }
+
+    private fun checkPasswordRecovery(apiUrl: String) {
+        recoveryStatusJob?.cancel()
+        recoveryStatusJob = lifecycleScope.launch {
+            delay(400)
+            val enabled = runCatching {
+                withContext(Dispatchers.IO) {
+                    ControllerApi(apiUrl).passwordRecoveryEnabled()
+                }
+            }.getOrDefault(false)
+            if (state.apiUrl == apiUrl) state = state.copy(recoveryEnabled = enabled)
+        }
+    }
+
+    private fun requestRecoveryCode() {
+        if (state.loading) return
+        val snapshot = state
+        state = state.copy(loading = true, error = null, message = null)
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    ControllerApi(normalizeControllerApiUrl(snapshot.apiUrl))
+                        .requestPasswordResetCode(snapshot.email.trim())
+                }
+                state = state.copy(
+                    loading = false,
+                    recoveryCodeSent = true,
+                    message = "如果该邮箱对应可用账号，已发送验证码。",
+                )
+            } catch (error: Exception) {
+                state = state.copy(loading = false, error = error.message ?: "验证码发送失败")
+            }
+        }
+    }
+
+    private fun resetPassword() {
+        if (state.loading) return
+        val snapshot = state
+        state = state.copy(loading = true, error = null, message = null)
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    ControllerApi(normalizeControllerApiUrl(snapshot.apiUrl))
+                        .resetPassword(snapshot.email.trim(), snapshot.recoveryCode.trim(), snapshot.recoveryNewPassword)
+                }
+                state = state.copy(
+                    loading = false,
+                    isRecoveringPassword = false,
+                    recoveryCodeSent = false,
+                    recoveryCode = "",
+                    recoveryNewPassword = "",
+                    password = "",
+                    message = "密码已重置，请使用新密码登录",
+                )
+            } catch (error: Exception) {
+                state = state.copy(loading = false, error = error.message ?: "密码重置失败")
             }
         }
     }
@@ -493,6 +584,8 @@ private fun ControllerScreen(
     onNameChange: (String) -> Unit,
     onEmailChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
+    onRecoveryCodeChange: (String) -> Unit,
+    onRecoveryNewPasswordChange: (String) -> Unit,
     onProfileNameChange: (String) -> Unit,
     onProfileEmailChange: (String) -> Unit,
     onProfileCurrentPasswordChange: (String) -> Unit,
@@ -500,6 +593,9 @@ private fun ControllerScreen(
     onNewPasswordChange: (String) -> Unit,
     onToggleRegister: () -> Unit,
     onLoginOrRegister: () -> Unit,
+    onToggleRecovery: () -> Unit,
+    onRequestRecoveryCode: () -> Unit,
+    onResetPassword: () -> Unit,
     onRefresh: () -> Unit,
     onSaveProfile: () -> Unit,
     onChangePassword: () -> Unit,
@@ -546,20 +642,63 @@ private fun ControllerScreen(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
-            OutlinedTextField(
-                value = state.password,
-                onValueChange = onPasswordChange,
-                label = { Text("密码") },
-                modifier = Modifier.fillMaxWidth(),
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true,
-            )
-            if (state.isRegistering) Text("注册仅创建普通用户；密码至少 12 位。")
-            Button(onClick = onLoginOrRegister, enabled = !state.loading, modifier = Modifier.fillMaxWidth()) {
-                Text(if (state.isRegistering) "注册" else "登录")
+            if (state.isRecoveringPassword) {
+                if (state.recoveryCodeSent) {
+                    OutlinedTextField(
+                        value = state.recoveryCode,
+                        onValueChange = onRecoveryCodeChange,
+                        label = { Text("邮箱验证码") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = state.recoveryNewPassword,
+                        onValueChange = onRecoveryNewPasswordChange,
+                        label = { Text("新密码（至少 12 位）") },
+                        modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                    )
+                    Button(
+                        onClick = onResetPassword,
+                        enabled = !state.loading && state.recoveryCode.length == 6 &&
+                            state.recoveryNewPassword.length >= 12,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("重置密码") }
+                } else {
+                    Text("发送验证码后输入邮件中的 6 位数字；验证码 10 分钟内有效。")
+                    Button(
+                        onClick = onRequestRecoveryCode,
+                        enabled = !state.loading && state.email.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("发送验证码") }
+                }
+                TextButton(onClick = onToggleRecovery, enabled = !state.loading) {
+                    Text("返回登录")
+                }
+            } else {
+                OutlinedTextField(
+                    value = state.password,
+                    onValueChange = onPasswordChange,
+                    label = { Text("密码") },
+                    modifier = Modifier.fillMaxWidth(),
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                )
+                if (state.isRegistering) Text("注册仅创建普通用户；密码至少 12 位。")
+                Button(onClick = onLoginOrRegister, enabled = !state.loading, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (state.isRegistering) "注册" else "登录")
+                }
+                if (!state.isRegistering && state.recoveryEnabled) {
+                    TextButton(onClick = onToggleRecovery, enabled = !state.loading) {
+                        Text("忘记密码？")
+                    }
+                }
             }
-            TextButton(onClick = onToggleRegister, enabled = !state.loading) {
-                Text(if (state.isRegistering) "已有账号？返回登录" else "没有账号？注册")
+            if (!state.isRecoveringPassword) {
+                TextButton(onClick = onToggleRegister, enabled = !state.loading) {
+                    Text(if (state.isRegistering) "已有账号？返回登录" else "没有账号？注册")
+                }
             }
         } else {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {

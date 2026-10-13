@@ -117,6 +117,8 @@ def _smtp_settings_from_env() -> SMTPSettings | None:
         return None
     if len(configured) != len(names):
         raise ValueError("Password recovery requires all FLOWPILOT_SMTP_HOST, USERNAME, PASSWORD, and FROM settings")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", values["FLOWPILOT_SMTP_FROM"]):
+        raise ValueError("FLOWPILOT_SMTP_FROM must be a valid email address")
     try:
         port = int(os.environ.get("FLOWPILOT_SMTP_PORT", "587"))
     except ValueError as error:
@@ -1097,6 +1099,10 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         )
         audit(db, user["id"], "user.password_changed", "user", user["id"])
         return {"status": "changed", "other_sessions_revoked": True}
+
+    @app.get("/auth/recovery-status")
+    def password_recovery_status():
+        return {"enabled": app.state.smtp_settings is not None}
 
     @app.post("/auth/forgot-password", status_code=202)
     def forgot_password(

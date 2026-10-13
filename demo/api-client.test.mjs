@@ -7,8 +7,11 @@ import {
   defaultApiBaseUrl,
   loadSnapshot,
   login,
+  passwordRecoveryStatus,
   readSession,
   revokeSession,
+  requestPasswordResetCode,
+  resetPasswordWithCode,
   requestRemoteRunStop,
   saveSession,
   uploadScriptVersion,
@@ -98,6 +101,37 @@ test("API request refreshes an expired access token once and retries the request
 
 test("login rejects non-HTTP service URLs before sending credentials", async () => {
   await assert.rejects(login("javascript:alert(1)", "user@example.com", "password"), /必须使用 HTTP 或 HTTPS/);
+});
+
+test("password recovery checks availability and submits reset requests without a session", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ path: new URL(url).pathname, options });
+    return new Response(JSON.stringify({ enabled: true, message: "如果该邮箱对应可用账号，已发送验证码。" }), { status: 200 });
+  };
+  assert.deepEqual(
+    await passwordRecoveryStatus("https://api.example.test", fetchImpl),
+    { enabled: true, message: "如果该邮箱对应可用账号，已发送验证码。" },
+  );
+  await requestPasswordResetCode("https://api.example.test", "user@example.test", fetchImpl);
+  await resetPasswordWithCode(
+    "https://api.example.test",
+    "user@example.test",
+    "123456",
+    "replacement-password",
+    fetchImpl,
+  );
+  assert.deepEqual(calls.map(({ path }) => path), [
+    "/auth/recovery-status",
+    "/auth/forgot-password",
+    "/auth/reset-password",
+  ]);
+  assert.deepEqual(JSON.parse(calls[1].options.body), { email: "user@example.test" });
+  assert.deepEqual(JSON.parse(calls[2].options.body), {
+    email: "user@example.test",
+    code: "123456",
+    new_password: "replacement-password",
+  });
 });
 
 test("API requests send JSON and surface structured server errors", async () => {

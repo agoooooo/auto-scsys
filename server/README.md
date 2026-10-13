@@ -114,7 +114,7 @@ The helper intentionally does not create the destination, encrypt, upload, rotat
 
 ## 密码找回邮件配置
 
-密码找回仅通过服务端 API 提供，Web/Android 客户端在尚未提供重置入口前不会显示入口。未设置 SMTP 时，`POST /auth/forgot-password` 和 `POST /auth/reset-password` 返回 `503`，不会模拟成功。配置以下环境变量即可启用；所有账号恢复邮件凭据仅供 API 容器读取，不要提交到仓库：
+配置 SMTP 后，Web、控制端 Android 和受控端 Android 登录页通过 `GET /auth/recovery-status` 探测能力并显示找回入口。未设置 SMTP 时，入口保持隐藏，`POST /auth/forgot-password` 和 `POST /auth/reset-password` 返回 `503`，不会模拟成功。配置以下环境变量即可启用；所有账号恢复邮件凭据仅供 API 容器读取，不要提交到仓库：
 
 ```text
 FLOWPILOT_SMTP_HOST=smtp.example.com
@@ -125,7 +125,7 @@ FLOWPILOT_SMTP_FROM=flowpilot@example.com
 FLOWPILOT_SMTP_USE_SSL=false
 ```
 
-默认使用 SMTP STARTTLS；将 `FLOWPILOT_SMTP_USE_SSL=true` 用于隐式 TLS（通常端口 465）。邮箱请求响应不会说明账号是否存在，且按邮箱和来源地址分别限流。邮件投递失败会使刚签发的验证码立即失效并返回 `503`。服务端不提供自助找回 UI，直到邮件服务完成配置和验证。
+默认使用 SMTP STARTTLS；将 `FLOWPILOT_SMTP_USE_SSL=true` 用于隐式 TLS（通常端口 465）。邮箱请求响应不会说明账号是否存在，且按邮箱和来源地址分别限流。邮件投递失败会使刚签发的验证码立即失效并返回 `503`。上线启用前应使用专用测试邮箱确认 SMTP 凭据、收件可达性及垃圾邮件策略。
 
 ## 已实现接口
 

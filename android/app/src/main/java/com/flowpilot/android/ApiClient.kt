@@ -96,6 +96,28 @@ internal class ApiClient(baseUrl: String) {
         )
     }
 
+    fun passwordRecoveryEnabled(): Boolean =
+        JSONObject(request("/auth/recovery-status")).optBoolean("enabled")
+
+    fun requestPasswordResetCode(email: String) {
+        request(
+            "/auth/forgot-password",
+            method = "POST",
+            payload = JSONObject().put("email", email),
+        )
+    }
+
+    fun resetPassword(email: String, code: String, newPassword: String) {
+        request(
+            "/auth/reset-password",
+            method = "POST",
+            payload = JSONObject()
+                .put("email", email)
+                .put("code", code)
+                .put("new_password", newPassword),
+        )
+    }
+
     fun login(email: String, password: String): LoginResult {
         val response = JSONObject(request(
             "/auth/login",

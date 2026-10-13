@@ -52,6 +52,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -71,9 +72,12 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private val flowPilotViewModel: FlowPilotViewModel by viewModels()
@@ -719,6 +723,15 @@ private fun FlowPilotScreen(
     var password by rememberSaveable { mutableStateOf(state.loginPassword) }
     var passwordConfirmation by rememberSaveable { mutableStateOf("") }
     var rememberLoginInfo by rememberSaveable { mutableStateOf(state.rememberLoginInfo) }
+    var recoveryAvailable by rememberSaveable { mutableStateOf(false) }
+    var recoveringPassword by rememberSaveable { mutableStateOf(false) }
+    var recoveryCodeSent by rememberSaveable { mutableStateOf(false) }
+    var recoveryCode by rememberSaveable { mutableStateOf("") }
+    var recoveryNewPassword by rememberSaveable { mutableStateOf("") }
+    var recoveryMessage by rememberSaveable { mutableStateOf("") }
+    var recoveryError by rememberSaveable { mutableStateOf(false) }
+    var recoveryBusy by rememberSaveable { mutableStateOf(false) }
+    val recoveryScope = rememberCoroutineScope()
     var showHelp by rememberSaveable { mutableStateOf(false) }
     var defaultStandbyRequestedFor by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedTask by remember { mutableStateOf<AvailableTask?>(null) }
@@ -729,6 +742,20 @@ private fun FlowPilotScreen(
         if (state.notice != null) {
             registering = false
             passwordConfirmation = ""
+        }
+    }
+    LaunchedEffect(apiBaseUrl, user?.id) {
+        recoveryAvailable = false
+        if (user != null) return@LaunchedEffect
+        delay(400)
+        recoveryAvailable = try {
+            withContext(Dispatchers.IO) {
+                ApiClient(normalizeApiBaseUrl(apiBaseUrl)).passwordRecoveryEnabled()
+            }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (_: Exception) {
+            false
         }
     }
     LaunchedEffect(user?.id, device?.id, state.loading) {
@@ -864,7 +891,7 @@ private fun FlowPilotScreen(
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
-                    } else {
+                    } else if (!recoveringPassword) {
                         OutlinedTextField(
                             value = password,
                             onValueChange = { password = it },
@@ -874,7 +901,7 @@ private fun FlowPilotScreen(
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
-                    if (!registering) {
+                    if (!registering && !recoveringPassword) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(
                                 checked = rememberLoginInfo,
@@ -886,20 +913,128 @@ private fun FlowPilotScreen(
                             Text("记住登录信息（加密保存账号和密码）")
                         }
                     }
-                    Button(
-                        onClick = {
-                            if (registering) {
-                                viewModel.register(apiBaseUrl, displayName, email, password, passwordConfirmation)
-                            } else {
-                                viewModel.login(apiBaseUrl, email, password, rememberLoginInfo)
-                            }
-                        },
-                        enabled = !state.loading && apiBaseUrl.isNotBlank() && email.isNotBlank() &&
-                            password.isNotBlank() &&
-                            (!registering || (displayName.isNotBlank() && passwordConfirmation.isNotBlank())),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(if (registering) "创建账号" else "登录")
+                    if (recoveringPassword) {
+                        if (recoveryCodeSent) {
+                            OutlinedTextField(
+                                value = recoveryCode,
+                                onValueChange = { recoveryCode = it.filter(Char::isDigit).take(6) },
+                                label = { Text("邮箱验证码") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = recoveryNewPassword,
+                                onValueChange = { recoveryNewPassword = it },
+                                label = { Text("新密码（至少 12 个字符）") },
+                                visualTransformation = PasswordVisualTransformation(),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Button(
+                                onClick = {
+                                    recoveryScope.launch {
+                                        if (recoveryBusy) return@launch
+                                        recoveryBusy = true
+                                        recoveryError = false
+                                        recoveryMessage = ""
+                                        try {
+                                            withContext(Dispatchers.IO) {
+                                                ApiClient(normalizeApiBaseUrl(apiBaseUrl))
+                                                    .resetPassword(email.trim(), recoveryCode, recoveryNewPassword)
+                                            }
+                                            recoveringPassword = false
+                                            recoveryCodeSent = false
+                                            recoveryCode = ""
+                                            recoveryNewPassword = ""
+                                            password = ""
+                                            recoveryMessage = "密码已重置，请使用新密码登录"
+                                        } catch (exception: Exception) {
+                                            recoveryError = true
+                                            recoveryMessage = exception.message ?: "密码重置失败"
+                                        } finally {
+                                            recoveryBusy = false
+                                        }
+                                    }
+                                },
+                                enabled = !state.loading && !recoveryBusy &&
+                                    recoveryCode.length == 6 && recoveryNewPassword.length >= 12,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("重置密码") }
+                        } else {
+                            Text(
+                                "验证码将发送至此邮箱，有效期 10 分钟。",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Button(
+                                onClick = {
+                                    recoveryScope.launch {
+                                        if (recoveryBusy) return@launch
+                                        recoveryBusy = true
+                                        recoveryError = false
+                                        recoveryMessage = ""
+                                        try {
+                                            withContext(Dispatchers.IO) {
+                                                ApiClient(normalizeApiBaseUrl(apiBaseUrl))
+                                                    .requestPasswordResetCode(email.trim())
+                                            }
+                                            recoveryCodeSent = true
+                                            recoveryMessage = "如果该邮箱对应可用账号，已发送验证码。"
+                                        } catch (exception: Exception) {
+                                            recoveryError = true
+                                            recoveryMessage = exception.message ?: "验证码发送失败"
+                                        } finally {
+                                            recoveryBusy = false
+                                        }
+                                    }
+                                },
+                                enabled = !state.loading && !recoveryBusy && email.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("发送验证码") }
+                        }
+                        if (recoveryMessage.isNotBlank()) {
+                            Text(
+                                recoveryMessage,
+                                color = if (recoveryError) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        TextButton(
+                            onClick = {
+                                recoveringPassword = false
+                                recoveryCodeSent = false
+                                recoveryCode = ""
+                                recoveryNewPassword = ""
+                                recoveryMessage = ""
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("返回登录") }
+                    } else {
+                        Button(
+                            onClick = {
+                                if (registering) {
+                                    viewModel.register(apiBaseUrl, displayName, email, password, passwordConfirmation)
+                                } else {
+                                    viewModel.login(apiBaseUrl, email, password, rememberLoginInfo)
+                                }
+                            },
+                            enabled = !state.loading && apiBaseUrl.isNotBlank() && email.isNotBlank() &&
+                                password.isNotBlank() &&
+                                (!registering || (displayName.isNotBlank() && passwordConfirmation.isNotBlank())),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (registering) "创建账号" else "登录")
+                        }
+                        if (!registering && recoveryAvailable) {
+                            TextButton(
+                                onClick = {
+                                    recoveringPassword = true
+                                    recoveryCodeSent = false
+                                    recoveryMessage = ""
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("忘记密码？") }
+                        }
                     }
                     TextButton(
                         onClick = {

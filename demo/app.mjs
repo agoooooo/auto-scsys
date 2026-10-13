@@ -22,8 +22,11 @@ import {
   defaultApiBaseUrl,
   loadSnapshot,
   login,
+  passwordRecoveryStatus,
   readSession,
   revokeSession,
+  requestPasswordResetCode,
+  resetPasswordWithCode,
   requestRemoteRunStop,
   uploadScriptVersion,
   waitForRemoteRun,
@@ -586,9 +589,51 @@ function renderLogin(error = "") {
       <div class="login-error" role="alert">${escapeHtml(error)}</div>
       <button class="primary-button" type="submit">连接并登录</button>
     </form>
+    <button class="text-button recovery-toggle" data-action="toggle-password-recovery" hidden>忘记密码？</button>
+    <section id="password-recovery-panel" class="password-recovery-panel" hidden aria-label="找回密码">
+      <h2>通过邮箱重置密码</h2>
+      <p>验证码 10 分钟内有效。为保护账号隐私，请检查邮箱收件箱。</p>
+      <form id="recovery-code-form">
+        <div class="form-field"><label for="recovery-email">邮箱</label><input id="recovery-email" name="email" type="email" autocomplete="email" required /></div>
+        <button class="secondary-button" type="submit">发送验证码</button>
+      </form>
+      <div id="recovery-reset-fields" hidden>
+        <form id="recovery-reset-form">
+          <div class="form-field"><label for="recovery-code">邮箱验证码</label><input id="recovery-code" name="code" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" required /></div>
+          <div class="form-field"><label for="recovery-new-password">新密码（至少 12 位）</label><input id="recovery-new-password" name="newPassword" type="password" autocomplete="new-password" minlength="12" maxlength="256" required /></div>
+          <button class="primary-button" type="submit">重置密码</button>
+        </form>
+      </div>
+      <div id="recovery-message" class="form-hint" role="status"></div>
+    </section>
     <div class="login-presets">本地演示账号仅在开发模式启用。生产环境请使用已初始化或分配的账号。</div>
     <button class="secondary-button demo-login" data-action="demo-mode">仅浏览离线演示</button>
   </div>`;
+  const apiInput = loginGate.querySelector("#api-url");
+  const generation = (Number(loginGate.dataset.recoveryGeneration) || 0) + 1;
+  loginGate.dataset.recoveryGeneration = String(generation);
+  let requestNumber = 0;
+  const checkRecovery = async () => {
+    const currentRequest = ++requestNumber;
+    try {
+      const status = await passwordRecoveryStatus(apiInput.value.trim());
+      if (
+        loginGate.dataset.recoveryGeneration === String(generation) &&
+        requestNumber === currentRequest
+      ) {
+        loginGate.querySelector(".recovery-toggle").hidden = status.enabled !== true;
+      }
+    } catch {
+      if (
+        loginGate.dataset.recoveryGeneration === String(generation) &&
+        requestNumber === currentRequest
+      ) {
+        loginGate.querySelector(".recovery-toggle").hidden = true;
+      }
+    }
+  };
+  apiInput.addEventListener("change", checkRecovery);
+  void checkRecovery();
 }
 
 function phoneUserId() {
@@ -909,6 +954,11 @@ document.addEventListener("click", async (event) => {
   if (!actionButton) return;
   const { action, id } = actionButton.dataset;
   if (action === "refresh-audit") await refreshAudit();
+  else if (action === "toggle-password-recovery") {
+    const panel = loginGate.querySelector("#password-recovery-panel");
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) loginGate.querySelector("#recovery-email").focus();
+  }
   else if (action === "new-user") showUserModal();
   else if (action === "edit-device-limit") showDeviceLimitModal(id);
   else if (action === "new-task") showNewTaskModal();
@@ -1054,7 +1104,50 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("submit", async (event) => {
-  if (event.target.id === "task-access-form") {
+  if (event.target.id === "recovery-code-form") {
+    event.preventDefault();
+    const email = String(new FormData(event.target).get("email")).trim();
+    const baseUrl = loginGate.querySelector("#api-url").value.trim();
+    const button = event.target.querySelector('button[type="submit"]');
+    const message = loginGate.querySelector("#recovery-message");
+    button.disabled = true;
+    message.textContent = "";
+    try {
+      const result = await requestPasswordResetCode(baseUrl, email);
+      loginGate.querySelector("#recovery-reset-fields").hidden = false;
+      message.textContent = result.message;
+      loginGate.querySelector("#recovery-code").focus();
+    } catch (error) {
+      message.textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
+  } else if (event.target.id === "recovery-reset-form") {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const email = loginGate.querySelector("#recovery-email").value.trim();
+    const baseUrl = loginGate.querySelector("#api-url").value.trim();
+    const button = event.target.querySelector('button[type="submit"]');
+    const message = loginGate.querySelector("#recovery-message");
+    button.disabled = true;
+    message.textContent = "";
+    try {
+      await resetPasswordWithCode(
+        baseUrl,
+        email,
+        String(formData.get("code")).trim(),
+        String(formData.get("newPassword")),
+      );
+      event.target.reset();
+      loginGate.querySelector("#recovery-code-form").reset();
+      loginGate.querySelector("#recovery-reset-fields").hidden = true;
+      message.textContent = "密码已重置，请返回登录。";
+    } catch (error) {
+      message.textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
+  } else if (event.target.id === "task-access-form") {
     event.preventDefault();
     const formData = new FormData(event.target);
     const taskId = event.target.dataset.taskId;

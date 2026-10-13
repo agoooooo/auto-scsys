@@ -11,4 +11,9 @@ test("login page does not prefill or disclose demo passwords", async () => {
   assert.doesNotMatch(loginPage, /chen\.xiao@example\.com\s*\/\s*user-demo/);
   assert.match(loginPage, /autocomplete="current-password"/);
   assert.match(loginPage, /本地演示账号仅在开发模式启用/);
+  assert.match(loginPage, /recovery-toggle/);
+  assert.match(loginPage, /passwordRecoveryStatus/);
+  assert.match(loginPage, /id="recovery-code-form"/);
+  assert.match(loginPage, /id="recovery-reset-form"/);
+  assert.match(source, /resetPasswordWithCode/);
 });

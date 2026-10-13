@@ -192,6 +192,7 @@ def test_password_change_verifies_current_password_and_revokes_other_sessions(cl
 
 
 def test_password_recovery_is_disabled_without_smtp_configuration(client):
+    assert client.get("/auth/recovery-status").json() == {"enabled": False}
     request = client.post("/auth/forgot-password", json={"email": "chen.xiao@example.com"})
     reset = client.post(
         "/auth/reset-password",
@@ -231,6 +232,10 @@ def test_smtp_configuration_is_all_or_nothing_and_validated(monkeypatch):
     assert settings.port == 465
     assert settings.use_ssl is True
 
+    monkeypatch.setenv("FLOWPILOT_SMTP_FROM", "invalid sender")
+    with pytest.raises(ValueError, match="valid email address"):
+        server_app._smtp_settings_from_env()
+    monkeypatch.setenv("FLOWPILOT_SMTP_FROM", "noreply@example.test")
     monkeypatch.setenv("FLOWPILOT_SMTP_PORT", "invalid")
     with pytest.raises(ValueError, match="must be an integer"):
         server_app._smtp_settings_from_env()
@@ -243,6 +248,7 @@ def test_password_recovery_sends_generic_response_and_limits_requests(tmp_path, 
         monkeypatch,
         lambda _settings, recipient, code: messages.append((recipient, code)),
     ) as recovery:
+        assert recovery.get("/auth/recovery-status").json() == {"enabled": True}
         known = recovery.post("/auth/forgot-password", json={"email": "CHEN.XIAO@example.com"})
         unknown = recovery.post("/auth/forgot-password", json={"email": "unknown@example.com"})
         assert known.status_code == unknown.status_code == 202

@@ -47,6 +47,24 @@ export function revokeSession(session, fetchImpl = fetch) {
   return apiRequest(session, "/auth/logout", { method: "POST" }, fetchImpl);
 }
 
+export function passwordRecoveryStatus(baseUrl, fetchImpl = fetch) {
+  return apiRequest({ baseUrl }, "/auth/recovery-status", {}, fetchImpl);
+}
+
+export function requestPasswordResetCode(baseUrl, email, fetchImpl = fetch) {
+  return apiRequest({ baseUrl }, "/auth/forgot-password", {
+    method: "POST",
+    body: { email },
+  }, fetchImpl);
+}
+
+export function resetPasswordWithCode(baseUrl, email, code, newPassword, fetchImpl = fetch) {
+  return apiRequest({ baseUrl }, "/auth/reset-password", {
+    method: "POST",
+    body: { email, code, new_password: newPassword },
+  }, fetchImpl);
+}
+
 export async function apiRequest(session, path, { method = "GET", body, formData, headers: extraHeaders = {} } = {}, fetchImpl = fetch) {
   const baseUrl = session.baseUrl.replace(/\/+$/, "");
   const send = async (token = session?.token) => {
