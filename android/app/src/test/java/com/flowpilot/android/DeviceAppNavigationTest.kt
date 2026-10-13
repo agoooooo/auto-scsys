@@ -5,9 +5,9 @@ import org.junit.Test
 
 class DeviceAppNavigationTest {
     @Test
-    fun signedInNavigationSeparatesDeviceTasksAndRuns() {
+    fun signedInNavigationIncludesAccountWithDeviceTasksAndRuns() {
         assertEquals(
-            listOf("设备", "任务", "运行"),
+            listOf("设备", "任务", "运行", "我的"),
             DeviceAppDestination.entries.map(DeviceAppDestination::label),
         )
     }

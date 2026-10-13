@@ -50,7 +50,7 @@ class ControllerPolicyTest {
     @Test
     fun signedInNavigationHasDispatchRunsAndAccountDestinations() {
         assertEquals(
-            listOf("派发", "运行", "账号"),
+            listOf("设备", "任务", "运行", "我的"),
             ControllerDestination.entries.map(ControllerDestination::label),
         )
     }

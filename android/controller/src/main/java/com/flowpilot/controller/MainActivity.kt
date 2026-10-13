@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -70,6 +72,18 @@ internal val ControllerColorScheme = lightColorScheme(
     outline = Color(0xFFDCE3DE),
 )
 
+@Composable
+private fun ControllerCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        content = content,
+    )
+}
+
 private data class ControllerScreenState(
     val apiUrl: String = defaultControllerApiUrl(),
     val name: String = "",
@@ -100,9 +114,10 @@ private data class ControllerScreenState(
 )
 
 internal enum class ControllerDestination(val label: String) {
-    DISPATCH("派发"),
+    DEVICES("设备"),
+    TASKS("任务"),
     RUNS("运行"),
-    ACCOUNT("账号"),
+    ACCOUNT("我的"),
 }
 
 class MainActivity : ComponentActivity() {
@@ -641,11 +656,11 @@ private fun ControllerScreen(
 ) {
     var showHelp by remember { mutableStateOf(false) }
     var selectedDestinationName by rememberSaveable {
-        mutableStateOf(ControllerDestination.DISPATCH.name)
+        mutableStateOf(ControllerDestination.DEVICES.name)
     }
     val selectedDestination = ControllerDestination.entries.firstOrNull {
         it.name == selectedDestinationName
-    } ?: ControllerDestination.DISPATCH
+    } ?: ControllerDestination.DEVICES
     Column(Modifier.fillMaxSize()) {
       Column(
         Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
@@ -666,17 +681,19 @@ private fun ControllerScreen(
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
                         when (selectedDestination) {
-                            ControllerDestination.DISPATCH -> "任务派发"
+                            ControllerDestination.DEVICES -> "我的设备"
+                            ControllerDestination.TASKS -> "任务列表"
                             ControllerDestination.RUNS -> "运行状态"
-                            ControllerDestination.ACCOUNT -> "账号与安全"
+                            ControllerDestination.ACCOUNT -> "我的账号"
                         },
                         style = MaterialTheme.typography.headlineSmall,
                     )
                     Text(
                         when (selectedDestination) {
-                            ControllerDestination.DISPATCH -> "选择设备和任务，安全发起远程运行"
+                            ControllerDestination.DEVICES -> "查看受控设备状态并选择操作目标"
+                            ControllerDestination.TASKS -> "浏览已发布任务并选择设备进行派发"
                             ControllerDestination.RUNS -> "查看设备执行状态与操作结果"
-                            ControllerDestination.ACCOUNT -> "管理个人资料和登录凭据"
+                            ControllerDestination.ACCOUNT -> "管理个人资料、登录凭据和应用信息"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -772,14 +789,18 @@ private fun ControllerScreen(
                 }
             }
         } else {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("账号：${state.session.name} · ${state.session.email}", modifier = Modifier.weight(1f))
-                TextButton(onClick = onLogout, enabled = !state.loading) { Text("退出") }
-                TextButton(onClick = onRefresh, enabled = !state.loading) { Text("刷新") }
+            if (selectedDestination == ControllerDestination.ACCOUNT) {
+                ControllerCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(state.session.name, style = MaterialTheme.typography.titleLarge)
+                        Text(state.session.email, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("普通用户", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
             }
             if (state.loading) CircularProgressIndicator()
             if (selectedDestination == ControllerDestination.ACCOUNT) {
-              Card(Modifier.fillMaxWidth()) {
+              ControllerCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("账号资料与安全", style = MaterialTheme.typography.titleMedium)
                     OutlinedTextField(
@@ -826,31 +847,95 @@ private fun ControllerScreen(
                     OutlinedButton(onClick = onChangePassword, enabled = !state.loading) {
                         Text("修改密码")
                     }
+                    OutlinedButton(onClick = onRefresh, enabled = !state.loading) {
+                        Text("刷新账号信息")
+                    }
+                    TextButton(onClick = { showHelp = true }) {
+                        Text("帮助与关于")
+                    }
+                    TextButton(onClick = onLogout, enabled = !state.loading) {
+                        Text("退出登录")
+                    }
                 }
               }
             }
-            if (selectedDestination == ControllerDestination.DISPATCH) {
-              Selector(
-                title = "受控设备",
-                selected = state.devices.firstOrNull { it.id == state.selectedDeviceId }?.let {
-                    "${it.name} · ${it.model} · ${controllerDeviceStatusLabel(it.status)}"
-                } ?: "暂无已绑定设备",
-                enabled = state.devices.isNotEmpty(),
-                options = state.devices.map {
-                    it.id to "${it.name} · ${it.model} · ${controllerDeviceStatusLabel(it.status)}"
-                },
-                onSelect = onSelectDevice,
-              )
-              Selector(
-                title = "已发布任务",
-                selected = state.tasks.firstOrNull { it.id == state.selectedTaskId }?.let {
-                    "${it.name} · ${it.version}"
-                } ?: "暂无可运行的已发布任务",
-                enabled = state.tasks.any { it.status == "published" && it.version.isNotBlank() },
-                options = state.tasks.filter { it.status == "published" && it.version.isNotBlank() }
-                    .map { it.id to "${it.name} · ${it.version}" },
-                onSelect = onSelectTask,
-              )
+            if (selectedDestination == ControllerDestination.DEVICES) {
+                Text("受控设备（${state.devices.size}）", style = MaterialTheme.typography.titleMedium)
+                if (state.devices.isEmpty()) {
+                    ControllerCard(Modifier.fillMaxWidth()) {
+                        Text(
+                            "暂无已绑定设备。请先在受控端登录并绑定设备。",
+                            modifier = Modifier.padding(18.dp),
+                        )
+                    }
+                } else {
+                    state.devices.forEach { device ->
+                        ControllerCard(Modifier.fillMaxWidth()) {
+                            Column(
+                                Modifier.fillMaxWidth().padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(device.name, style = MaterialTheme.typography.titleMedium)
+                                    Text(controllerDeviceStatusLabel(device.status), color = MaterialTheme.colorScheme.primary)
+                                }
+                                Text(device.model, style = MaterialTheme.typography.bodyMedium)
+                                Text("设备 ID：${device.id}", style = MaterialTheme.typography.bodySmall)
+                                OutlinedButton(
+                                    onClick = { onSelectDevice(device.id) },
+                                    enabled = !state.loading,
+                                ) {
+                                    Text(if (state.selectedDeviceId == device.id) "当前派发设备" else "设为派发设备")
+                                }
+                            }
+                        }
+                    }
+                }
+                TextButton(onClick = onRefresh, enabled = !state.loading) { Text("刷新设备列表") }
+            }
+            if (selectedDestination == ControllerDestination.TASKS) {
+                Text("已发布任务（${state.tasks.count { it.status == "published" && it.version.isNotBlank() }}）", style = MaterialTheme.typography.titleMedium)
+                Selector(
+                    title = "目标设备",
+                    selected = state.devices.firstOrNull { it.id == state.selectedDeviceId }?.let {
+                        "${it.name} · ${controllerDeviceStatusLabel(it.status)}"
+                    } ?: "请选择设备",
+                    enabled = state.devices.isNotEmpty(),
+                    options = state.devices.map { it.id to "${it.name} · ${controllerDeviceStatusLabel(it.status)}" },
+                    onSelect = onSelectDevice,
+                )
+                val availableTasks = state.tasks.filter { it.status == "published" && it.version.isNotBlank() }
+                if (availableTasks.isEmpty()) {
+                    ControllerCard(Modifier.fillMaxWidth()) {
+                        Text("暂无已发布任务。", modifier = Modifier.padding(18.dp))
+                    }
+                } else {
+                    availableTasks.forEach { taskItem ->
+                        ControllerCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(taskItem.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                                    Text(taskItem.version, color = MaterialTheme.colorScheme.primary)
+                                }
+                                if (taskItem.description.isNotBlank()) Text(taskItem.description)
+                                TextButton(
+                                    onClick = { onSelectTask(taskItem.id) },
+                                    enabled = !state.loading,
+                                ) {
+                                    Text(if (state.selectedTaskId == taskItem.id) "已选择此任务" else "选择此任务")
+                                }
+                            }
+                        }
+                    }
+                }
               val device = state.devices.firstOrNull { it.id == state.selectedDeviceId }
               val task = state.tasks.firstOrNull { it.id == state.selectedTaskId }
               Button(
@@ -864,7 +949,7 @@ private fun ControllerScreen(
                     state.run?.let { isControllerRunActive(it.status) } != true,
                 modifier = Modifier.fillMaxWidth(),
               ) {
-                  Text("下发运行任务")
+                  Text("向所选设备下发任务")
               }
               Text("仅可向在线设备下发；受控端需处于远程待命状态。")
               Spacer(Modifier.height(8.dp))
@@ -872,7 +957,7 @@ private fun ControllerScreen(
             }
             if (selectedDestination == ControllerDestination.RUNS) {
               state.run?.let { run ->
-                Card(Modifier.fillMaxWidth()) {
+                ControllerCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("最近一次运行", style = MaterialTheme.typography.titleMedium)
                         Text(controllerRunStatusLabel(run.status))
@@ -895,7 +980,7 @@ private fun ControllerScreen(
                         }
                     }
                 }
-              } ?: Card(Modifier.fillMaxWidth()) {
+              } ?: ControllerCard(Modifier.fillMaxWidth()) {
                   Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                       Text("暂无运行记录", style = MaterialTheme.typography.titleMedium)
                       Text("从“派发”选择在线设备和已发布任务后，即可在此跟踪执行状态。")
@@ -959,22 +1044,39 @@ private fun ControllerNavigationIcon(destination: ControllerDestination, selecte
         val color = if (selected) Color(0xFF07C160) else Color(0xFF80868B)
         val stroke = 1.8.dp.toPx()
         when (destination) {
-            ControllerDestination.DISPATCH -> {
-                val plane = Path().apply {
-                    moveTo(size.width * 0.12f, size.height * 0.47f)
-                    lineTo(size.width * 0.88f, size.height * 0.12f)
-                    lineTo(size.width * 0.59f, size.height * 0.88f)
-                    lineTo(size.width * 0.46f, size.height * 0.57f)
-                    close()
-                }
-                drawPath(plane, color, style = Stroke(stroke, cap = StrokeCap.Round))
+            ControllerDestination.DEVICES -> {
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(size.width * 0.18f, size.height * 0.08f),
+                    size = Size(size.width * 0.64f, size.height * 0.84f),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.1f),
+                    style = Stroke(stroke),
+                )
                 drawLine(
                     color,
-                    Offset(size.width * 0.46f, size.height * 0.57f),
-                    Offset(size.width * 0.88f, size.height * 0.12f),
+                    Offset(size.width * 0.42f, size.height * 0.77f),
+                    Offset(size.width * 0.58f, size.height * 0.77f),
                     stroke,
                     cap = StrokeCap.Round,
                 )
+            }
+            ControllerDestination.TASKS -> {
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(size.width * 0.12f, size.height * 0.12f),
+                    size = Size(size.width * 0.76f, size.height * 0.76f),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.12f),
+                    style = Stroke(stroke),
+                )
+                listOf(0.37f, 0.56f, 0.75f).forEach { y ->
+                    drawLine(
+                        color,
+                        Offset(size.width * 0.32f, size.height * y),
+                        Offset(size.width * 0.72f, size.height * y),
+                        stroke,
+                        cap = StrokeCap.Round,
+                    )
+                }
             }
             ControllerDestination.RUNS -> {
                 val chart = Path().apply {

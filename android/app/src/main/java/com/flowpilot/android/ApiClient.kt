@@ -163,6 +163,23 @@ internal class ApiClient(baseUrl: String) {
             role = user.optString("role", "user"),
         )
     }
+
+    fun updateProfile(token: String, name: String, email: String, currentPassword: String?) {
+        val payload = JSONObject().put("name", name).put("email", email)
+        if (!currentPassword.isNullOrBlank()) payload.put("current_password", currentPassword)
+        request("/me", method = "PATCH", token = token, payload = payload)
+    }
+
+    fun changePassword(token: String, currentPassword: String, newPassword: String) {
+        request(
+            "/auth/change-password",
+            method = "POST",
+            token = token,
+            payload = JSONObject()
+                .put("current_password", currentPassword)
+                .put("new_password", newPassword),
+        )
+    }
     fun listDevices(token: String): List<BoundDevice> =
         requestArray("/devices", token).map { item ->
             BoundDevice(

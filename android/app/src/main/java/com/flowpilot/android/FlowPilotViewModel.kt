@@ -432,6 +432,78 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         _state.value = _state.value.copy(notice = null, error = null)
     }
 
+    fun updateAccountProfile(name: String, email: String, currentPassword: String) {
+        val current = _state.value
+        if (current.loading) return
+        val user = current.user ?: return
+        if (name.isBlank() || email.isBlank()) {
+            _state.value = current.copy(error = "姓名和邮箱不能为空", notice = null)
+            return
+        }
+        val emailChanged = !email.trim().equals(user.email, ignoreCase = true)
+        if (!emailChanged && name.trim() == user.name) {
+            _state.value = current.copy(error = "个人资料没有变化", notice = null)
+            return
+        }
+        if (emailChanged && currentPassword.isBlank()) {
+            _state.value = current.copy(error = "修改邮箱需要验证当前密码", notice = null)
+            return
+        }
+        _state.value = current.copy(loading = true, error = null, notice = null)
+        viewModelScope.launch {
+            try {
+                val session = withContext(Dispatchers.IO) { freshSession() }
+                val updatedUser = withContext(Dispatchers.IO) {
+                    val client = ApiClient(session.apiBaseUrl)
+                    client.updateProfile(session.token, name.trim(), email.trim(), currentPassword)
+                    client.getCurrentUser(session.token)
+                }
+                _state.value = _state.value.copy(
+                    user = updatedUser,
+                    token = session.token,
+                    tokenExpiresAt = session.tokenExpiresAt,
+                    loading = false,
+                    notice = "个人资料已更新",
+                )
+            } catch (exception: Exception) {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = exception.message ?: "个人资料更新失败",
+                )
+            }
+        }
+    }
+
+    fun changeAccountPassword(currentPassword: String, newPassword: String) {
+        val current = _state.value
+        if (current.loading) return
+        if (current.user == null) return
+        if (currentPassword.isBlank() || newPassword.length < 12) {
+            _state.value = current.copy(error = "请输入当前密码，并设置至少 12 位的新密码", notice = null)
+            return
+        }
+        _state.value = current.copy(loading = true, error = null, notice = null)
+        viewModelScope.launch {
+            try {
+                val session = withContext(Dispatchers.IO) { freshSession() }
+                withContext(Dispatchers.IO) {
+                    ApiClient(session.apiBaseUrl).changePassword(session.token, currentPassword, newPassword)
+                }
+                _state.value = _state.value.copy(
+                    token = session.token,
+                    tokenExpiresAt = session.tokenExpiresAt,
+                    loading = false,
+                    notice = "密码已修改，当前设备保持登录",
+                )
+            } catch (exception: Exception) {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = exception.message ?: "密码修改失败",
+                )
+            }
+        }
+    }
+
     fun refreshRunStatus() {
         _state.value = _state.value.copy(runStatus = RunStatusStore(getApplication()).snapshot())
     }
