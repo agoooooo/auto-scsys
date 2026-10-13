@@ -11,6 +11,7 @@ import {
   publishTaskVersion,
   requiresRemoteSystemAuthorization,
   remoteRunFollowUpView,
+  remoteRunSubmissionNotice,
   remoteRunSystemConsentNotice,
   revokeRunAuthorization,
   setUserDeviceLimit,
@@ -149,6 +150,17 @@ test("remote-run follow-up does not show admins a phone preview for another user
   assert.equal(remoteRunFollowUpView("admin"), "admin");
   assert.equal(remoteRunFollowUpView("user"), "mobile");
   assert.equal(remoteRunFollowUpView(undefined), "mobile");
+});
+
+test("offline demo remote-run notice clearly says it does not reach a device", () => {
+  assert.equal(
+    remoteRunSubmissionNotice("测试手机", "running", true),
+    "离线演示：已模拟向 测试手机 发起请求，未发送到服务器或手机",
+  );
+  assert.equal(
+    remoteRunSubmissionNotice("测试手机", "pending"),
+    "已向 测试手机 发送请求，等待设备自动处理",
+  );
 });
 
 test("remote runs do not require per-task preauthorization", () => {

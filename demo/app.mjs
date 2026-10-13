@@ -8,6 +8,7 @@ import {
   publishTaskVersion,
   requiresRemoteSystemAuthorization,
   remoteRunFollowUpView,
+  remoteRunSubmissionNotice,
   remoteRunSystemConsentNotice,
   setUserDeviceLimit,
   setTaskPaused,
@@ -686,7 +687,8 @@ function showRemoteRunModal(taskId) {
   const systemConsentNotice = remoteRunSystemConsentNotice(task.capabilities);
   const devices = state.devices.filter((device) =>
     device.status === "online" &&
-    (!session || (canInitiateRemoteRun(session.user.role) && device.userId === session.user.id)));
+    (!session || (canInitiateRemoteRun(session.user.role) && device.userId === session.user.id)))
+    .sort((left, right) => Date.parse(right.lastActive) - Date.parse(left.lastActive));
   if (!devices.length) {
     showToast("当前没有在线设备可接收请求");
     return;
@@ -694,7 +696,8 @@ function showRemoteRunModal(taskId) {
   modalRoot.innerHTML = `<div class="modal-root-inner"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-header"><div><h2 id="modal-title">请求远程运行</h2><p>${escapeHtml(task.name)} · ${escapeHtml(task.activeVersion)}</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
     <form id="remote-run-form" data-task-id="${escapeHtml(task.id)}"><div class="modal-body">
-      <div class="form-field"><label for="target-device">目标设备</label><select id="target-device" name="deviceId">${devices.map((device) => `<option value="${escapeHtml(device.id)}">${escapeHtml(device.userName)} · ${escapeHtml(device.name)}</option>`).join("")}</select></div>
+      <div class="form-field"><label for="target-device">目标设备</label><select id="target-device" name="deviceId">${devices.map((device) => `<option value="${escapeHtml(device.id)}">${escapeHtml(device.userName)} · ${escapeHtml(device.name)} · ${escapeHtml(device.id.slice(0, 8))}</option>`).join("")}</select></div>
+      ${!session ? `<div class="form-hint">当前为离线演示模式：请求仅作界面模拟，不会发送到服务器或在手机执行。</div>` : ""}
       <div class="permission-summary"><strong>脚本来源：${escapeHtml(task.source ?? "用户脚本")}</strong><span>服务端校验账号、设备、脚本版本和请求有效期后，设备 App 会自动启动任务，无需逐次确认。</span><span>所需能力：${(task.capabilities ?? []).map(escapeHtml).join("、")}</span>${systemConsentNotice ? `<span id="remote-run-system-consent" class="form-hint">${escapeHtml(systemConsentNotice)}</span>` : ""}</div>
       <div class="form-hint">请求 15 分钟后过期；任务发布不会自动运行，只有发送远程运行请求才会启动任务。</div>
     </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit" ${systemConsentNotice ? 'aria-describedby="remote-run-system-consent"' : ""}>发送请求</button></div></form>
@@ -1186,9 +1189,7 @@ document.addEventListener("submit", async (event) => {
       closeModal();
       render();
       const deviceName = state.devices.find((device) => device.id === deviceId)?.name ?? "目标设备";
-      showToast(request.status === "running"
-        ? `已向 ${deviceName} 发送请求，App 将自动处理`
-        : `已向 ${deviceName} 发送请求，等待设备自动处理`);
+      showToast(remoteRunSubmissionNotice(deviceName, request.status, !session));
       if (session) {
         try {
           await refreshFromApi();

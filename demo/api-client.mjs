@@ -50,6 +50,14 @@ export async function apiRequest(session, path, { method = "GET", body, formData
 }
 
 export async function createRemoteRunRequest(session, taskId, deviceId, fetchImpl = fetch) {
+  const devices = await apiRequest(session, "/devices", {}, fetchImpl);
+  const device = devices.find((item) => item.id === deviceId);
+  if (!device || device.user_id !== session.user.id) {
+    throw new Error("目标设备不可用或不属于当前账号");
+  }
+  if (device.status !== "online") {
+    throw new Error("目标设备已离线，未发送请求；刷新设备状态后重新选择在线设备");
+  }
   return apiRequest(session, "/remote-runs", {
     method: "POST",
     body: { task_id: taskId, device_id: deviceId },

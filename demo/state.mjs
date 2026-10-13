@@ -175,6 +175,13 @@ export function remoteRunFollowUpView(role) {
   return role === "admin" ? "admin" : "mobile";
 }
 
+export function remoteRunSubmissionNotice(deviceName, status, isDemo = false) {
+  if (isDemo) return `离线演示：已模拟向 ${deviceName} 发起请求，未发送到服务器或手机`;
+  return status === "running"
+    ? `已向 ${deviceName} 发送请求，App 将自动处理`
+    : `已向 ${deviceName} 发送请求，等待设备自动处理`;
+}
+
 export function createRemoteRun(state, { taskId, deviceId, requestedBy = "林管理员" }) {
   const task = state.tasks.find((item) => item.id === taskId);
   const device = state.devices.find((item) => item.id === deviceId);

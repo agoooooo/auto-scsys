@@ -87,21 +87,49 @@ test("API requests send multipart bodies without setting a JSON content type", a
 });
 
 test("remote-run submission posts the selected task and device", async () => {
-  let request;
+  const requests = [];
   const response = await createRemoteRunRequest({
     baseUrl: "http://localhost:8001",
     token: "access-token",
+    user: { id: "user-1" },
   }, "task-1", "device-2", async (url, options) => {
-    request = { url, options };
+    requests.push({ url, options });
+    if (new URL(url).pathname === "/devices") {
+      return new Response(JSON.stringify([
+        { id: "device-2", user_id: "user-1", status: "online" },
+      ]), { status: 200 });
+    }
     return new Response(JSON.stringify({ id: "request-1", status: "pending" }), { status: 201 });
   });
-  assert.equal(request.url, "http://localhost:8001/remote-runs");
-  assert.equal(request.options.method, "POST");
-  assert.deepEqual(JSON.parse(request.options.body), {
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].url, "http://localhost:8001/devices");
+  assert.equal(requests[1].url, "http://localhost:8001/remote-runs");
+  assert.equal(requests[1].options.method, "POST");
+  assert.deepEqual(JSON.parse(requests[1].options.body), {
     task_id: "task-1",
     device_id: "device-2",
   });
   assert.deepEqual(response, { id: "request-1", status: "pending" });
+});
+
+test("remote-run submission refuses an offline or foreign device before creating a request", async () => {
+  const calls = [];
+  await assert.rejects(
+    createRemoteRunRequest(
+      { baseUrl: "http://localhost:8001", token: "access-token", user: { id: "user-1" } },
+      "task-1",
+      "stale-device",
+      async (url) => {
+        const path = new URL(url).pathname;
+        calls.push(path);
+        return new Response(JSON.stringify([
+          { id: "stale-device", user_id: "user-1", status: "offline" },
+        ]), { status: 200 });
+      },
+    ),
+    /已离线，未发送请求/,
+  );
+  assert.deepEqual(calls, ["/devices"]);
 });
 
 test("remote-run monitoring polls until completion and returns the safe result", async () => {
