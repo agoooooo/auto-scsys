@@ -387,6 +387,12 @@ class LoginInput(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class RegisterInput(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=12, max_length=256)
+
+
 class CreateUserInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     email: str = Field(min_length=3, max_length=254)
@@ -822,6 +828,32 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             "token_type": "bearer",
             "expires_in": TOKEN_TTL_SECONDS,
             "user": {key: user[key] for key in ("id", "name", "email", "role", "status", "device_limit")},
+        }
+
+    @app.post("/auth/register", status_code=201)
+    def register(body: RegisterInput, db: sqlite3.Connection = Depends(connection)):
+        email = body.email.strip().lower()
+        name = body.name.strip()
+        if not name or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            raise HTTPException(status_code=422, detail="请提供有效的姓名和邮箱")
+        user_id = str(uuid.uuid4())
+        salt = secrets.token_bytes(16)
+        try:
+            db.begin_immediate()
+            db.execute(
+                """INSERT INTO users(id,name,email,role,status,device_limit,password_salt,password_hash,joined_at)
+                   VALUES(?,?,?,'user','active',2,?,?,?)""",
+                (user_id, name, email, salt, _password_hash(body.password, salt), utc_now()),
+            )
+        except (sqlite3.IntegrityError, psycopg.IntegrityError) as exc:
+            raise HTTPException(status_code=409, detail="该邮箱已注册") from exc
+        return {
+            "id": user_id,
+            "name": name,
+            "email": email,
+            "role": "user",
+            "status": "active",
+            "device_limit": 2,
         }
 
     @app.get("/me")

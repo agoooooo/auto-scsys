@@ -80,6 +80,17 @@ internal fun shouldRefreshAccessToken(
 internal class ApiClient(baseUrl: String) {
     private val baseUrl = normalizeApiBaseUrl(baseUrl)
 
+    fun register(name: String, email: String, password: String) {
+        request(
+            "/auth/register",
+            method = "POST",
+            payload = JSONObject()
+                .put("name", name)
+                .put("email", email)
+                .put("password", password),
+        )
+    }
+
     fun login(email: String, password: String): LoginResult {
         val response = JSONObject(request(
             "/auth/login",

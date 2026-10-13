@@ -710,14 +710,23 @@ private fun FlowPilotScreen(
     val device = state.device
     val canLogout = canLogoutDuringRun(state.runStatus?.status)
     var apiBaseUrl by rememberSaveable { mutableStateOf(state.apiBaseUrl) }
+    var registering by rememberSaveable { mutableStateOf(false) }
+    var displayName by rememberSaveable { mutableStateOf("") }
     var email by rememberSaveable { mutableStateOf(state.loginEmail) }
     var password by rememberSaveable { mutableStateOf(state.loginPassword) }
+    var passwordConfirmation by rememberSaveable { mutableStateOf("") }
     var rememberLoginInfo by rememberSaveable { mutableStateOf(state.rememberLoginInfo) }
     var defaultStandbyRequestedFor by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedTask by remember { mutableStateOf<AvailableTask?>(null) }
     var confirmDeviceUnbind by rememberSaveable { mutableStateOf(false) }
     var scriptReviewAttempt by remember { mutableStateOf<String?>(null) }
     var confirmScriptRun by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(state.notice) {
+        if (state.notice != null) {
+            registering = false
+            passwordConfirmation = ""
+        }
+    }
     LaunchedEffect(user?.id, device?.id, state.loading) {
         if (user == null) {
             defaultStandbyRequestedFor = null
@@ -790,9 +799,9 @@ private fun FlowPilotScreen(
                     modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text("连接服务并登录", style = MaterialTheme.typography.titleLarge)
+                    Text(if (registering) "创建普通用户账号" else "连接服务并登录", style = MaterialTheme.typography.titleLarge)
                     Text(
-                        "Android 自动化客户端",
+                        if (registering) "注册后可登录并绑定自己的设备" else "Android 自动化客户端",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -815,6 +824,15 @@ private fun FlowPilotScreen(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    if (registering) {
+                        OutlinedTextField(
+                            value = displayName,
+                            onValueChange = { displayName = it },
+                            label = { Text("姓名") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                     OutlinedTextField(
                         value = email,
                         onValueChange = { email = it },
@@ -822,31 +840,70 @@ private fun FlowPilotScreen(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        label = { Text("密码") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = rememberLoginInfo,
-                            onCheckedChange = {
-                                rememberLoginInfo = it
-                                onRememberLoginInfoChanged(it)
-                            },
+                    if (registering) {
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text("密码（至少 12 个字符）") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
                         )
-                        Text("记住登录信息（加密保存账号和密码）")
+                        OutlinedTextField(
+                            value = passwordConfirmation,
+                            onValueChange = { passwordConfirmation = it },
+                            label = { Text("确认密码") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text("密码") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    if (!registering) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = rememberLoginInfo,
+                                onCheckedChange = {
+                                    rememberLoginInfo = it
+                                    onRememberLoginInfoChanged(it)
+                                },
+                            )
+                            Text("记住登录信息（加密保存账号和密码）")
+                        }
                     }
                     Button(
-                        onClick = { viewModel.login(apiBaseUrl, email, password, rememberLoginInfo) },
-                        enabled = !state.loading && apiBaseUrl.isNotBlank() &&
-                            email.isNotBlank() && password.isNotBlank(),
+                        onClick = {
+                            if (registering) {
+                                viewModel.register(apiBaseUrl, displayName, email, password, passwordConfirmation)
+                            } else {
+                                viewModel.login(apiBaseUrl, email, password, rememberLoginInfo)
+                            }
+                        },
+                        enabled = !state.loading && apiBaseUrl.isNotBlank() && email.isNotBlank() &&
+                            password.isNotBlank() &&
+                            (!registering || (displayName.isNotBlank() && passwordConfirmation.isNotBlank())),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("登录")
+                        Text(if (registering) "创建账号" else "登录")
+                    }
+                    TextButton(
+                        onClick = {
+                            registering = !registering
+                            passwordConfirmation = ""
+                            viewModel.clearAccountNotice()
+                        },
+                        enabled = !state.loading,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (registering) "已有账号？返回登录" else "没有账号？注册")
                     }
                 }
             }
@@ -1337,6 +1394,9 @@ private fun FlowPilotScreen(
             ) {
                 CircularProgressIndicator()
             }
+        }
+        state.notice?.let { message ->
+            Text(message, color = MaterialTheme.colorScheme.primary)
         }
         state.error?.let { message ->
             Text(message, color = MaterialTheme.colorScheme.error)

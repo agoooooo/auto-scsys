@@ -20,6 +20,7 @@ internal data class AppUiState(
     val loginEmail: String = "",
     val loginPassword: String = "",
     val rememberLoginInfo: Boolean = true,
+    val notice: String? = null,
     val device: BoundDevice? = null,
     val tasks: List<AvailableTask> = emptyList(),
     val pendingPublications: List<PendingPublication> = emptyList(),
@@ -73,6 +74,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         _state.value = _state.value.copy(
             loading = true,
             error = null,
+            notice = null,
             apiBaseUrl = normalizedUrl,
         )
         viewModelScope.launch {
@@ -113,6 +115,47 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
             } catch (exception: Exception) {
                 sessionStore.clear()
                 _state.value = _state.value.copy(loading = false, error = exception.message ?: "登录失败")
+            }
+        }
+    }
+
+    fun register(baseUrl: String, name: String, email: String, password: String, confirmation: String) {
+        if (_state.value.loading) return
+        val normalizedUrl = try {
+            normalizeApiBaseUrl(baseUrl)
+        } catch (exception: IllegalArgumentException) {
+            _state.value = _state.value.copy(error = exception.message ?: "请输入有效的 API 地址")
+            return
+        }
+        if (password != confirmation) {
+            _state.value = _state.value.copy(error = "两次输入的密码不一致", notice = null)
+            return
+        }
+        if (password.length < 12) {
+            _state.value = _state.value.copy(error = "密码至少需要 12 个字符", notice = null)
+            return
+        }
+        _state.value = _state.value.copy(
+            loading = true,
+            error = null,
+            notice = null,
+            apiBaseUrl = normalizedUrl,
+        )
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    ApiClient(normalizedUrl).register(name.trim(), email.trim(), password)
+                }
+                _state.value = _state.value.copy(
+                    loading = false,
+                    loginEmail = email.trim(),
+                    notice = "注册成功，请使用新账号登录",
+                )
+            } catch (exception: Exception) {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = exception.message ?: "注册失败",
+                )
             }
         }
     }
@@ -383,6 +426,10 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
     fun setRememberLoginInfo(enabled: Boolean) {
         if (!enabled) sessionStore.clearRememberedLogin()
         _state.value = _state.value.copy(rememberLoginInfo = enabled)
+    }
+
+    fun clearAccountNotice() {
+        _state.value = _state.value.copy(notice = null, error = null)
     }
 
     fun refreshRunStatus() {

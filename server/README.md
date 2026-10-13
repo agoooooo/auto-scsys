@@ -114,6 +114,7 @@ The helper intentionally does not create the destination, encrypt, upload, rotat
 
 ## 已实现接口
 
+- `POST /auth/register`（公开创建普通用户；姓名、唯一邮箱和至少 12 位密码；不强制邮箱验证，不接受管理员角色）
 - `POST /auth/login`、`POST /auth/refresh`、`GET /me`
 - `POST /auth/logout`（撤销当前服务端会话）
 - `GET/POST /users`、`PATCH /users/{id}`（管理员调整用户状态及设备数量上限）

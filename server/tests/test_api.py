@@ -51,6 +51,60 @@ def test_login_roles_and_disabled_accounts(client):
     assert client.get("/me", headers=auth(user)).status_code == 401
 
 
+def test_public_registration_creates_only_a_normalized_ordinary_user(client):
+    response = client.post(
+        "/auth/register",
+        json={
+            "name": "  New User  ",
+            "email": "  New.User@Example.COM  ",
+            "password": "long-enough-registration-password",
+            "role": "admin",
+            "status": "disabled",
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["name"] == "New User"
+    assert response.json()["email"] == "new.user@example.com"
+    assert response.json()["role"] == "user"
+    assert response.json()["status"] == "active"
+
+    token = login(client, "NEW.USER@example.com", "long-enough-registration-password")
+    profile = client.get("/me", headers=auth(token))
+    assert profile.status_code == 200
+    assert profile.json()["id"] == response.json()["id"]
+    assert profile.json()["role"] == "user"
+    assert client.get("/users", headers=auth(token)).status_code == 403
+
+
+def test_public_registration_rejects_invalid_and_duplicate_accounts(client):
+    invalid_name = client.post(
+        "/auth/register",
+        json={"name": "  ", "email": "person@example.com", "password": "valid-registration-password"},
+    )
+    assert invalid_name.status_code == 422
+    invalid_email = client.post(
+        "/auth/register",
+        json={"name": "Person", "email": "not-an-email", "password": "valid-registration-password"},
+    )
+    assert invalid_email.status_code == 422
+    short_password = client.post(
+        "/auth/register",
+        json={"name": "Person", "email": "person@example.com", "password": "short"},
+    )
+    assert short_password.status_code == 422
+
+    first = client.post(
+        "/auth/register",
+        json={"name": "Person", "email": "new@example.com", "password": "valid-registration-password"},
+    )
+    assert first.status_code == 201
+    duplicate = client.post(
+        "/auth/register",
+        json={"name": "Other Person", "email": "NEW@example.com", "password": "another-valid-password"},
+    )
+    assert duplicate.status_code == 409
+
+
 def test_logout_revokes_session_and_refresh_preserves_absolute_session(client):
     logged_in = client.post(
         "/auth/login",
