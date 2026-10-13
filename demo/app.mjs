@@ -960,6 +960,15 @@ document.addEventListener("click", async (event) => {
       }
       showToast("用户状态已更新");
     } catch (error) { showToast(error.message); }
+  } else if (action === "revoke-user-sessions") {
+    const target = state.users.find((user) => user.id === id);
+    if (!session || !target || !window.confirm(`确定撤销 ${target.name} 的所有登录会话？对方需要重新登录。`)) return;
+    try {
+      const result = await apiRequest(session, `/users/${encodeURIComponent(id)}/sessions/revoke`, {
+        method: "POST",
+      });
+      showToast(`已撤销 ${result.revoked_sessions} 个登录会话`);
+    } catch (error) { showToast(error.message); }
   } else if (action === "toggle-device") {
     try {
       if (session) {
@@ -1098,15 +1107,6 @@ document.addEventListener("submit", async (event) => {
     } catch (error) {
       showToast(error.message);
     }
-  } else if (action === "revoke-user-sessions") {
-    const target = state.users.find((user) => user.id === id);
-    if (!session || !target || !window.confirm(`确定撤销 ${target.name} 的所有登录会话？对方需要重新登录。`)) return;
-    try {
-      const result = await apiRequest(session, `/users/${encodeURIComponent(id)}/sessions/revoke`, {
-        method: "POST",
-      });
-      showToast(`已撤销 ${result.revoked_sessions} 个登录会话`);
-    } catch (error) { showToast(error.message); }
   } else if (event.target.id === "device-limit-form") {
     event.preventDefault();
     const formData = new FormData(event.target);
