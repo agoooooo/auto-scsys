@@ -2,7 +2,15 @@
 
 这是 FlowPilot 的 FastAPI 服务端。默认开发模式在本机使用 SQLite，并预置演示账号、设备和任务；生产部署可使用 PostgreSQL 和 S3 兼容对象存储。遗留的有限预授权数据和 API 为旧客户端保留，不参与当前 Android 客户端的远程运行判断。脚本上传后只做 `.py` 格式、大小和 SHA-256 校验，不会执行脚本。
 
-**这不代表服务已具备所有生产运营保障。**登录失败限制目前依赖数据库窗口计数，不替代边缘/API 网关限流；仍需账号恢复、管理员 MFA、加密异地备份与恢复演练、监控告警和安全评审。登录创建 30 天绝对有效的服务端会话，访问令牌每小时过期并可在会话有效期间续期；用户退出会撤销当前会话，管理员可撤销普通用户所有会话，停用账号也会撤销其会话。Compose 提供 PostgreSQL、MinIO、API、Web 和自动 HTTPS 反向代理，适合单机/小型受控部署起步；应按组织要求配置独立托管数据库与对象存储、密钥管理和备份。生产 Web 上传及 Android 下载使用短时预签名 URL；API 在上传完成时核验内容大小及 SHA-256。SQLite 开发及兼容接口仍通过 API 上传/下载，单脚本限制为 2 MiB。Android 客户端必须使用 HTTPS API 地址。
+**当前实现尚不代表已具备全部生产运营保障。**登录失败限制目前依赖数据库窗口计数，不替代边缘/API 网关限流；仍需账号恢复、管理员 MFA、加密异地备份与恢复演练、监控告警和安全评审。登录创建 30 天绝对有效的服务端会话，访问令牌每小时过期并可在会话有效期间续期；用户退出会撤销当前会话，管理员可撤销普通用户所有会话，停用账号也会撤销其会话。生产 Web 上传及 Android 下载使用短时预签名 URL；API 在上传完成时核验内容大小及 SHA-256。SQLite 开发及兼容接口仍通过 API 上传/下载，单脚本限制为 2 MiB。Android Release 客户端必须使用 HTTPS API 地址。
+
+## Deployment phases
+
+域名及 HTTPS 公网入口按项目要求推迟至生产上线的最后阶段。当前优先在隔离的开发/预生产环境验证 PostgreSQL、S3 兼容对象存储、Web/API 集成、Android 派发、备份和恢复；这些环境不得开放到公网，且不应使用真实生产凭据。
+
+当前 Docker Compose “production” profile **不是无域名/HTTP 的早期预生产配置**：它要求三个域名，Caddy 自动配置 HTTPS，API 的生产模式也拒绝非 HTTPS 的 CORS origin。不要为了绕过此保护而把生产模式改成接受公网 HTTP。若需要在域名和 HTTPS 接入前验证 PostgreSQL/S3，应先实现并验证受限的私有预生产配置，或用隔离集成测试；只允许在可信私有网络使用 HTTP 测试账号和测试数据。对外开放 Web/API、使用真实账号或 Android Release APK 前，必须完成最终域名、HTTPS、CORS 与安全配置。
+
+当前已完成 Compose 静态配置校验和核心业务自动化测试，但尚未接入生产域名、真实 PostgreSQL/S3、外部备份目的地或监控告警。域名和 HTTPS 的实际配置/验收属于最后上线阶段，不作为当前应用与存储集成开发的前置事项；备份恢复、凭据管理、访问控制和测试环境隔离仍是相应阶段必须解决的工作。
 
 服务端在启动时会补建会话表；升级后此前签发的无服务端会话令牌不再有效，用户需重新登录。Android 和 Web 登出会请求撤销当前会话；如果设备离线，Web 会提示服务端撤销失败，Android 会保留本机退出并显示错误，未撤销会话最迟在绝对有效期结束后失效。
 
@@ -27,9 +35,9 @@ FLOWPILOT_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32)
 
 以上凭据只适用于本地演示数据库。token secret 未设置时服务会在每次进程启动生成新的随机密钥（重启后旧 token 失效）。迁移到 PostgreSQL 与对象存储、完善密码重置/refresh-token 生命周期、部署 HTTPS 和速率限制之前，不得把此服务暴露到公网。
 
-## Docker production deployment
+## Docker production deployment (final HTTPS ingress phase)
 
-Compose runs PostgreSQL, MinIO, the API, static web console, and Caddy. Point the API, web-console, and object-storage domain names at the host and allow inbound TCP 80/443 for automatic HTTPS certificates. Create a private environment file from the template, set strong unique credentials (the PostgreSQL URL password must be URI-encoded), and start the stack:
+This profile is for the final HTTPS ingress phase, not the earlier isolated database/object-storage integration work. Compose runs PostgreSQL, MinIO, the API, static web console, and Caddy. Point the API, web-console, and object-storage domain names at the host and allow inbound TCP 80/443 for automatic HTTPS certificates. Create a private environment file from the template, set strong unique credentials (the PostgreSQL URL password must be URI-encoded), and start the stack:
 
 ```bash
 cp .env.example .env
