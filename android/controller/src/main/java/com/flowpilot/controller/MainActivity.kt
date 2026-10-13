@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,9 +21,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -105,13 +105,22 @@ private data class ControllerScreenState(
     val devices: List<ControllerDevice> = emptyList(),
     val tasks: List<ControllerTask> = emptyList(),
     val selectedDeviceId: String? = null,
-    val selectedTaskId: String? = null,
+    val selectedDeviceIds: Set<String> = emptySet(),
+    val selectedTaskIds: Set<String> = emptySet(),
     val run: ControllerRunStatus? = null,
+    val batchRuns: List<ControllerBatchRun> = emptyList(),
     val loading: Boolean = false,
     val dispatchUncertain: Boolean = false,
-    val dispatchIdempotencyKey: String? = null,
     val error: String? = null,
     val message: String? = null,
+)
+
+private data class ControllerBatchRun(
+    val device: ControllerDevice,
+    val task: ControllerTask,
+    val requestId: String? = null,
+    val run: ControllerRunStatus? = null,
+    val error: String? = null,
 )
 
 internal enum class ControllerDestination(val label: String) {
@@ -125,6 +134,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var sessionStore: ControllerSessionStore
     private var state by mutableStateOf(ControllerScreenState())
     private var monitorJob: Job? = null
+    private var batchMonitorJob: Job? = null
     private var recoveryStatusJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -188,17 +198,13 @@ class MainActivity : ComponentActivity() {
                         onRefresh = ::refreshDashboard,
                         onSaveProfile = ::saveProfile,
                         onChangePassword = ::changePassword,
-                        onSelectDevice = ::selectDevice,
-                        onSelectTask = {
-                            state = state.copy(
-                                selectedTaskId = it,
-                                dispatchIdempotencyKey = null,
-                                dispatchUncertain = false,
-                            )
-                        },
+                        onToggleDeviceSelection = ::toggleDeviceSelection,
+                        onToggleTaskSelection = ::toggleTaskSelection,
                         onDispatch = ::dispatch,
                         onCancelPending = ::cancelPendingRun,
                         onStopRunning = ::stopRunningRun,
+                        onCancelBatchRun = ::cancelBatchRun,
+                        onStopBatchRun = ::stopBatchRun,
                         onLogout = ::logout,
                     )
                 }
@@ -317,7 +323,7 @@ class MainActivity : ComponentActivity() {
                 val tasks = api.tasks(session.token)
                 val profile = api.profile(session.token)
                 val selectedId = previousDeviceId?.takeIf { id -> devices.any { it.id == id } }
-                    ?: devices.firstOrNull()?.id
+                    ?: orderControllerDevices(devices).firstOrNull()?.id
                 Pair(
                     Triple(
                         devices,
@@ -329,10 +335,10 @@ class MainActivity : ComponentActivity() {
             }
             val (devices, tasks, activeRun) = dashboard
             val selectedDevice = state.selectedDeviceId?.takeIf { id -> devices.any { it.id == id } }
-                ?: devices.firstOrNull()?.id
+                ?: orderControllerDevices(devices).firstOrNull()?.id
             val availableTasks = tasks.filter { it.status == "published" && it.version.isNotBlank() }
-            val selectedTask = state.selectedTaskId?.takeIf { id -> availableTasks.any { it.id == id } }
-                ?: availableTasks.firstOrNull()?.id
+            val deviceIds = devices.mapTo(mutableSetOf()) { it.id }
+            val taskIds = availableTasks.mapTo(mutableSetOf()) { it.id }
             val updatedSession = session.copy(
                 token = sessionStore.read()?.token ?: session.token,
                 name = profile.name,
@@ -346,7 +352,8 @@ class MainActivity : ComponentActivity() {
                 devices = devices,
                 tasks = tasks,
                 selectedDeviceId = selectedDevice,
-                selectedTaskId = selectedTask,
+                selectedDeviceIds = state.selectedDeviceIds.intersect(deviceIds),
+                selectedTaskIds = state.selectedTaskIds.intersect(taskIds),
                 run = activeRun,
                 loading = false,
                 dispatchUncertain = false,
@@ -383,6 +390,7 @@ class MainActivity : ComponentActivity() {
             onSessionExpired = {
                 runOnUiThread {
                     monitorJob?.cancel()
+                    batchMonitorJob?.cancel()
                     sessionStore.clear()
                     state = state.copy(
                         session = null,
@@ -466,66 +474,110 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun selectDevice(deviceId: String) {
-        val session = state.session ?: return
-        monitorJob?.cancel()
+    private fun toggleDeviceSelection(deviceId: String) {
+        val selected = state.selectedDeviceIds.toMutableSet()
+        if (deviceId in selected) selected.remove(deviceId) else selected.add(deviceId)
         state = state.copy(
+            selectedDeviceIds = selected,
             selectedDeviceId = deviceId,
-            run = null,
-            loading = true,
             dispatchUncertain = false,
-            dispatchIdempotencyKey = null,
             error = null,
-            message = null,
         )
-        lifecycleScope.launch {
-            try {
-                val activeRun = withContext(Dispatchers.IO) {
-                    controllerApi(session).activeRemoteRun(session.token, deviceId)
-                }
-                state = state.copy(run = activeRun, loading = false)
-                activeRun?.let { monitorJob = lifecycleScope.launch { monitorRun(session, it.id) } }
-            } catch (error: Exception) {
-                state = state.copy(loading = false, error = error.message ?: "读取设备任务状态失败")
-            }
-        }
+    }
+
+    private fun toggleTaskSelection(taskId: String) {
+        val selected = state.selectedTaskIds.toMutableSet()
+        if (taskId in selected) selected.remove(taskId) else selected.add(taskId)
+        state = state.copy(
+            selectedTaskIds = selected,
+            dispatchUncertain = false,
+            error = null,
+        )
     }
 
     private fun dispatch() {
         val session = state.session ?: return
-        val device = state.devices.firstOrNull { it.id == state.selectedDeviceId } ?: return
-        val task = state.tasks.firstOrNull { it.id == state.selectedTaskId } ?: return
-        if (!canDispatchControllerTask(device.status, task.status, task.version) || state.loading) return
-        val idempotencyKey = state.dispatchIdempotencyKey ?: UUID.randomUUID().toString()
+        if (state.loading || state.dispatchUncertain) return
+        val targets = buildControllerDispatchTargets(
+            state.devices,
+            state.tasks,
+            state.selectedDeviceIds,
+            state.selectedTaskIds,
+        )
+        if (targets.isEmpty()) return
+        val startIndex = state.batchRuns.size
         state = state.copy(
             loading = true,
             error = null,
             message = null,
-            run = null,
-            dispatchIdempotencyKey = idempotencyKey,
+            batchRuns = state.batchRuns + targets.map { ControllerBatchRun(it.device, it.task) },
         )
         lifecycleScope.launch {
-            try {
-                val requestId = withContext(Dispatchers.IO) {
-                    controllerApi(session).dispatch(session.token, task.id, device.id, idempotencyKey)
+            var failedCount = 0
+            var successfulCount = 0
+            targets.forEachIndexed { index, target ->
+                try {
+                    val run = withContext(Dispatchers.IO) {
+                        controllerApi(session).dispatch(
+                            session.token,
+                            target.task.id,
+                            target.device.id,
+                            UUID.randomUUID().toString(),
+                        )
+                    }
+                    state = state.copy(
+                        batchRuns = state.batchRuns.toMutableList().also { items ->
+                            items[startIndex + index] = items[startIndex + index].copy(
+                                requestId = run.id,
+                                run = run,
+                            )
+                        },
+                    )
+                    successfulCount++
+                } catch (error: Exception) {
+                    failedCount++
+                    state = state.copy(
+                        batchRuns = state.batchRuns.toMutableList().also { items ->
+                            items[startIndex + index] = items[startIndex + index].copy(
+                                error = error.message ?: "派发请求失败",
+                            )
+                        },
+                    )
                 }
-                state = state.copy(
-                    loading = false,
-                    dispatchUncertain = false,
-                    dispatchIdempotencyKey = null,
-                    run = ControllerRunStatus(requestId, "pending", null, ""),
-                    message = "任务已下发；请保持本页面打开以跟踪状态",
-                )
-                monitorJob?.cancel()
-                monitorJob = lifecycleScope.launch { monitorRun(session, requestId) }
-            } catch (error: Exception) {
-                state = state.copy(
-                    loading = false,
-                    dispatchUncertain = true,
-                    error = error.message ?: "下发任务失败",
-                    message = "派发结果可能尚未确认；请先刷新并检查设备请求，避免重复下发。",
-                )
             }
+            state = state.copy(
+                loading = false,
+                dispatchUncertain = failedCount > 0,
+                message = "已派发 $successfulCount 项，失败 $failedCount 项；同设备任务将按队列顺序执行",
+            )
+            if (successfulCount > 0) {
+                batchMonitorJob?.cancel()
+                batchMonitorJob = lifecycleScope.launch { monitorBatchRuns(session) }
+            }
+        }
+    }
+
+    private suspend fun monitorBatchRuns(session: ControllerSession) {
+        repeat(MAX_STATUS_POLLS) {
+            val active = state.batchRuns.withIndex().filter { (_, item) ->
+                item.requestId != null && item.run?.let { isControllerRunActive(it.status) } == true
+            }
+            if (active.isEmpty()) return
+            val updated = state.batchRuns.toMutableList()
+            active.forEach { (index, item) ->
+                try {
+                    updated[index] = item.copy(
+                        run = withContext(Dispatchers.IO) {
+                            controllerApi(session).runStatus(session.token, requireNotNull(item.requestId))
+                        },
+                    )
+                } catch (error: Exception) {
+                    updated[index] = item.copy(error = error.message ?: "刷新运行状态失败")
+                }
+            }
+            state = state.copy(batchRuns = updated)
+            if (updated.none { it.run?.let { run -> isControllerRunActive(run.status) } == true }) return
+            delay(STATUS_POLL_INTERVAL_MS)
         }
     }
 
@@ -545,6 +597,58 @@ class MainActivity : ComponentActivity() {
         }
         if (state.run?.id == requestId && isControllerRunActive(state.run?.status.orEmpty())) {
             state = state.copy(message = "仍在等待设备状态；可点击刷新查看最新状态")
+        }
+    }
+
+    private fun cancelBatchRun(requestId: String) {
+        val session = state.session ?: return
+        val index = state.batchRuns.indexOfFirst {
+            it.requestId == requestId && it.run?.status in setOf("queued", "pending")
+        }
+        if (index < 0 || state.loading) return
+        state = state.copy(loading = true, error = null)
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    controllerApi(session).rejectRemoteRun(session.token, requestId)
+                }
+                state = state.copy(
+                    loading = false,
+                    batchRuns = state.batchRuns.toMutableList().also { items ->
+                        val item = items[index]
+                        items[index] = item.copy(run = item.run?.copy(status = "rejected"))
+                    },
+                    message = "队列任务已取消",
+                )
+            } catch (error: Exception) {
+                state = state.copy(loading = false, error = error.message ?: "取消队列任务失败")
+            }
+        }
+    }
+
+    private fun stopBatchRun(requestId: String) {
+        val session = state.session ?: return
+        val index = state.batchRuns.indexOfFirst {
+            it.requestId == requestId && it.run?.status == "running" && it.run.stopRequested.not()
+        }
+        if (index < 0 || state.loading) return
+        state = state.copy(loading = true, error = null)
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    controllerApi(session).requestStop(session.token, requestId)
+                }
+                state = state.copy(
+                    loading = false,
+                    batchRuns = state.batchRuns.toMutableList().also { items ->
+                        val item = items[index]
+                        items[index] = item.copy(run = item.run?.copy(stopRequested = true))
+                    },
+                    message = "停止请求已发送",
+                )
+            } catch (error: Exception) {
+                state = state.copy(loading = false, error = error.message ?: "发送停止请求失败")
+            }
         }
     }
 
@@ -594,6 +698,7 @@ class MainActivity : ComponentActivity() {
     private fun logout() {
         val session = state.session ?: return
         monitorJob?.cancel()
+        batchMonitorJob?.cancel()
         state = state.copy(loading = true, error = null)
         lifecycleScope.launch {
             var logoutError: String? = null
@@ -648,11 +753,13 @@ private fun ControllerScreen(
     onRefresh: () -> Unit,
     onSaveProfile: () -> Unit,
     onChangePassword: () -> Unit,
-    onSelectDevice: (String) -> Unit,
-    onSelectTask: (String) -> Unit,
+    onToggleDeviceSelection: (String) -> Unit,
+    onToggleTaskSelection: (String) -> Unit,
     onDispatch: () -> Unit,
     onCancelPending: () -> Unit,
     onStopRunning: () -> Unit,
+    onCancelBatchRun: (String) -> Unit,
+    onStopBatchRun: (String) -> Unit,
     onLogout: () -> Unit,
 ) {
     var showHelp by remember { mutableStateOf(false) }
@@ -670,9 +777,6 @@ private fun ControllerScreen(
         if (state.session == null) {
             Text("FlowPilot 控制端", style = MaterialTheme.typography.headlineMedium)
             Text("管理你的受控设备，并在授权范围内下发脚本任务。")
-            TextButton(onClick = { showHelp = true }) {
-                Text("帮助与关于")
-            }
         } else {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -699,9 +803,6 @@ private fun ControllerScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-                TextButton(onClick = { showHelp = true }) {
-                    Text("帮助")
                 }
             }
         }
@@ -851,9 +952,7 @@ private fun ControllerScreen(
                     OutlinedButton(onClick = onRefresh, enabled = !state.loading) {
                         Text("刷新账号信息")
                     }
-                    TextButton(onClick = { showHelp = true }) {
-                        Text("帮助与关于")
-                    }
+                    TextButton(onClick = { showHelp = true }) { Text("帮助与关于") }
                     TextButton(onClick = onLogout, enabled = !state.loading) {
                         Text("退出登录")
                     }
@@ -862,6 +961,15 @@ private fun ControllerScreen(
             }
             if (selectedDestination == ControllerDestination.DEVICES) {
                 Text("受控设备（${state.devices.size}）", style = MaterialTheme.typography.titleMedium)
+                val orderedDevices = orderControllerDevices(state.devices)
+                val selectedOnlineCount = orderedDevices.count {
+                    it.id in state.selectedDeviceIds && it.status == "online"
+                }
+                Text(
+                    "已选 ${state.selectedDeviceIds.size} 台 · 在线可派发 $selectedOnlineCount 台",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 if (state.devices.isEmpty()) {
                     ControllerCard(Modifier.fillMaxWidth()) {
                         Text(
@@ -870,53 +978,75 @@ private fun ControllerScreen(
                         )
                     }
                 } else {
-                    ControllerCard(Modifier.fillMaxWidth()) {
-                        Column {
-                            state.devices.forEachIndexed { index, device ->
-                                Column(
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        orderedDevices.forEach { device ->
+                            val selected = device.id in state.selectedDeviceIds
+                            val online = device.status == "online"
+                            Card(
+                                onClick = { onToggleDeviceSelection(device.id) },
+                                enabled = !state.loading && online,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (selected) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        Color.White
+                                    },
+                                    disabledContainerColor = Color.White,
+                                ),
+                                border = if (selected) {
+                                    BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                                } else {
+                                    null
+                                },
+                            ) {
+                                Row(
                                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                         Text(device.name, style = MaterialTheme.typography.titleSmall)
-                                        Text(controllerDeviceStatusLabel(device.status), color = MaterialTheme.colorScheme.primary)
-                                    }
-                                    Text(device.model, style = MaterialTheme.typography.bodySmall)
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
+                                        Text(device.model, style = MaterialTheme.typography.bodySmall)
                                         Text("ID ${device.id.take(8)}", style = MaterialTheme.typography.labelSmall)
-                                        TextButton(
-                                            onClick = { onSelectDevice(device.id) },
-                                            enabled = !state.loading,
-                                        ) {
-                                            Text(if (state.selectedDeviceId == device.id) "派发目标 ✓" else "设为目标")
-                                        }
+                                    }
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            controllerDeviceStatusLabel(device.status),
+                                            color = if (online) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            style = MaterialTheme.typography.labelMedium,
+                                        )
+                                        Checkbox(
+                                            checked = selected,
+                                            onCheckedChange = { onToggleDeviceSelection(device.id) },
+                                            enabled = !state.loading && online,
+                                        )
                                     }
                                 }
-                                if (index < state.devices.lastIndex) HorizontalDivider()
                             }
                         }
+                    }
+                }
+                if (selectedOnlineCount > 0) {
+                    Button(
+                        onClick = { selectedDestinationName = ControllerDestination.TASKS.name },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("为已选设备选择脚本")
                     }
                 }
                 TextButton(onClick = onRefresh, enabled = !state.loading) { Text("刷新设备列表") }
             }
             if (selectedDestination == ControllerDestination.TASKS) {
                 Text("已发布任务（${state.tasks.count { it.status == "published" && it.version.isNotBlank() }}）", style = MaterialTheme.typography.titleMedium)
-                Selector(
-                    title = "目标设备",
-                    selected = state.devices.firstOrNull { it.id == state.selectedDeviceId }?.let {
-                        "${it.name} · ${controllerDeviceStatusLabel(it.status)}"
-                    } ?: "请选择设备",
-                    enabled = state.devices.isNotEmpty(),
-                    options = state.devices.map { it.id to "${it.name} · ${controllerDeviceStatusLabel(it.status)}" },
-                    onSelect = onSelectDevice,
+                val selectedOnlineCount = state.devices.count {
+                    it.id in state.selectedDeviceIds && it.status == "online"
+                }
+                Text(
+                    "派发目标：$selectedOnlineCount 台在线设备 · ${state.selectedTaskIds.size} 个脚本",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 val availableTasks = state.tasks.filter { it.status == "published" && it.version.isNotBlank() }
                 if (availableTasks.isEmpty()) {
@@ -931,22 +1061,23 @@ private fun ControllerScreen(
                                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                                     verticalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(taskItem.name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                                        Text(taskItem.version, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                            Text(taskItem.name, style = MaterialTheme.typography.titleSmall)
+                                            Text(
+                                                taskItem.version,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                style = MaterialTheme.typography.bodySmall,
+                                            )
+                                        }
+                                        Checkbox(
+                                            checked = taskItem.id in state.selectedTaskIds,
+                                            onCheckedChange = { onToggleTaskSelection(taskItem.id) },
+                                            enabled = !state.loading,
+                                        )
                                     }
                                     if (taskItem.description.isNotBlank()) {
                                         Text(taskItem.description, style = MaterialTheme.typography.bodySmall)
-                                    }
-                                    TextButton(
-                                        onClick = { onSelectTask(taskItem.id) },
-                                        enabled = !state.loading,
-                                    ) {
-                                        Text(if (state.selectedTaskId == taskItem.id) "已选择 ✓" else "选择任务")
                                     }
                                 }
                                 if (index < availableTasks.lastIndex) HorizontalDivider()
@@ -954,26 +1085,77 @@ private fun ControllerScreen(
                         }
                     }
                 }
-              val device = state.devices.firstOrNull { it.id == state.selectedDeviceId }
-              val task = state.tasks.firstOrNull { it.id == state.selectedTaskId }
+              val dispatchTargets = buildControllerDispatchTargets(
+                  state.devices,
+                  state.tasks,
+                  state.selectedDeviceIds,
+                  state.selectedTaskIds,
+              )
               Button(
                 onClick = {
                     onDispatch()
                     selectedDestinationName = ControllerDestination.RUNS.name
                 },
-                enabled = !state.loading && device != null && task != null &&
-                    canDispatchControllerTask(device.status, task.status, task.version) &&
-                    !state.dispatchUncertain &&
-                    state.run?.let { isControllerRunActive(it.status) } != true,
+                enabled = !state.loading && dispatchTargets.isNotEmpty() && !state.dispatchUncertain,
                 modifier = Modifier.fillMaxWidth(),
               ) {
-                  Text("向所选设备下发任务")
+                  Text("派发 ${dispatchTargets.size} 个任务请求")
               }
-              Text("仅可向在线设备下发；受控端需处于远程待命状态。")
+              Text("可多选在线设备和脚本；同一设备按脚本列表顺序排队，前一项结束后继续。")
               Spacer(Modifier.height(8.dp))
-              Text("任务发布不会自动运行；此页只创建受控端远程运行请求。", style = MaterialTheme.typography.bodySmall)
+              Text("派发队列保存在服务端，退出控制端后仍会继续；受控端需开启远程待命。", style = MaterialTheme.typography.bodySmall)
             }
             if (selectedDestination == ControllerDestination.RUNS) {
+              if (state.batchRuns.isNotEmpty()) {
+                Text("派发队列（${state.batchRuns.size}）", style = MaterialTheme.typography.titleMedium)
+                ControllerCard(Modifier.fillMaxWidth()) {
+                    Column {
+                        state.batchRuns.forEachIndexed { index, item ->
+                            Column(
+                                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(item.task.name, style = MaterialTheme.typography.titleSmall)
+                                        Text(item.device.name, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    Text(
+                                        item.error?.let { "派发失败" }
+                                            ?: item.run?.let { controllerRunStatusLabel(it.status) }
+                                            ?: "正在派发",
+                                        color = if (item.error == null) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.labelMedium,
+                                    )
+                                }
+                                item.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                                item.run?.resultSummary?.takeIf(String::isNotBlank)?.let { Text(it) }
+                                item.run?.let { run ->
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        if (run.status == "queued" || run.status == "pending") {
+                                            TextButton(
+                                                onClick = { onCancelBatchRun(run.id) },
+                                                enabled = !state.loading,
+                                            ) { Text("取消") }
+                                        } else if (run.status == "running") {
+                                            TextButton(
+                                                onClick = { onStopBatchRun(run.id) },
+                                                enabled = !state.loading && !run.stopRequested,
+                                            ) { Text(if (run.stopRequested) "已请求停止" else "停止") }
+                                        }
+                                    }
+                                }
+                            }
+                            if (index < state.batchRuns.lastIndex) HorizontalDivider()
+                        }
+                    }
+                }
+              }
               state.run?.let { run ->
                 ControllerCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -998,14 +1180,17 @@ private fun ControllerScreen(
                         }
                     }
                 }
-              } ?: ControllerCard(Modifier.fillMaxWidth()) {
+              }
+              if (state.run == null && state.batchRuns.isEmpty()) ControllerCard(Modifier.fillMaxWidth()) {
                   Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                       Text("暂无运行记录", style = MaterialTheme.typography.titleMedium)
-                      Text("从“派发”选择在线设备和已发布任务后，即可在此跟踪执行状态。")
+                      Text("从“任务”页多选在线设备和脚本后，即可在此跟踪派发与执行。")
                   }
               }
-              Spacer(Modifier.height(8.dp))
-              Text("停止请求由受控端轮询，并在脚本的下一个停止检查点响应。", style = MaterialTheme.typography.bodySmall)
+              if (state.run != null || state.batchRuns.isNotEmpty()) {
+                  Spacer(Modifier.height(8.dp))
+                  Text("停止请求由受控端轮询，并在脚本的下一个停止检查点响应。", style = MaterialTheme.typography.bodySmall)
+              }
             }
         }
       }
@@ -1122,34 +1307,6 @@ private fun ControllerNavigationIcon(destination: ControllerDestination, selecte
                     topLeft = Offset(size.width * 0.19f, size.height * 0.47f),
                     size = Size(size.width * 0.62f, size.height * 0.43f),
                     style = Stroke(stroke, cap = StrokeCap.Round),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun Selector(
-    title: String,
-    selected: String,
-    enabled: Boolean,
-    options: List<Pair<String, String>>,
-    onSelect: (String) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Column {
-        Text(title, style = MaterialTheme.typography.titleSmall)
-        OutlinedButton(onClick = { expanded = true }, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
-            Text(selected)
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { (id, label) ->
-                DropdownMenuItem(
-                    text = { Text(label) },
-                    onClick = {
-                        onSelect(id)
-                        expanded = false
-                    },
                 )
             }
         }

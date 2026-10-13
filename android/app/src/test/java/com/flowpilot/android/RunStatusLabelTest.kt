@@ -29,6 +29,7 @@ class RunStatusLabelTest {
 
     @Test
     fun showsExecutionStateForRemoteRequests() {
+        assertEquals("队列中", remoteRunStatusLabel("queued"))
         assertEquals("待运行", remoteRunStatusLabel("pending"))
         assertEquals("运行中", remoteRunStatusLabel("running"))
     }

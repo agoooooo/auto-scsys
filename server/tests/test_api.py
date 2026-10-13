@@ -1990,7 +1990,7 @@ def test_device_user_must_confirm_remote_runs_and_can_report_local_runs(client):
     ).status_code == 403
 
 
-def test_device_rejects_concurrent_remote_and_local_runs(client):
+def test_remote_requests_queue_behind_active_work_but_only_one_run_executes(client):
     admin = login(client, "admin@example.com", "admin-demo")
     user = login(client)
     first = client.post(
@@ -2003,6 +2003,11 @@ def test_device_rejects_concurrent_remote_and_local_runs(client):
         headers=auth(user),
         json={"task_id": "t-001", "device_id": "d-001"},
     ).json()
+    assert queued["status"] == "queued"
+    assert queued["expires_at"] == 2**63 - 1
+    assert client.get(f"/remote-runs/{queued['id']}", headers=auth(user)).json()["status"] == "queued"
+    polled_before_start = client.get("/devices/d-001/remote-runs", headers=auth(user)).json()
+    assert [request["id"] for request in polled_before_start if request["status"] == "pending"] == [first["id"]]
 
     started = client.patch(
         f"/remote-runs/{first['id']}",
@@ -2010,11 +2015,14 @@ def test_device_rejects_concurrent_remote_and_local_runs(client):
         json={"decision": "approve"},
     )
     assert started.status_code == 200
-    assert client.post(
+    queued_while_running = client.post(
         "/remote-runs",
         headers=auth(user),
         json={"task_id": "t-001", "device_id": "d-001"},
-    ).status_code == 409
+    )
+    assert queued_while_running.status_code == 201
+    assert queued_while_running.json()["status"] == "queued"
+    assert client.get(f"/remote-runs/{queued_while_running.json()['id']}", headers=auth(user)).json()["status"] == "queued"
     assert client.post(
         "/devices/d-001/runs",
         headers=auth(user),
@@ -2031,11 +2039,29 @@ def test_device_rejects_concurrent_remote_and_local_runs(client):
         headers=auth(user),
         json={"status": "success", "result_summary": "完成"},
     ).status_code == 200
-    assert client.patch(
+    ready = client.get("/devices/d-001/remote-runs", headers=auth(user)).json()
+    assert [request["id"] for request in ready if request["status"] == "pending"] == [queued["id"]]
+    assert next(request for request in ready if request["id"] == queued["id"])["expires_at"] < 2**63 - 1
+    second_started = client.patch(
         f"/remote-runs/{queued['id']}",
         headers=auth(user),
         json={"decision": "approve"},
+    )
+    assert second_started.status_code == 200
+    assert client.patch(
+        f"/remote-runs/{queued_while_running.json()['id']}",
+        headers=auth(user),
+        json={"decision": "approve"},
+    ).status_code == 409
+    assert client.post(
+        f"/runs/{second_started.json()['run_id']}",
+        headers=auth(user),
+        json={"status": "success", "result_summary": "完成"},
     ).status_code == 200
+    next_request = client.get("/devices/d-001/remote-runs", headers=auth(user)).json()
+    assert [request["id"] for request in next_request if request["status"] == "pending"] == [
+        queued_while_running.json()["id"],
+    ]
 
 
 def test_remote_run_idempotency_key_replays_and_rejects_conflicting_payload(client):
@@ -2256,7 +2282,7 @@ def test_legacy_all_version_preauthorization_does_not_bypass_device_approval(cli
         json={"task_id": "t-001", "device_id": "d-001"},
     )
     assert after_revoke.status_code == 201
-    assert after_revoke.json()["status"] == "pending"
+    assert after_revoke.json()["status"] == "queued"
 
 
 def test_user_can_create_only_own_device_and_granted_version_authorization(client):

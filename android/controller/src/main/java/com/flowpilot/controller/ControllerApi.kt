@@ -175,7 +175,7 @@ internal class ControllerApi(
         taskId: String,
         deviceId: String,
         idempotencyKey: String = UUID.randomUUID().toString(),
-    ): String {
+    ): ControllerRunStatus {
         val response = JSONObject(
             request(
                 "/remote-runs",
@@ -185,8 +185,14 @@ internal class ControllerApi(
                 idempotencyKey,
             ),
         )
-        return response.optString("id").takeIf(String::isNotBlank)
+        val id = response.optString("id").takeIf(String::isNotBlank)
             ?: throw IOException("服务器没有返回运行请求 ID")
+        return ControllerRunStatus(
+            id = id,
+            status = response.optString("status").takeIf(String::isNotBlank) ?: "pending",
+            runStatus = null,
+            resultSummary = "",
+        )
     }
 
     fun rejectRemoteRun(token: String, requestId: String) {
@@ -300,12 +306,40 @@ internal class ControllerApi(
 
 internal class ControllerApiException(message: String, val statusCode: Int) : IOException(message)
 
+internal data class ControllerDispatchTarget(
+    val device: ControllerDevice,
+    val task: ControllerTask,
+)
+
+internal fun orderControllerDevices(devices: List<ControllerDevice>): List<ControllerDevice> =
+    devices.sortedWith(
+        compareByDescending<ControllerDevice> { it.status == "online" }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+            .thenBy { it.id },
+    )
+
+internal fun buildControllerDispatchTargets(
+    devices: List<ControllerDevice>,
+    tasks: List<ControllerTask>,
+    selectedDeviceIds: Set<String>,
+    selectedTaskIds: Set<String>,
+): List<ControllerDispatchTarget> =
+    orderControllerDevices(devices)
+        .filter { it.id in selectedDeviceIds && it.status == "online" }
+        .flatMap { device ->
+            tasks.filter {
+                it.id in selectedTaskIds && it.status == "published" && it.version.isNotBlank()
+            }.map { task -> ControllerDispatchTarget(device, task) }
+        }
+
 internal fun canDispatchControllerTask(deviceStatus: String, taskStatus: String, version: String): Boolean =
     deviceStatus == "online" && taskStatus == "published" && version.isNotBlank()
 
-internal fun isControllerRunActive(status: String): Boolean = status == "pending" || status == "running"
+internal fun isControllerRunActive(status: String): Boolean =
+    status == "queued" || status == "pending" || status == "running"
 
 internal fun controllerRunStatusLabel(status: String): String = when (status) {
+    "queued" -> "队列等待中"
     "pending" -> "等待受控端接收"
     "running" -> "受控端运行中"
     "success" -> "运行成功"

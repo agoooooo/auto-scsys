@@ -23,6 +23,7 @@ internal object PythonTaskRuntime {
     fun execute(source: String, nativeBridge: Any): String {
         val builtins = Python.getInstance().getBuiltins()
         val globals = builtins.callAttr("dict")
+        globals.callAttr("__setitem__", "__name__", "__main__")
         globals.callAttr("__setitem__", "nativeBridge", nativeBridge)
         builtins.callAttr("exec", bridgeSource, globals)
         builtins.callAttr("exec", source, globals)

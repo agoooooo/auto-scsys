@@ -100,6 +100,25 @@ class PythonRuntimeInstrumentedTest {
     }
 
     @Test
+    fun scriptMainGuardRunsWithStandardModuleName() {
+        ensurePythonStarted()
+
+        val result = PythonTaskRuntime.execute(
+            """
+                def main():
+                    global result
+                    result = "started"
+
+                if __name__ == "__main__":
+                    main()
+            """.trimIndent(),
+            InstrumentedNativeBridge(),
+        )
+
+        assertEquals("started", result)
+    }
+
+    @Test
     fun bundledChineseRecognizerReadsTextFromLocalImage() {
         val bitmap = Bitmap.createBitmap(900, 220, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)

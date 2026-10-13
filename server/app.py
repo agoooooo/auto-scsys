@@ -841,7 +841,53 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if request_id is not None:
             query += " AND id=?"
             parameters += (request_id,)
+        expired = db.execute(
+            "SELECT DISTINCT device_id FROM remote_runs WHERE status='pending' AND expires_at<=?"
+            + (" AND id=?" if request_id is not None else ""),
+            parameters,
+        ).fetchall()
         db.execute(query, parameters)
+        for row in expired:
+            _activate_next_remote_request(db, row["device_id"])
+
+    def _has_earlier_remote_request(db: sqlite3.Connection, request: sqlite3.Row) -> bool:
+        active_run = db.execute(
+            "SELECT 1 FROM runs WHERE device_id=? AND status='running' LIMIT 1",
+            (request["device_id"],),
+        ).fetchone()
+        if active_run:
+            return True
+        earlier_pending = db.execute(
+            """SELECT 1 FROM remote_runs
+               WHERE device_id=? AND status='pending'
+                 AND (created_at<? OR (created_at=? AND id<?))
+               LIMIT 1""",
+            (request["device_id"], request["created_at"], request["created_at"], request["id"]),
+        ).fetchone()
+        return earlier_pending is not None
+
+    def _remote_request_status(db: sqlite3.Connection, request: sqlite3.Row) -> str:
+        if request["status"] == "pending" and _has_earlier_remote_request(db, request):
+            return "queued"
+        return request["status"]
+
+    def _activate_next_remote_request(db: sqlite3.Connection, device_id: str) -> None:
+        if db.execute(
+            "SELECT 1 FROM runs WHERE device_id=? AND status='running' LIMIT 1",
+            (device_id,),
+        ).fetchone():
+            return
+        request = db.execute(
+            """SELECT id,expires_at FROM remote_runs
+               WHERE device_id=? AND status='pending'
+               ORDER BY created_at,id LIMIT 1""",
+            (device_id,),
+        ).fetchone()
+        if request and request["expires_at"] > int(time.time()) + REMOTE_REQUEST_TTL_SECONDS:
+            db.execute(
+                "UPDATE remote_runs SET expires_at=? WHERE id=? AND status='pending'",
+                (int(time.time()) + REMOTE_REQUEST_TTL_SECONDS, request["id"]),
+            )
 
     def _ensure_device_idle(db: sqlite3.Connection, device_id: str) -> None:
         active_run = db.execute(
@@ -2143,7 +2189,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                     "task_id": existing["task_id"],
                     "version": existing["version"],
                     "device_id": existing["device_id"],
-                    "status": existing["status"],
+                    "status": _remote_request_status(db, existing),
                     "created_at": existing["created_at"],
                     "expires_at": existing["expires_at"],
                     "run_id": existing["run_id"],
@@ -2151,14 +2197,21 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                 }
         if device["status"] != "online":
             raise HTTPException(status_code=409, detail="只能向在线设备发起运行请求")
-        _ensure_device_idle(db, device["id"])
         task = _task_for_user(db, body.task_id, {"id": device["user_id"], "role": "user"})
         if not task["active_version"]:
             raise HTTPException(status_code=409, detail="任务没有可运行版本")
         _ensure_device_has_task_version(db, task, device, task["active_version"])
+        _expire_requests(db)
+        has_predecessor = db.execute(
+            """SELECT 1 FROM remote_runs WHERE device_id=? AND status='pending'
+               UNION ALL
+               SELECT 1 FROM runs WHERE device_id=? AND status='running'
+               LIMIT 1""",
+            (device["id"], device["id"]),
+        ).fetchone() is not None
         request_id = str(uuid.uuid4())
         now = int(time.time())
-        expires_at = now + REMOTE_REQUEST_TTL_SECONDS
+        expires_at = (2**63 - 1) if has_predecessor else now + REMOTE_REQUEST_TTL_SECONDS
         created_at = utc_now()
         db.execute(
             """INSERT INTO remote_runs(
@@ -2175,7 +2228,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             "task_id": task["id"],
             "version": task["active_version"],
             "device_id": body.device_id,
-            "status": "pending",
+            "status": "queued" if has_predecessor else "pending",
             "created_at": created_at,
             "expires_at": expires_at,
             "run_id": None,
@@ -2215,14 +2268,27 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     def pending_remote_runs(device_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
         device = _device_for_user(db, device_id, user)
         _expire_requests(db)
+        _activate_next_remote_request(db, device["id"])
         rows = db.execute(
             """SELECT r.*,t.name AS task_name,t.source,t.capabilities_json,u.name AS requested_by_name,
                       (SELECT id FROM runs WHERE remote_run_id=r.id LIMIT 1) AS run_id
                FROM remote_runs r JOIN tasks t ON t.id=r.task_id
                JOIN users u ON u.id=r.requested_by
                WHERE r.device_id=? AND (
-                   r.status IN ('pending','running')
-                   OR r.id IN (
+                       r.status='running'
+                       OR (
+                           r.status='pending'
+                           AND NOT EXISTS (
+                               SELECT 1 FROM runs active
+                               WHERE active.device_id=r.device_id AND active.status='running'
+                           )
+                           AND r.id=(
+                               SELECT first_request.id FROM remote_runs first_request
+                               WHERE first_request.device_id=r.device_id AND first_request.status='pending'
+                               ORDER BY first_request.created_at,first_request.id LIMIT 1
+                           )
+                       )
+                       OR r.id IN (
                        SELECT id FROM remote_runs
                        WHERE device_id=? AND status='expired'
                        ORDER BY created_at DESC LIMIT 50
@@ -2233,7 +2299,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         )
         return [{
             "id": row["id"], "task_id": row["task_id"], "task": row["task_name"], "version": row["version"],
-            "device_id": row["device_id"], "status": row["status"], "requested_by": row["requested_by"],
+            "device_id": row["device_id"], "status": _remote_request_status(db, row), "requested_by": row["requested_by"],
             "run_id": row["run_id"],
             "requested_by_name": row["requested_by_name"],
             "created_at": row["created_at"], "expires_at": row["expires_at"], "source": row["source"],
@@ -2255,10 +2321,19 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if not request:
             raise HTTPException(status_code=404, detail="运行请求不存在")
         _device_for_user(db, request["device_id"], user)
+        _activate_next_remote_request(db, request["device_id"])
+        request = db.execute(
+            """SELECT r.*,run.id AS run_id,run.status AS run_status,
+                      run.result_summary AS result_summary
+               FROM remote_runs r
+               LEFT JOIN runs run ON run.remote_run_id=r.id
+               WHERE r.id=?""",
+            (request_id,),
+        ).fetchone()
         return {
             "id": request["id"],
             "device_id": request["device_id"],
-            "status": request["status"],
+            "status": _remote_request_status(db, request),
             "run_id": request["run_id"],
             "run_status": request["run_status"],
             "result_summary": request["result_summary"] or "",
@@ -2321,7 +2396,8 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         request = db.execute("SELECT * FROM remote_runs WHERE id=?", (request_id,)).fetchone()
         if not request:
             raise HTTPException(status_code=404, detail="运行请求不存在")
-        _expire_requests(db, request_id)
+        _expire_requests(db)
+        _activate_next_remote_request(db, device["id"])
         request = db.execute("SELECT * FROM remote_runs WHERE id=?", (request_id,)).fetchone()
         _touch_device(db, device["id"])
         if request["status"] == "expired":
@@ -2331,7 +2407,10 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if body.decision == "reject":
             db.execute("UPDATE remote_runs SET status='rejected' WHERE id=?", (request_id,))
             audit(db, user["id"], "remote_run.rejected", "remote_run", request_id)
+            _activate_next_remote_request(db, device["id"])
             return {"id": request_id, "status": "rejected", "run_id": None}
+        if _has_earlier_remote_request(db, request):
+            raise HTTPException(status_code=409, detail="任务仍在派发队列中，前序任务完成后才能启动")
         task = _task_for_user(db, request["task_id"], {"id": device["user_id"], "role": "user"})
         version_exists = db.execute(
             "SELECT 1 FROM task_versions WHERE task_id=? AND version=?",
@@ -2375,6 +2454,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         )
         if run["remote_run_id"]:
             db.execute("UPDATE remote_runs SET status=? WHERE id=?", (body.status, run["remote_run_id"]))
+        _activate_next_remote_request(db, device["id"])
         audit(db, user["id"], f"run.{body.status}", "run", run_id)
         return {"id": run_id, "status": body.status, "device_id": device["id"]}
 

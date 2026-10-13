@@ -17,6 +17,7 @@ class ControllerPolicyTest {
 
     @Test
     fun onlyPendingAndRunningRequestsAreActive() {
+        assertTrue(isControllerRunActive("queued"))
         assertTrue(isControllerRunActive("pending"))
         assertTrue(isControllerRunActive("running"))
         assertFalse(isControllerRunActive("success"))
@@ -45,6 +46,40 @@ class ControllerPolicyTest {
         assertEquals("在线", controllerDeviceStatusLabel("online"))
         assertEquals("离线", controllerDeviceStatusLabel("offline"))
         assertEquals("已停用", controllerDeviceStatusLabel("disabled"))
+    }
+
+    @Test
+    fun onlineDevicesAppearFirstAndDispatchTargetsCoverSelectedDeviceTaskPairs() {
+        val devices = listOf(
+            ControllerDevice("offline", "旧设备", "model", "offline"),
+            ControllerDevice("online-b", "Beta", "model", "online"),
+            ControllerDevice("online-a", "Alpha", "model", "online"),
+        )
+        val tasks = listOf(
+            ControllerTask("published", "Published", "", "published", "v1.0"),
+            ControllerTask("published-2", "Published 2", "", "published", "v2.0"),
+            ControllerTask("draft", "Draft", "", "draft", "v1.0"),
+            ControllerTask("no-version", "No version", "", "published", ""),
+        )
+
+        assertEquals(
+            listOf("Alpha", "Beta", "旧设备"),
+            orderControllerDevices(devices).map(ControllerDevice::name),
+        )
+        assertEquals(
+            listOf(
+                "online-a:published",
+                "online-a:published-2",
+                "online-b:published",
+                "online-b:published-2",
+            ),
+            buildControllerDispatchTargets(
+                devices,
+                tasks,
+                selectedDeviceIds = setOf("online-a", "online-b", "offline"),
+                selectedTaskIds = setOf("published", "published-2", "draft", "no-version"),
+            ).map { "${it.device.id}:${it.task.id}" },
+        )
     }
 
     @Test

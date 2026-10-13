@@ -214,7 +214,14 @@ internal class TaskExecutionService : Service() {
             summary = "用户停止了任务"
         } catch (exception: Exception) {
             status = if (stopRequested.get()) "stopped" else "failure"
-            summary = if (stopRequested.get()) "用户停止了任务" else exception.message ?: "任务执行失败"
+            if (stopRequested.get()) {
+                summary = "用户停止了任务"
+            } else {
+                val detail = exception.message?.takeIf(String::isNotBlank)
+                    ?: exception.javaClass.simpleName
+                summary = "脚本启动或执行失败：$detail"
+                store.appendLog("任务失败 [${exception.javaClass.simpleName}]：$detail")
+            }
         } finally {
             heartbeatJob?.cancelAndJoin()
             stopPollJob?.cancelAndJoin()
