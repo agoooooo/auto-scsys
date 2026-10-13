@@ -77,6 +77,109 @@ def test_public_registration_creates_only_a_normalized_ordinary_user(client):
     assert client.get("/users", headers=auth(token)).status_code == 403
 
 
+def test_user_can_update_own_profile_and_email_requires_password_confirmation(client):
+    token = login(client)
+    profile = client.patch(
+        "/me",
+        headers=auth(token),
+        json={"name": "  Updated Name  "},
+    )
+    assert profile.status_code == 200
+    assert profile.json()["name"] == "Updated Name"
+    assert profile.json()["email"] == "chen.xiao@example.com"
+    assert "joined_at" in profile.json()
+
+    missing_confirmation = client.patch(
+        "/me",
+        headers=auth(token),
+        json={"email": "updated@example.com"},
+    )
+    assert missing_confirmation.status_code == 403
+    invalid_confirmation = client.patch(
+        "/me",
+        headers=auth(token),
+        json={"email": "updated@example.com", "current_password": "wrong-password"},
+    )
+    assert invalid_confirmation.status_code == 403
+
+    updated = client.patch(
+        "/me",
+        headers=auth(token),
+        json={
+            "email": "  UPDATED@example.com ",
+            "current_password": "user-demo",
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["email"] == "updated@example.com"
+    assert client.get("/me", headers=auth(token)).status_code == 200
+    assert client.post(
+        "/auth/login",
+        json={"email": "updated@example.com", "password": "user-demo"},
+    ).status_code == 200
+
+
+def test_user_cannot_update_another_profile_or_claim_an_existing_email(client):
+    user = login(client)
+    other_user = login(client, "zhou.ke@example.com", "user-demo")
+    assert client.patch(
+        "/users/u-1002",
+        headers=auth(user),
+        json={"name": "Changed"},
+    ).status_code == 403
+    duplicate_email = client.patch(
+        "/me",
+        headers=auth(other_user),
+        json={
+            "email": "chen.xiao@example.com",
+            "current_password": "user-demo",
+        },
+    )
+    assert duplicate_email.status_code == 409
+    assert client.patch("/me", headers=auth(user), json={"name": "  "}).status_code == 422
+
+
+def test_password_change_verifies_current_password_and_revokes_other_sessions(client):
+    first_session = login(client)
+    second_session = login(client)
+    wrong_current = client.post(
+        "/auth/change-password",
+        headers=auth(first_session),
+        json={
+            "current_password": "wrong-password",
+            "new_password": "replacement-password-123",
+        },
+    )
+    assert wrong_current.status_code == 403
+    same_password = client.post(
+        "/auth/change-password",
+        headers=auth(first_session),
+        json={"current_password": "user-demo", "new_password": "user-demo"},
+    )
+    assert same_password.status_code == 422
+    changed = client.post(
+        "/auth/change-password",
+        headers=auth(first_session),
+        json={
+            "current_password": "user-demo",
+            "new_password": "replacement-password-123",
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json() == {"status": "changed", "other_sessions_revoked": True}
+    assert client.get("/me", headers=auth(first_session)).status_code == 200
+    assert client.get("/me", headers=auth(second_session)).status_code == 401
+    assert client.post(
+        "/auth/login",
+        json={"email": "chen.xiao@example.com", "password": "replacement-password-123"},
+    ).status_code == 200
+    admin = login(client, "admin@example.com", "admin-demo")
+    assert any(
+        event["action"] == "user.password_changed" and event["resource_id"] == "u-1001"
+        for event in client.get("/admin/audit", headers=auth(admin)).json()
+    )
+
+
 def test_public_registration_rejects_invalid_and_duplicate_accounts(client):
     invalid_name = client.post(
         "/auth/register",

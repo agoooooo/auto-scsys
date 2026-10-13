@@ -21,3 +21,11 @@ test("authenticated Web stop actions send stop signals instead of changing run r
   assert.match(appSource, /真实设备运行不能由 Web 模拟完成/);
   assert.match(appSource, /activeRun\.remoteRunId && canRun/);
 });
+
+test("Web exposes profile editing, password change, and opt-in remembered sessions", () => {
+  assert.match(appSource, /id="profile-form"/);
+  assert.match(appSource, /id="password-form"/);
+  assert.match(appSource, /name="rememberMe" type="checkbox"/);
+  assert.match(appSource, /在此设备保持登录/);
+  assert.match(appSource, /await apiRequest\(session, "\/auth\/change-password"/);
+});

@@ -423,6 +423,17 @@ class RegisterInput(BaseModel):
     password: str = Field(min_length=12, max_length=256)
 
 
+class ProfileUpdateInput(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    email: str | None = Field(default=None, min_length=3, max_length=254)
+    current_password: str | None = Field(default=None, min_length=1, max_length=256)
+
+
+class ChangePasswordInput(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+
 class CreateUserInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     email: str = Field(min_length=3, max_length=254)
@@ -892,8 +903,99 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         }
 
     @app.get("/me")
-    def me(user: dict = Depends(current_user)):
-        return user
+    def me(user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
+        row = db.execute(
+            "SELECT id,name,email,role,status,device_limit,joined_at FROM users WHERE id=?",
+            (user["id"],),
+        ).fetchone()
+        return dict(row)
+
+    @app.patch("/me")
+    def update_profile(
+        body: ProfileUpdateInput,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        if body.name is None and body.email is None:
+            raise HTTPException(status_code=422, detail="至少提供一个要更新的个人资料字段")
+        changes = {}
+        if body.name is not None:
+            name = body.name.strip()
+            if not name:
+                raise HTTPException(status_code=422, detail="姓名不能为空")
+            changes["name"] = name
+        if body.email is not None:
+            email = body.email.strip().lower()
+            if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+                raise HTTPException(status_code=422, detail="请提供有效的邮箱")
+            if email != user["email"]:
+                account = db.execute(
+                    "SELECT password_salt,password_hash FROM users WHERE id=?",
+                    (user["id"],),
+                ).fetchone()
+                if not body.current_password or not hmac.compare_digest(
+                    _password_hash(body.current_password, account["password_salt"]),
+                    account["password_hash"],
+                ):
+                    raise HTTPException(status_code=403, detail="修改邮箱需要验证当前密码")
+                changes["email"] = email
+        if changes:
+            assignments = ",".join(f"{column}=?" for column in changes)
+            try:
+                db.execute(
+                    f"UPDATE users SET {assignments} WHERE id=?",
+                    (*changes.values(), user["id"]),
+                )
+            except (sqlite3.IntegrityError, psycopg.IntegrityError) as error:
+                raise HTTPException(status_code=409, detail="该邮箱已被其他账号使用") from error
+            audit(db, user["id"], "user.profile_updated", "user", user["id"])
+        row = db.execute(
+            "SELECT id,name,email,role,status,device_limit,joined_at FROM users WHERE id=?",
+            (user["id"],),
+        ).fetchone()
+        return dict(row)
+
+    @app.post("/auth/change-password")
+    def change_password(
+        body: ChangePasswordInput,
+        request: Request,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        account = db.execute(
+            "SELECT password_salt,password_hash FROM users WHERE id=?",
+            (user["id"],),
+        ).fetchone()
+        current_hash = _password_hash(body.current_password, account["password_salt"])
+        if not hmac.compare_digest(current_hash, account["password_hash"]):
+            raise HTTPException(status_code=403, detail="当前密码不正确")
+        if hmac.compare_digest(
+            _password_hash(body.new_password, account["password_salt"]),
+            account["password_hash"],
+        ):
+            raise HTTPException(status_code=422, detail="新密码不能与当前密码相同")
+        salt = secrets.token_bytes(16)
+        db.begin_immediate()
+        account = db.execute(
+            "SELECT password_salt,password_hash FROM users WHERE id=?",
+            (user["id"],),
+        ).fetchone()
+        if not hmac.compare_digest(
+            _password_hash(body.current_password, account["password_salt"]),
+            account["password_hash"],
+        ):
+            raise HTTPException(status_code=403, detail="当前密码不正确")
+        db.execute(
+            "UPDATE users SET password_salt=?,password_hash=? WHERE id=?",
+            (salt, _password_hash(body.new_password, salt), user["id"]),
+        )
+        db.execute(
+            """UPDATE auth_sessions SET revoked_at=?
+               WHERE user_id=? AND id!=? AND revoked_at IS NULL""",
+            (int(time.time()), user["id"], request.state.auth_session_id),
+        )
+        audit(db, user["id"], "user.password_changed", "user", user["id"])
+        return {"status": "changed", "other_sessions_revoked": True}
 
     @app.post("/auth/refresh")
     def refresh_access_token(request: Request, user: dict = Depends(current_user)):

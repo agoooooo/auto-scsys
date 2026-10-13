@@ -290,6 +290,8 @@ a { color: inherit; text-decoration: none; }
 .login-card > p { margin: 8px 0 22px; color: #838d9f; font-size: 11px; line-height: 1.7; }
 .login-card form { display: grid; gap: 13px; }
 .login-card .form-field input { height: 40px; width: 100%; border: 1px solid #e6e9f0; border-radius: 8px; padding: 0 11px; color: #3d4759; background: #fff; font-size: 11px; }
+.remember-option { display: flex; align-items: center; gap: 8px; color: #727d91; font-size: 11px; }
+.remember-option input { accent-color: var(--purple); }
 .login-card .primary-button { min-height: 40px; margin-top: 4px; font-size: 11px; }
 .login-presets { display: grid; gap: 8px; margin-top: 18px; padding: 12px; border-radius: 9px; color: #80899a; background: #f8f8fc; font-size: 9px; line-height: 1.7; }
 .login-presets strong { color: #505a6c; }

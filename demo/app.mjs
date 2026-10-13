@@ -582,6 +582,7 @@ function renderLogin(error = "") {
       <div class="form-field"><label for="api-url">服务端地址</label><input id="api-url" name="baseUrl" type="url" value="${escapeHtml(defaultApiUrl)}" required /></div>
       <div class="form-field"><label for="login-email">邮箱</label><input id="login-email" name="email" type="email" autocomplete="username" required /></div>
       <div class="form-field"><label for="login-password">密码</label><input id="login-password" name="password" type="password" autocomplete="current-password" required /></div>
+      <label class="remember-option"><input name="rememberMe" type="checkbox" /> 在此设备保持登录（最多 30 天）</label>
       <div class="login-error" role="alert">${escapeHtml(error)}</div>
       <button class="primary-button" type="submit">连接并登录</button>
     </form>
@@ -626,7 +627,7 @@ function signOut() {
   if (activeSession) {
     revokeSession(activeSession).catch((error) => {
       showToast(`本地已退出，但服务端会话撤销失败：${error.message}`);
-    });
+    }).finally(clearSession);
   }
 }
 
@@ -684,6 +685,32 @@ function showDeviceLimitModal(userId) {
     </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit">保存上限</button></div></form>
   </section></div>`;
   modalRoot.querySelector("#user-device-limit").focus();
+}
+
+function showAccountModal() {
+  if (!session) {
+    signOut();
+    return;
+  }
+  modalRoot.innerHTML = `<div class="modal-root-inner"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-header"><div><h2 id="modal-title">账号与安全</h2><p>邮箱变更需要验证当前密码；密码修改会撤销其他设备上的登录会话。</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">×</button></div>
+    <form id="profile-form"><div class="modal-body">
+      <div class="form-field"><label for="profile-name">姓名</label><input id="profile-name" name="name" value="${escapeHtml(session.user.name)}" required maxlength="80" /></div>
+      <div class="form-field"><label for="profile-email">邮箱</label><input id="profile-email" name="email" type="email" value="${escapeHtml(session.user.email)}" required maxlength="254" /></div>
+      <div class="form-field"><label for="profile-current-password">当前密码（仅修改邮箱时需要）</label><input id="profile-current-password" name="currentPassword" type="password" autocomplete="current-password" /></div>
+      <div class="modal-footer"><button class="primary-button" type="submit">保存资料</button></div>
+    </div></form>
+    <form id="password-form"><div class="modal-body">
+      <h3>修改密码</h3>
+      <div class="form-field"><label for="current-password">当前密码</label><input id="current-password" name="currentPassword" type="password" autocomplete="current-password" required /></div>
+      <div class="form-field"><label for="new-password">新密码</label><input id="new-password" name="newPassword" type="password" autocomplete="new-password" minlength="12" maxlength="256" required /></div>
+      <div class="modal-footer"><button class="primary-button" type="submit">更新密码</button><button type="button" class="secondary-button" data-action="logout">退出登录</button></div>
+    </div></form>
+  </section></div>`;
+  modalRoot.querySelector(".modal-root-inner").addEventListener("click", (event) => {
+    if (event.target.classList.contains("modal-root-inner")) closeModal();
+  });
+  modalRoot.querySelector("#profile-name").focus();
 }
 
 function showRemoteRunModal(taskId) {
@@ -942,6 +969,7 @@ document.addEventListener("click", async (event) => {
     } catch (error) { showToast(error.message); }
   }
   else if (action === "close-modal") closeModal();
+  else if (action === "account") showAccountModal();
   else if (action === "logout") signOut();
   else if (action === "demo-mode") {
     demoMode = true;
@@ -1063,6 +1091,7 @@ document.addEventListener("submit", async (event) => {
         String(formData.get("baseUrl")).trim(),
         String(formData.get("email")).trim(),
         String(formData.get("password")),
+        formData.get("rememberMe") === "on",
       );
       demoMode = false;
       currentPage = "overview";
@@ -1077,6 +1106,40 @@ document.addEventListener("submit", async (event) => {
       clearSession();
       renderLogin(error.message);
     }
+  } else if (event.target.id === "profile-form") {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    try {
+      const updated = await apiRequest(session, "/me", {
+        method: "PATCH",
+        body: {
+          name: String(formData.get("name")),
+          email: String(formData.get("email")),
+          ...(formData.get("currentPassword")
+            ? { current_password: String(formData.get("currentPassword")) }
+            : {}),
+        },
+      });
+      session.user = updated;
+      saveSession(session);
+      closeModal();
+      render();
+      showToast("个人资料已更新");
+    } catch (error) { showToast(error.message); }
+  } else if (event.target.id === "password-form") {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    try {
+      await apiRequest(session, "/auth/change-password", {
+        method: "POST",
+        body: {
+          current_password: String(formData.get("currentPassword")),
+          new_password: String(formData.get("newPassword")),
+        },
+      });
+      closeModal();
+      showToast("密码已更新，其他登录会话已退出");
+    } catch (error) { showToast(error.message); }
   } else if (event.target.id === "user-form") {
     event.preventDefault();
     const formData = new FormData(event.target);

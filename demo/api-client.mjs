@@ -1,4 +1,5 @@
 const SESSION_KEY = "flowpilot-api-session";
+const ACCESS_TOKEN_SKEW_MS = 30_000;
 
 export function defaultApiBaseUrl(location = globalThis.window?.location) {
   if (location?.protocol === "https:") return `${location.origin}/api`;
@@ -7,20 +8,39 @@ export function defaultApiBaseUrl(location = globalThis.window?.location) {
 
 export function readSession(storage) {
   try {
-    storage ??= globalThis.sessionStorage;
+    const explicitStorage = storage != null;
+    storage ??= globalThis.localStorage;
     const value = storage?.getItem(SESSION_KEY);
-    return value ? JSON.parse(value) : null;
+    if (value) {
+      const session = JSON.parse(value);
+      return { ...session, rememberMe: explicitStorage ? session.rememberMe === true : true };
+    }
+    if (explicitStorage) return null;
+    storage = globalThis.sessionStorage;
+    const sessionValue = storage?.getItem(SESSION_KEY);
+    return sessionValue ? { ...JSON.parse(sessionValue), rememberMe: false } : null;
   } catch {
     return null;
   }
 }
 
-export function saveSession(session, storage = globalThis.sessionStorage) {
-  storage?.setItem(SESSION_KEY, JSON.stringify(session));
+export function saveSession(session, storage) {
+  if (storage) {
+    storage.setItem(SESSION_KEY, JSON.stringify(session));
+    return;
+  }
+  const target = session.rememberMe ? globalThis.localStorage : globalThis.sessionStorage;
+  target?.setItem(SESSION_KEY, JSON.stringify(session));
+  (session.rememberMe ? globalThis.sessionStorage : globalThis.localStorage)?.removeItem(SESSION_KEY);
 }
 
-export function clearSession(storage = globalThis.sessionStorage) {
-  storage?.removeItem(SESSION_KEY);
+export function clearSession(storage) {
+  if (storage) {
+    storage.removeItem(SESSION_KEY);
+    return;
+  }
+  globalThis.sessionStorage?.removeItem(SESSION_KEY);
+  globalThis.localStorage?.removeItem(SESSION_KEY);
 }
 
 export function revokeSession(session, fetchImpl = fetch) {
@@ -28,20 +48,54 @@ export function revokeSession(session, fetchImpl = fetch) {
 }
 
 export async function apiRequest(session, path, { method = "GET", body, formData, headers: extraHeaders = {} } = {}, fetchImpl = fetch) {
-  const headers = {};
-  if (session?.token) headers.Authorization = `Bearer ${session.token}`;
-  if (body !== undefined) headers["Content-Type"] = "application/json";
-  Object.assign(headers, extraHeaders);
-  let response;
-  try {
-    response = await fetchImpl(`${session.baseUrl.replace(/\/+$/, "")}${path}`, {
-      method,
-      headers,
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      ...(formData ? { body: formData } : {}),
-    });
-  } catch (error) {
-    throw new Error(`无法连接服务端：${error.message}`);
+  const baseUrl = session.baseUrl.replace(/\/+$/, "");
+  const send = async (token = session?.token) => {
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    Object.assign(headers, extraHeaders);
+    try {
+      return await fetchImpl(`${baseUrl}${path}`, {
+        method,
+        headers,
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        ...(formData ? { body: formData } : {}),
+      });
+    } catch (error) {
+      throw new Error(`无法连接服务端：${error.message}`);
+    }
+  };
+  let response = await send();
+  if (
+    response.status === 401 &&
+    session?.token &&
+    path !== "/auth/login" &&
+    path !== "/auth/refresh"
+  ) {
+    let refreshResponse;
+    try {
+      refreshResponse = await fetchImpl(`${baseUrl}/auth/refresh`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+    } catch (error) {
+      throw new Error(`无法连接服务端：${error.message}`);
+    }
+    if (refreshResponse.ok) {
+      const refreshed = await refreshResponse.json();
+      session.token = refreshed.access_token;
+      session.accessTokenExpiresAt = Date.now() + refreshed.expires_in * 1000;
+      saveSession(session);
+      response = await send();
+    } else if (refreshResponse.status === 401) {
+      clearSession();
+      globalThis.window?.dispatchEvent(new CustomEvent("flowpilot:session-expired"));
+      throw new Error("登录会话已失效，请重新登录");
+    } else {
+      const refreshError = await refreshResponse.json().catch(() => null);
+      const detail = refreshError?.detail;
+      throw new Error(typeof detail === "string" ? detail : `登录会话续期失败（HTTP ${refreshResponse.status}）`);
+    }
   }
   const payload = response.status === 204 ? null : await response.json().catch(() => null);
   if (!response.ok) {
@@ -152,7 +206,7 @@ export async function uploadScriptVersion(session, taskId, { version, notes, fil
   }, fetchImpl);
 }
 
-export async function login(baseUrl, email, password) {
+export async function login(baseUrl, email, password, rememberMe = false) {
   let parsedBaseUrl;
   try {
     parsedBaseUrl = new URL(baseUrl);
@@ -171,6 +225,8 @@ export async function login(baseUrl, email, password) {
   const session = {
     baseUrl: normalizedBaseUrl,
     token: result.access_token,
+    accessTokenExpiresAt: Date.now() + result.expires_in * 1000,
+    rememberMe,
     user: result.user,
   };
   saveSession(session);

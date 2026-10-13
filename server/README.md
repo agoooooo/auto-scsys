@@ -115,7 +115,8 @@ The helper intentionally does not create the destination, encrypt, upload, rotat
 ## 已实现接口
 
 - `POST /auth/register`（公开创建普通用户；姓名、唯一邮箱和至少 12 位密码；不强制邮箱验证，不接受管理员角色）
-- `POST /auth/login`、`POST /auth/refresh`、`GET /me`
+- `POST /auth/login`、`POST /auth/refresh`、`POST /auth/logout`、`POST /auth/change-password`
+- `GET/PATCH /me`：读取或更新当前用户个人资料；更改邮箱须提供当前密码。改密时校验当前密码并撤销该用户其他会话，当前会话保持有效。
 - `POST /auth/logout`（撤销当前服务端会话）
 - `GET/POST /users`、`PATCH /users/{id}`（管理员调整用户状态及设备数量上限）
 - `POST /users/{id}/sessions/revoke`（管理员撤销指定普通用户的全部登录会话并记录审计事件）

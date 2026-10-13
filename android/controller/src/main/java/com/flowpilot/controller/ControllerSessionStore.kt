@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
-internal data class ControllerSession(val apiUrl: String, val token: String, val email: String)
+internal data class ControllerSession(val apiUrl: String, val token: String, val email: String, val name: String)
 
 @Suppress("DEPRECATION")
 internal class ControllerSessionStore(context: Context) {
@@ -23,6 +23,7 @@ internal class ControllerSessionStore(context: Context) {
                 ?: throw IllegalStateException("已保存会话缺少 API 地址"),
             token = token,
             email = preferences.getString(KEY_EMAIL, null).orEmpty(),
+            name = preferences.getString(KEY_NAME, null).orEmpty(),
         )
     }
 
@@ -31,6 +32,7 @@ internal class ControllerSessionStore(context: Context) {
             .putString(KEY_API_URL, session.apiUrl)
             .putString(KEY_TOKEN, session.token)
             .putString(KEY_EMAIL, session.email)
+            .putString(KEY_NAME, session.name)
             .apply()
     }
 
@@ -42,5 +44,6 @@ internal class ControllerSessionStore(context: Context) {
         const val KEY_API_URL = "api_url"
         const val KEY_TOKEN = "access_token"
         const val KEY_EMAIL = "email"
+        const val KEY_NAME = "name"
     }
 }

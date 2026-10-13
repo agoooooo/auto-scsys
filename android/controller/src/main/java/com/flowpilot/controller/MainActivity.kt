@@ -50,6 +50,11 @@ private data class ControllerScreenState(
     val password: String = "",
     val isRegistering: Boolean = false,
     val session: ControllerSession? = null,
+    val profileName: String = "",
+    val profileEmail: String = "",
+    val profileCurrentPassword: String = "",
+    val currentPassword: String = "",
+    val newPassword: String = "",
     val devices: List<ControllerDevice> = emptyList(),
     val tasks: List<ControllerTask> = emptyList(),
     val selectedDeviceId: String? = null,
@@ -71,7 +76,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         sessionStore = ControllerSessionStore(this)
         sessionStore.read()?.let { session ->
-            state = state.copy(apiUrl = session.apiUrl, email = session.email, session = session, loading = true)
+            state = state.copy(
+                apiUrl = session.apiUrl,
+                email = session.email,
+                session = session,
+                profileName = session.name,
+                profileEmail = session.email,
+                loading = true,
+            )
             lifecycleScope.launch { loadDashboard(session) }
         }
         setContent {
@@ -83,11 +95,18 @@ class MainActivity : ComponentActivity() {
                         onNameChange = { state = state.copy(name = it) },
                         onEmailChange = { state = state.copy(email = it) },
                         onPasswordChange = { state = state.copy(password = it) },
+                        onProfileNameChange = { state = state.copy(profileName = it) },
+                        onProfileEmailChange = { state = state.copy(profileEmail = it) },
+                        onProfileCurrentPasswordChange = { state = state.copy(profileCurrentPassword = it) },
+                        onCurrentPasswordChange = { state = state.copy(currentPassword = it) },
+                        onNewPasswordChange = { state = state.copy(newPassword = it) },
                         onToggleRegister = {
                             state = state.copy(isRegistering = !state.isRegistering, error = null, message = null)
                         },
                         onLoginOrRegister = ::loginOrRegister,
                         onRefresh = ::refreshDashboard,
+                        onSaveProfile = ::saveProfile,
+                        onChangePassword = ::changePassword,
                         onSelectDevice = ::selectDevice,
                         onSelectTask = {
                             state = state.copy(
@@ -131,12 +150,14 @@ class MainActivity : ComponentActivity() {
                         api.login(snapshot.email.trim(), snapshot.password)
                     }
                     if (login.user.role != "user") throw IllegalStateException("控制端仅支持普通用户账号")
-                    val session = ControllerSession(apiUrl, login.token, login.user.email)
+                    val session = ControllerSession(apiUrl, login.token, login.user.email, login.user.name)
                     sessionStore.save(session)
                     state = state.copy(
                         apiUrl = apiUrl,
                         password = "",
                         session = session,
+                        profileName = session.name,
+                        profileEmail = session.email,
                         loading = true,
                     )
                     loadDashboard(session)
@@ -150,24 +171,38 @@ class MainActivity : ComponentActivity() {
     private suspend fun loadDashboard(session: ControllerSession) {
         try {
             val previousDeviceId = state.selectedDeviceId
-            val (devices, tasks, activeRun) = withContext(Dispatchers.IO) {
-                val api = ControllerApi(session.apiUrl)
+            val (dashboard, profile) = withContext(Dispatchers.IO) {
+                val api = controllerApi(session)
                 val devices = api.devices(session.token)
                 val tasks = api.tasks(session.token)
+                val profile = api.profile(session.token)
                 val selectedId = previousDeviceId?.takeIf { id -> devices.any { it.id == id } }
                     ?: devices.firstOrNull()?.id
-                Triple(
-                    devices,
-                    tasks,
-                    selectedId?.let { api.activeRemoteRun(session.token, it) },
+                Pair(
+                    Triple(
+                        devices,
+                        tasks,
+                        selectedId?.let { api.activeRemoteRun(session.token, it) },
+                    ),
+                    profile,
                 )
             }
+            val (devices, tasks, activeRun) = dashboard
             val selectedDevice = state.selectedDeviceId?.takeIf { id -> devices.any { it.id == id } }
                 ?: devices.firstOrNull()?.id
             val availableTasks = tasks.filter { it.status == "published" && it.version.isNotBlank() }
             val selectedTask = state.selectedTaskId?.takeIf { id -> availableTasks.any { it.id == id } }
                 ?: availableTasks.firstOrNull()?.id
+            val updatedSession = session.copy(
+                token = sessionStore.read()?.token ?: session.token,
+                name = profile.name,
+                email = profile.email,
+            )
+            sessionStore.save(updatedSession)
             state = state.copy(
+                session = updatedSession,
+                profileName = profile.name,
+                profileEmail = profile.email,
                 devices = devices,
                 tasks = tasks,
                 selectedDeviceId = selectedDevice,
@@ -198,6 +233,99 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch { loadDashboard(session) }
     }
 
+    private fun controllerApi(session: ControllerSession) =
+        ControllerApi(
+            session.apiUrl,
+            initialAccessToken = sessionStore.read()?.token ?: session.token,
+            onAccessTokenRefreshed = { refreshedToken ->
+                sessionStore.save(session.copy(token = refreshedToken))
+            },
+            onSessionExpired = {
+                runOnUiThread {
+                    monitorJob?.cancel()
+                    sessionStore.clear()
+                    state = state.copy(
+                        session = null,
+                        loading = false,
+                        error = "登录已过期，请重新登录",
+                        message = null,
+                    )
+                }
+            },
+        )
+
+    private fun saveProfile() {
+        val session = state.session ?: return
+        if (state.loading) return
+        val profileName = state.profileName.trim()
+        val profileEmail = state.profileEmail.trim()
+        if (profileName.isBlank() || profileEmail.isBlank()) {
+            state = state.copy(error = "姓名和邮箱不能为空")
+            return
+        }
+        val currentPassword = state.profileCurrentPassword
+        state = state.copy(loading = true, error = null, message = null)
+        lifecycleScope.launch {
+            try {
+                val user = withContext(Dispatchers.IO) {
+                    controllerApi(session).updateProfile(
+                        session.token,
+                        profileName,
+                        profileEmail,
+                        currentPassword,
+                    )
+                }
+                val updatedSession = session.copy(
+                    token = sessionStore.read()?.token ?: session.token,
+                    email = user.email,
+                    name = user.name,
+                )
+                sessionStore.save(updatedSession)
+                state = state.copy(
+                    session = updatedSession,
+                    profileName = user.name,
+                    profileEmail = user.email,
+                    profileCurrentPassword = "",
+                    loading = false,
+                    message = "个人资料已更新",
+                )
+            } catch (error: Exception) {
+                state = state.copy(loading = false, error = error.message ?: "更新个人资料失败")
+            }
+        }
+    }
+
+    private fun changePassword() {
+        val session = state.session ?: return
+        if (state.loading) return
+        if (state.currentPassword.isBlank() || state.newPassword.length < 12) {
+            state = state.copy(error = "请输入当前密码和至少 12 位的新密码")
+            return
+        }
+        val currentPassword = state.currentPassword
+        val newPassword = state.newPassword
+        state = state.copy(loading = true, error = null, message = null)
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    controllerApi(session).changePassword(
+                        session.token,
+                        currentPassword,
+                        newPassword,
+                    )
+                }
+                state = state.copy(
+                    loading = false,
+                    currentPassword = "",
+                    newPassword = "",
+                    message = "密码已更新，其他登录会话已退出",
+                )
+            } catch (error: Exception) {
+                state = state.copy(loading = false, error = error.message ?: "修改密码失败")
+            }
+        }
+    }
+
     private fun selectDevice(deviceId: String) {
         val session = state.session ?: return
         monitorJob?.cancel()
@@ -213,7 +341,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 val activeRun = withContext(Dispatchers.IO) {
-                    ControllerApi(session.apiUrl).activeRemoteRun(session.token, deviceId)
+                    controllerApi(session).activeRemoteRun(session.token, deviceId)
                 }
                 state = state.copy(run = activeRun, loading = false)
                 activeRun?.let { monitorJob = lifecycleScope.launch { monitorRun(session, it.id) } }
@@ -239,7 +367,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 val requestId = withContext(Dispatchers.IO) {
-                    ControllerApi(session.apiUrl).dispatch(session.token, task.id, device.id, idempotencyKey)
+                    controllerApi(session).dispatch(session.token, task.id, device.id, idempotencyKey)
                 }
                 state = state.copy(
                     loading = false,
@@ -265,7 +393,7 @@ class MainActivity : ComponentActivity() {
         repeat(MAX_STATUS_POLLS) {
             try {
                 val latest = withContext(Dispatchers.IO) {
-                    ControllerApi(session.apiUrl).runStatus(session.token, requestId)
+                    controllerApi(session).runStatus(session.token, requestId)
                 }
                 state = state.copy(run = latest)
                 if (!isControllerRunActive(latest.status)) return
@@ -288,7 +416,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    ControllerApi(session.apiUrl).rejectRemoteRun(session.token, run.id)
+                    controllerApi(session).rejectRemoteRun(session.token, run.id)
                 }
                 monitorJob?.cancel()
                 state = state.copy(
@@ -310,7 +438,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    ControllerApi(session.apiUrl).requestStop(session.token, run.id)
+                    controllerApi(session).requestStop(session.token, run.id)
                 }
                 state = state.copy(
                     loading = false,
@@ -330,7 +458,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             var logoutError: String? = null
             try {
-                withContext(Dispatchers.IO) { ControllerApi(session.apiUrl).logout(session.token) }
+                withContext(Dispatchers.IO) { controllerApi(session).logout(session.token) }
             } catch (error: Exception) {
                 logoutError = error.message ?: "服务端退出失败"
             } finally {
@@ -365,9 +493,16 @@ private fun ControllerScreen(
     onNameChange: (String) -> Unit,
     onEmailChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
+    onProfileNameChange: (String) -> Unit,
+    onProfileEmailChange: (String) -> Unit,
+    onProfileCurrentPasswordChange: (String) -> Unit,
+    onCurrentPasswordChange: (String) -> Unit,
+    onNewPasswordChange: (String) -> Unit,
     onToggleRegister: () -> Unit,
     onLoginOrRegister: () -> Unit,
     onRefresh: () -> Unit,
+    onSaveProfile: () -> Unit,
+    onChangePassword: () -> Unit,
     onSelectDevice: (String) -> Unit,
     onSelectTask: (String) -> Unit,
     onDispatch: () -> Unit,
@@ -424,11 +559,60 @@ private fun ControllerScreen(
             }
         } else {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(state.session.email, modifier = Modifier.weight(1f))
+                Text("账号：${state.session.name} · ${state.session.email}", modifier = Modifier.weight(1f))
                 TextButton(onClick = onLogout, enabled = !state.loading) { Text("退出") }
                 TextButton(onClick = onRefresh, enabled = !state.loading) { Text("刷新") }
             }
             if (state.loading) CircularProgressIndicator()
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("账号资料与安全", style = MaterialTheme.typography.titleMedium)
+                    OutlinedTextField(
+                        value = state.profileName,
+                        onValueChange = onProfileNameChange,
+                        label = { Text("姓名") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = state.profileEmail,
+                        onValueChange = onProfileEmailChange,
+                        label = { Text("邮箱") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = state.profileCurrentPassword,
+                        onValueChange = onProfileCurrentPasswordChange,
+                        label = { Text("当前密码（仅改邮箱时需要）") },
+                        modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                    )
+                    OutlinedButton(onClick = onSaveProfile, enabled = !state.loading) {
+                        Text("保存个人资料")
+                    }
+                    OutlinedTextField(
+                        value = state.currentPassword,
+                        onValueChange = onCurrentPasswordChange,
+                        label = { Text("当前密码") },
+                        modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = state.newPassword,
+                        onValueChange = onNewPasswordChange,
+                        label = { Text("新密码（至少 12 位）") },
+                        modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                    )
+                    OutlinedButton(onClick = onChangePassword, enabled = !state.loading) {
+                        Text("修改密码")
+                    }
+                }
+            }
             Selector(
                 title = "受控设备",
                 selected = state.devices.firstOrNull { it.id == state.selectedDeviceId }?.let {

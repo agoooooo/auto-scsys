@@ -38,11 +38,62 @@ test("API URL defaults to same-origin HTTPS proxy in production and local API in
 
 test("API session storage round-trips and clears the session", () => {
   const storage = memoryStorage();
-  const session = { baseUrl: "http://localhost:8001", token: "token", user: { id: "u-1" } };
+  const session = { baseUrl: "http://localhost:8001", token: "token", user: { id: "u-1" }, rememberMe: false };
   saveSession(session, storage);
   assert.deepEqual(readSession(storage), session);
   clearSession(storage);
   assert.equal(readSession(storage), null);
+});
+
+test("remembered Web sessions use persistent storage while default sessions stay tab-scoped", () => {
+  const local = memoryStorage();
+  const tab = memoryStorage();
+  const previousLocal = globalThis.localStorage;
+  const previousTab = globalThis.sessionStorage;
+  globalThis.localStorage = local;
+  globalThis.sessionStorage = tab;
+  try {
+    const persistent = { baseUrl: "https://api.example.test", token: "remembered", rememberMe: true };
+    saveSession(persistent);
+    assert.equal(JSON.parse(local.getItem("flowpilot-api-session")).token, "remembered");
+    assert.equal(tab.getItem("flowpilot-api-session"), null);
+    assert.equal(readSession().rememberMe, true);
+
+    const temporary = { baseUrl: "https://api.example.test", token: "temporary", rememberMe: false };
+    saveSession(temporary);
+    assert.equal(local.getItem("flowpilot-api-session"), null);
+    assert.equal(JSON.parse(tab.getItem("flowpilot-api-session")).token, "temporary");
+    assert.equal(readSession().rememberMe, false);
+    clearSession();
+    assert.equal(tab.getItem("flowpilot-api-session"), null);
+  } finally {
+    if (previousLocal === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previousLocal;
+    if (previousTab === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = previousTab;
+  }
+});
+
+test("API request refreshes an expired access token once and retries the request", async () => {
+  const calls = [];
+  const session = {
+    baseUrl: "https://api.example.test",
+    token: "expired-token",
+    rememberMe: false,
+  };
+  const result = await apiRequest(session, "/devices", {}, async (url, options) => {
+    calls.push({ path: new URL(url).pathname, authorization: options.headers.Authorization });
+    if (calls.length === 1) return new Response(JSON.stringify({ detail: "token expired" }), { status: 401 });
+    if (calls.length === 2) {
+      return new Response(JSON.stringify({ access_token: "fresh-token", expires_in: 3600 }), { status: 200 });
+    }
+    return new Response(JSON.stringify([{ id: "device-1" }]), { status: 200 });
+  });
+  assert.deepEqual(result, [{ id: "device-1" }]);
+  assert.deepEqual(calls.map((call) => call.path), ["/devices", "/auth/refresh", "/devices"]);
+  assert.equal(calls[2].authorization, "Bearer fresh-token");
+  assert.equal(session.token, "fresh-token");
+  assert.ok(session.accessTokenExpiresAt > Date.now());
 });
 
 test("login rejects non-HTTP service URLs before sending credentials", async () => {

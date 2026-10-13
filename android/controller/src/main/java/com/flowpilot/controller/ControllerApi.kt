@@ -51,8 +51,14 @@ internal fun normalizeControllerApiUrl(value: String, allowCleartext: Boolean = 
     return URI(scheme, null, uri.host.lowercase(Locale.ROOT), uri.port, null, null, null).toASCIIString()
 }
 
-internal class ControllerApi(baseUrl: String) {
+internal class ControllerApi(
+    baseUrl: String,
+    initialAccessToken: String? = null,
+    private val onAccessTokenRefreshed: (String) -> Unit = {},
+    private val onSessionExpired: () -> Unit = {},
+) {
     private val baseUrl = normalizeControllerApiUrl(baseUrl)
+    @Volatile private var latestAccessToken: String? = initialAccessToken
 
     fun register(name: String, email: String, password: String) {
         request(
@@ -78,6 +84,39 @@ internal class ControllerApi(baseUrl: String) {
 
     fun logout(token: String) {
         request("/auth/logout", "POST", token)
+    }
+
+    fun profile(token: String): ControllerUser {
+        val response = JSONObject(request("/me", token = token))
+        return ControllerUser(
+            response.optString("id"),
+            response.optString("name"),
+            response.optString("email"),
+            response.optString("role"),
+        )
+    }
+
+    fun updateProfile(token: String, name: String, email: String, currentPassword: String?): ControllerUser {
+        val payload = JSONObject().put("name", name).put("email", email)
+        currentPassword?.takeIf(String::isNotBlank)?.let { payload.put("current_password", it) }
+        val response = JSONObject(request("/me", "PATCH", token, payload))
+        return ControllerUser(
+            response.optString("id"),
+            response.optString("name"),
+            response.optString("email"),
+            response.optString("role"),
+        )
+    }
+
+    fun changePassword(token: String, currentPassword: String, newPassword: String) {
+        request(
+            "/auth/change-password",
+            "POST",
+            token,
+            JSONObject()
+                .put("current_password", currentPassword)
+                .put("new_password", newPassword),
+        )
     }
 
     fun devices(token: String): List<ControllerDevice> =
@@ -169,14 +208,16 @@ internal class ControllerApi(baseUrl: String) {
         token: String? = null,
         payload: JSONObject? = null,
         idempotencyKey: String? = null,
+        allowRefresh: Boolean = true,
     ): String {
         val connection = URL("$baseUrl$path").openConnection() as HttpURLConnection
         try {
+            val effectiveToken = latestAccessToken ?: token
             connection.requestMethod = method
             connection.connectTimeout = 10_000
             connection.readTimeout = 10_000
             connection.setRequestProperty("Accept", "application/json")
-            token?.let { connection.setRequestProperty("Authorization", "Bearer $it") }
+            effectiveToken?.let { connection.setRequestProperty("Authorization", "Bearer $it") }
             idempotencyKey?.let { connection.setRequestProperty("Idempotency-Key", it) }
             if (payload != null) {
                 connection.doOutput = true
@@ -184,6 +225,22 @@ internal class ControllerApi(baseUrl: String) {
                 connection.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(payload.toString()) }
             }
             val status = connection.responseCode
+            if (status == 401 && effectiveToken != null && path != "/auth/refresh" && allowRefresh) {
+                connection.disconnect()
+                val refreshed = try {
+                    JSONObject(
+                        request("/auth/refresh", "POST", effectiveToken, allowRefresh = false),
+                    ).optString("access_token").takeIf(String::isNotBlank)
+                        ?: throw IOException("登录已过期，请重新登录")
+                } catch (error: ControllerApiException) {
+                    if (error.statusCode == 401) onSessionExpired()
+                    throw error
+                }
+                latestAccessToken = refreshed
+                onAccessTokenRefreshed(refreshed)
+                return request(path, method, refreshed, payload, idempotencyKey, allowRefresh = false)
+            }
+            if (status == 204) return ""
             val body = readLimited(if (status in 200..299) connection.inputStream else connection.errorStream)
             if (status !in 200..299) {
                 val detail = runCatching { JSONObject(body.toString(Charsets.UTF_8)).optString("detail") }.getOrNull()
