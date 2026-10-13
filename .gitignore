@@ -9,4 +9,6 @@ android/.gradle/
 android/.kotlin/
 android/.idea/
 android/local.properties
+android/**/*.jks
+android/**/*.keystore
 android/**/build/

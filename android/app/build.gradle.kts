@@ -5,12 +5,39 @@ plugins {
     id("com.chaquo.python")
 }
 
+val releaseSigningStoreFile = providers.environmentVariable("FLOWPILOT_RELEASE_STORE_FILE").orNull
+val releaseSigningStorePassword = providers.environmentVariable("FLOWPILOT_RELEASE_STORE_PASSWORD").orNull
+val releaseSigningKeyAlias = providers.environmentVariable("FLOWPILOT_RELEASE_KEY_ALIAS").orNull
+val releaseSigningKeyPassword = providers.environmentVariable("FLOWPILOT_RELEASE_KEY_PASSWORD").orNull
+val releaseSigningValues = listOf(
+    releaseSigningStoreFile,
+    releaseSigningStorePassword,
+    releaseSigningKeyAlias,
+    releaseSigningKeyPassword,
+)
+val hasReleaseSigningValues = releaseSigningValues.any { !it.isNullOrBlank() }
+val hasCompleteReleaseSigningValues = releaseSigningValues.all { !it.isNullOrBlank() }
+if (hasReleaseSigningValues && !hasCompleteReleaseSigningValues) {
+    throw GradleException("Release signing requires all FLOWPILOT_RELEASE_* environment variables")
+}
+
 android {
     namespace = "com.flowpilot.android"
     compileSdk = 35
 
     buildFeatures {
         buildConfig = true
+    }
+
+    signingConfigs {
+        create("release") {
+            if (hasCompleteReleaseSigningValues) {
+                storeFile = file(requireNotNull(releaseSigningStoreFile))
+                storePassword = requireNotNull(releaseSigningStorePassword)
+                keyAlias = requireNotNull(releaseSigningKeyAlias)
+                keyPassword = requireNotNull(releaseSigningKeyPassword)
+            }
+        }
     }
 
     defaultConfig {
@@ -34,6 +61,7 @@ android {
         release {
             isMinifyEnabled = false
             manifestPlaceholders["usesCleartextTraffic"] = "false"
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

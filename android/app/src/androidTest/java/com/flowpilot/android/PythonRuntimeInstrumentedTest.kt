@@ -32,6 +32,17 @@ class PythonRuntimeInstrumentedTest {
     }
 
     @Test
+    fun launcherReusesTheExistingMainActivityTask() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val activityInfo = context.packageManager.getActivityInfo(
+            android.content.ComponentName(context, MainActivity::class.java),
+            0,
+        )
+
+        assertEquals(android.content.pm.ActivityInfo.LAUNCH_SINGLE_TASK, activityInfo.launchMode)
+    }
+
+    @Test
     fun rememberedLoginIsEncryptedStoredAndCanBeCleared() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val store = SessionStore(context)

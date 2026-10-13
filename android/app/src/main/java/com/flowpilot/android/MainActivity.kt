@@ -298,7 +298,7 @@ class MainActivity : ComponentActivity() {
         OcrStandbyService.consumeLastError(this)?.let(flowPilotViewModel::showError)
         flowPilotViewModel.refreshRunStatus()
         flowPilotViewModel.refreshRunHistory()
-        flowPilotViewModel.refreshTasks()
+        flowPilotViewModel.refreshTasks(showLoading = false)
         flowPilotViewModel.refreshRemoteRuns()
     }
 

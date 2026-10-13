@@ -55,6 +55,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
     private val sessionStore = SessionStore(application)
     private val _state = MutableStateFlow(AppUiState())
     val state: StateFlow<AppUiState> = _state.asStateFlow()
+    private var taskSyncInFlight = false
 
     init {
         restoreRememberedLogin()
@@ -156,12 +157,13 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         }
     }
 
-    fun refreshTasks() {
+    fun refreshTasks(showLoading: Boolean = true) {
         val current = _state.value
         if (current.token == null) return
         val device = current.device ?: return
-        if (current.loading) return
-        _state.value = current.copy(loading = true, error = null)
+        if (current.loading || taskSyncInFlight) return
+        taskSyncInFlight = true
+        _state.value = current.copy(loading = showLoading, error = null)
         viewModelScope.launch {
             try {
                 val session = withContext(Dispatchers.IO) { freshSession() }
@@ -169,7 +171,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                     ApiClient(session.apiBaseUrl).syncTasks(session.token, device.id)
                 }
                 _state.value = _state.value.copy(
-                    loading = false,
+                    loading = if (showLoading) false else _state.value.loading,
                     token = session.token,
                     tokenExpiresAt = session.tokenExpiresAt,
                     tasks = taskSync.tasks,
@@ -177,9 +179,11 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                 )
             } catch (exception: Exception) {
                 _state.value = _state.value.copy(
-                    loading = false,
+                    loading = if (showLoading) false else _state.value.loading,
                     error = exception.message ?: "任务同步失败",
                 )
+            } finally {
+                taskSyncInFlight = false
             }
         }
     }

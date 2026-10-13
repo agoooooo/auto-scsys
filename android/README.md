@@ -27,12 +27,29 @@ cd android
 APK 位于 `android/app/build/outputs/apk/debug/app-debug.apk`。当前配置为私有 APK，支持 `arm64-v8a` 真机和 `x86_64` 模拟器。
 连接已启用 USB 或无线调试的设备后，可运行 `./gradlew :app:connectedDebugAndroidTest` 验证 Python 桥接及设备端 OCR；OCR 使用本地生成的测试图，不需要开启无障碍或屏幕捕获权限。
 
+### 私有 APK 发布
+
+官网/私有服务器分发不经过 Google Play 审核，但 Android 要求每个 APK 都经过签名；用户还须允许其下载来源安装未知应用（参见 [Android 替代分发指南](https://developer.android.com/distribute/marketing-tools/alternative-distribution)）。构建 Release APK 前，使用离线安全保存的发布密钥配置以下环境变量，不要将密钥、密码或签名 APK 提交到仓库：
+
+```bash
+export FLOWPILOT_RELEASE_STORE_FILE=/secure/path/flowpilot-release.jks
+export FLOWPILOT_RELEASE_STORE_PASSWORD='从密钥管理器读取'
+export FLOWPILOT_RELEASE_KEY_ALIAS=flowpilot
+export FLOWPILOT_RELEASE_KEY_PASSWORD='从密钥管理器读取'
+cd android
+./gradlew :app:assembleRelease
+```
+
+Release APK 输出到 `android/app/build/outputs/apk/release/app-release.apk`。所有后续版本必须继续使用同一发布密钥，并递增 `versionCode`，否则 Android 不会将其视为可覆盖升级。发布密钥应离线备份并限制访问；密钥丢失后，已有安装无法通过同一包名正常升级。Debug APK 仅用于开发/测试。
+
+该渠道要求用户主动安装 APK，不会绕过未知来源安装确认。Android [动态代码加载安全指南](https://developer.android.com/privacy-and-security/risks/dynamic-code-loading)将远程加载可执行代码视为高风险；当前产品从服务端获取并在 App 进程中解释 Python 脚本，必须仅使用自有可信服务、TLS、服务端授权和客户端哈希校验，且不能将哈希或用户确认描述为安全沙箱。APK 签名与升级要求见 [Android 应用签名指南](https://developer.android.com/studio/publish/app-signing)。若未来改为 Google Play 分发，需重新评估其针对动态代码加载的上架政策。
+
 ## 首次使用
 
 1. 启动仓库的演示服务：`make dev`。模拟器 API 地址为 `http://10.0.2.2:8001`；当前真机测试默认 API 地址为 `http://192.168.0.101:8001`。手机与开发机需连接同一可信任局域网；开发机 IP 变化时可在登录页修改地址。该服务无 TLS，不要暴露到公网。
 2. 使用普通用户账号登录并绑定设备。管理员账号只能用于 Web 管理后台。设备绑定时记录设备型号和当前 App 版本；App 每次发送心跳时会同步更新版本，便于管理员识别已升级设备。
    登录页默认勾选“记住登录信息”，API 地址、邮箱和密码会保存在 Android 加密偏好设置中，方便下次测试；取消勾选会清除已保存的登录信息。登录令牌仍单独加密保存，退出登录后账号信息保留以便再次登录。
-3. 登录并绑定设备后，App 默认开启远程运行待命，并自动按顺序申请通知、电池优化豁免，再请求持续 OCR 屏幕捕获授权。各授权都由 Android 系统界面确认。若拒绝屏幕捕获，远程待命仍保持开启，OCR 任务会在需要时再次请求系统授权；若拒绝通知权限，Android 不允许维持符合要求的可见前台待命服务，远程后台待命无法开启。拒绝电池优化豁免后可在“远程运行待命”卡片点击“允许后台保活”重试。为尽量降低系统回收风险，还可从该卡片打开厂商自启动/后台运行设置；小米/Redmi/POCO 会优先尝试打开自启动管理页，不支持时转到 FlowPilot 应用信息页。请在系统中手动允许自启动、后台运行和电池设置的“无限制”。用户仍须按 Android 系统流程手动启用无障碍服务；仅需要相应能力的任务会受其限制。可从相应功能卡片分别停止待命服务；停止 OCR 会话或系统回收后，重新登录/绑定不会静默恢复系统捕获授权。
+3. 登录并绑定设备后，App 默认开启远程运行待命，并自动按顺序申请通知、电池优化豁免，再请求持续 OCR 屏幕捕获授权。各授权都由 Android 系统界面确认。若拒绝屏幕捕获，远程待命仍保持开启，OCR 任务会在需要时再次请求系统授权；若拒绝通知权限，Android 不允许维持符合要求的可见前台待命服务，远程后台待命无法开启。拒绝电池优化豁免后可在“远程运行待命”卡片点击“允许后台保活”重试。为尽量降低系统回收风险，还可从该卡片打开厂商自启动/后台运行设置；小米/Redmi/POCO 会优先尝试打开自启动管理页，不支持时转到 FlowPilot 应用信息页。请在系统中手动允许自启动、后台运行和电池设置的“无限制”。用户仍须按 Android 系统流程手动启用无障碍服务；仅需要相应能力的任务会受其限制。桌面图标会复用现有 App 页面，回到前台时后台同步不会重置页面。若 Android 结束进程或撤销屏幕共享，持续 OCR 会话无法静默恢复，需用户重新授予屏幕捕获权限；远程待命服务则会按 Android 生命周期尝试恢复。
 4. 演示账号默认分配了“抖音订单状态 OCR 演示”任务 `v1.7.0`。可先在 App 中查看发布来源、声明能力、脚本内容和 SHA-256；识别到的状态只显示在设备本地，不点击、不上传 OCR 内容，审阅脚本不需要启用无障碍服务。
 5. 管理员将版本分发到设备后，先在“待确认的脚本发布”中核对来源、版本说明和声明能力，再点击“确认接收脚本”；未经确认的版本不会提供下载。首次运行前，在 Android 系统设置中手动启用 **FlowPilot 自动化操作** 无障碍服务。服务仅允许访问抖音 `com.ss.android.ugc.aweme` 或抖音极速版 `com.ss.android.ugc.aweme.lite`，且最多点击每次运行指定的一处可点击文字。若两者都安装，优先打开抖音主版。检查脚本后，再勾选确认运行。
 6. 登录并绑定设备后 App 会自动请求开启“持续 OCR 待命”，Android 显示屏幕捕获系统授权；同意后 FlowPilot 以独立前台服务维持该捕获会话，并显示持续通知及停止按钮。若首次拒绝，可在 App 的“持续 OCR 待命”卡片重新发起授权。待命期间，所有远程 OCR 任务可复用当前会话，不必每个任务都再次弹系统授权。退出待命、系统回收进程/投屏、重启设备或 Android 撤销共享后，会话结束，下次 OCR 需重新授权。此授权不能登录时预先授予、跨会话保存或永久保活。没有开启持续待命时，单次 OCR 仍在任务开始时由 Android 系统弹出授权。任务运行期间 OCR 文本保留在设备本地；上报到演示 API 的运行摘要仅包含通用状态。
