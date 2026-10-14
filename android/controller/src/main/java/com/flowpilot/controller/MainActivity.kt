@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -117,6 +118,10 @@ private data class ControllerScreenState(
     val selectedTaskIds: Set<String> = emptySet(),
     val run: ControllerRunStatus? = null,
     val batchRuns: List<ControllerBatchRun> = emptyList(),
+    val runHistory: List<ControllerRunHistory> = emptyList(),
+    val runHistoryLoaded: Boolean = false,
+    val runHistoryLoading: Boolean = false,
+    val runHistoryError: String? = null,
     val loading: Boolean = false,
     val dispatchUncertain: Boolean = false,
     val error: String? = null,
@@ -210,6 +215,7 @@ class MainActivity : ComponentActivity() {
                         onRequestRecoveryCode = ::requestRecoveryCode,
                         onResetPassword = ::resetPassword,
                         onRefresh = ::refreshDashboard,
+                        onRefreshRunHistory = ::refreshRunHistory,
                         onSaveProfile = ::saveProfile,
                         onChangePassword = ::changePassword,
                         onToggleDeviceSelection = ::toggleDeviceSelection,
@@ -396,6 +402,36 @@ class MainActivity : ComponentActivity() {
         val session = state.session ?: return
         state = state.copy(loading = true)
         lifecycleScope.launch { loadDashboard(session) }
+    }
+
+    private fun refreshRunHistory() {
+        val session = state.session ?: return
+        if (state.runHistoryLoading) return
+        state = state.copy(runHistoryLoading = true, runHistoryError = null)
+        lifecycleScope.launch {
+            try {
+                val history = withContext(Dispatchers.IO) {
+                    controllerApi(session).runHistory(session.token)
+                }
+                if (state.session?.email != session.email || state.session?.apiUrl != session.apiUrl) {
+                    return@launch
+                }
+                state = state.copy(
+                    runHistory = history,
+                    runHistoryLoaded = true,
+                    runHistoryLoading = false,
+                    runHistoryError = null,
+                )
+            } catch (error: Exception) {
+                if (state.session?.email != session.email || state.session?.apiUrl != session.apiUrl) {
+                    return@launch
+                }
+                state = state.copy(
+                    runHistoryLoading = false,
+                    runHistoryError = error.message ?: "加载运行历史失败",
+                )
+            }
+        }
     }
 
     private fun controllerApi(session: ControllerSession) =
@@ -769,6 +805,7 @@ private fun ControllerScreen(
     onRequestRecoveryCode: () -> Unit,
     onResetPassword: () -> Unit,
     onRefresh: () -> Unit,
+    onRefreshRunHistory: () -> Unit,
     onSaveProfile: () -> Unit,
     onChangePassword: () -> Unit,
     onToggleDeviceSelection: (String) -> Unit,
@@ -790,6 +827,11 @@ private fun ControllerScreen(
     val selectedDestination = ControllerDestination.entries.firstOrNull {
         it.name == selectedDestinationName
     } ?: ControllerDestination.DEVICES
+    LaunchedEffect(selectedDestination, state.session?.apiUrl, state.session?.email) {
+        if (selectedDestination == ControllerDestination.RUNS && state.session != null) {
+            onRefreshRunHistory()
+        }
+    }
     val accountPage = ControllerAccountPage.entries.firstOrNull {
         it.name == accountPageName
     } ?: ControllerAccountPage.HOME
@@ -1333,15 +1375,75 @@ private fun ControllerScreen(
                     }
                 }
               }
-              if (state.run == null && state.batchRuns.isEmpty()) ControllerCard(Modifier.fillMaxWidth()) {
-                  Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                      Text("暂无运行记录", style = MaterialTheme.typography.titleMedium)
-                      Text("从“任务”页多选在线设备和脚本后，即可在此跟踪派发与执行。")
-                  }
-              }
               if (state.run != null || state.batchRuns.isNotEmpty()) {
                   Spacer(Modifier.height(8.dp))
                   Text("停止请求由受控端轮询，并在脚本的下一个停止检查点响应。", style = MaterialTheme.typography.bodySmall)
+              }
+              Spacer(Modifier.height(8.dp))
+              Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically,
+              ) {
+                  Text("执行历史", style = MaterialTheme.typography.titleMedium)
+                  TextButton(
+                      onClick = onRefreshRunHistory,
+                      enabled = !state.runHistoryLoading,
+                  ) {
+                      Text(if (state.runHistoryLoading) "刷新中" else "刷新记录")
+                  }
+              }
+              Text(
+                  when {
+                      state.runHistoryLoading && !state.runHistoryLoaded -> "正在加载运行记录…"
+                      state.runHistoryError != null -> "刷新失败：${state.runHistoryError}"
+                      !state.runHistoryLoaded -> "运行记录尚未加载"
+                      state.runHistory.isEmpty() -> "暂无历史运行记录"
+                      else -> "显示最近 ${state.runHistory.size.coerceAtMost(MAX_VISIBLE_CONTROLLER_RUN_HISTORY)} 条"
+                  },
+                  color = if (state.runHistoryError == null) {
+                      MaterialTheme.colorScheme.onSurfaceVariant
+                  } else {
+                      MaterialTheme.colorScheme.error
+                  },
+                  style = MaterialTheme.typography.bodySmall,
+              )
+              val visibleHistory = visibleControllerRunHistory(state.runHistory)
+              if (visibleHistory.isNotEmpty()) {
+                  ControllerCard(Modifier.fillMaxWidth()) {
+                      Column {
+                          visibleHistory.forEachIndexed { index, run ->
+                              Column(
+                                  Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                                  verticalArrangement = Arrangement.spacedBy(5.dp),
+                              ) {
+                                  Row(
+                                      modifier = Modifier.fillMaxWidth(),
+                                      horizontalArrangement = Arrangement.SpaceBetween,
+                                      verticalAlignment = Alignment.CenterVertically,
+                                  ) {
+                                      Text(
+                                          run.taskName,
+                                          modifier = Modifier.weight(1f),
+                                          style = MaterialTheme.typography.titleSmall,
+                                      )
+                                      Text(
+                                          controllerRunStatusLabel(run.status),
+                                          color = controllerRunHistoryStatusColor(run.status),
+                                          style = MaterialTheme.typography.labelMedium,
+                                      )
+                                  }
+                                  Text(run.deviceName, style = MaterialTheme.typography.bodySmall)
+                                  Text(
+                                      "版本：${run.version} · ${formatControllerRunTime(run.startedAt)}",
+                                      style = MaterialTheme.typography.bodySmall,
+                                  )
+                                  run.resultSummary.takeIf(String::isNotBlank)?.let { Text(it) }
+                              }
+                              if (index < visibleHistory.lastIndex) HorizontalDivider()
+                          }
+                      }
+                  }
               }
             }
         }

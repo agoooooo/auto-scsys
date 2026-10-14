@@ -28,6 +28,15 @@ internal data class ControllerRunStatus(
     val resultSummary: String,
     val stopRequested: Boolean = false,
 )
+internal data class ControllerRunHistory(
+    val id: String,
+    val taskName: String,
+    val version: String,
+    val deviceName: String,
+    val status: String,
+    val startedAt: String,
+    val resultSummary: String,
+)
 
 internal fun normalizeControllerApiUrl(value: String, allowCleartext: Boolean = BuildConfig.DEBUG): String {
     val uri = try {
@@ -222,6 +231,19 @@ internal class ControllerApi(
             stopRequested = response.optBoolean("stop_requested"),
         )
     }
+
+    fun runHistory(token: String): List<ControllerRunHistory> =
+        arrayRequest("/runs", token).map {
+            ControllerRunHistory(
+                id = it.optString("id"),
+                taskName = it.optString("task_name"),
+                version = it.optString("version"),
+                deviceName = it.optString("device_name"),
+                status = it.optString("status"),
+                startedAt = it.optString("started_at"),
+                resultSummary = it.optString("result_summary"),
+            )
+        }
 
     private fun arrayRequest(path: String, token: String): List<JSONObject> {
         val array = JSONArray(request(path, token = token))
