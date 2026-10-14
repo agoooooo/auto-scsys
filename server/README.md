@@ -27,13 +27,13 @@ FLOWPILOT_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32)
 
 首次启动会初始化演示账号、设备和任务。普通用户的订单 OCR 演示任务发布了 `v1.7.0`：脚本会打开抖音、等待目标应用进入前台，在设备本地识别界面并显示匹配到的常见订单状态；不执行点击、不上传 OCR 文本，服务端只接收通用运行状态。交互式 API 文档位于 <http://127.0.0.1:8001/docs>。
 
-| 角色 | 邮箱 | 演示密码 |
-| --- | --- | --- |
-| 管理员 | `admin@example.com` | `admin-demo` |
-| 普通用户 | `chen.xiao@example.com` | `user-demo` |
-| 普通用户 | `zhou.ke@example.com` | `user-demo` |
+| 角色 | 本地演示账号邮箱 |
+| --- | --- |
+| 管理员 | `admin@example.com` |
+| 普通用户（真机测试账号） | `chen.xiao@example.com` |
+| 普通用户 | `zhou.ke@example.com` |
 
-以上凭据只适用于本地演示数据库。token secret 未设置时服务会在每次进程启动生成新的随机密钥（重启后旧 token 失效）。迁移到 PostgreSQL 与对象存储、配置密码找回邮件、部署 HTTPS 和边缘速率限制之前，不得把此服务暴露到公网。
+以上账号只适用于本地演示数据库；密码不记录在文档或版本库中，请通过受控的本地开发凭据渠道获取或使用密码重置流程。真机测试前确认两款 Android App 使用同一账号及当前 API 地址；会话可能过期，不能假设设备仍保持登录。token secret 未设置时服务会在每次进程启动生成新的随机密钥（重启后旧 token 失效）。迁移到 PostgreSQL 与对象存储、配置密码找回邮件、部署 HTTPS 和边缘速率限制之前，不得把此服务暴露到公网。
 
 ## Private staging (HTTP, loopback-only by default)
 
@@ -154,7 +154,7 @@ FLOWPILOT_SMTP_USE_SSL=false
 - `GET /devices/{id}/tasks/{task_id}/versions/{version}/content`（SQLite/旧客户端兼容下载）
 - `POST /devices/{id}/publications/{publication_id}/accept`（兼容旧客户端的确认接口；新客户端不需要设备调用）
 - `POST /remote-runs`、`GET /devices/{id}/remote-runs`、`GET /remote-runs/{id}`、`PATCH /remote-runs/{id}`、`POST /remote-runs/{id}/stop`；只有普通用户可为自己的设备创建远程运行请求或请求停止。新请求一律保持待处理状态，Android 客户端须在服务端重新校验并批准后才会建立运行记录；历史预授权不会自动启动当前客户端的请求。创建请求可带 `Idempotency-Key`（1–128 个字母、数字、点、下划线、冒号或连字符）；同一用户、设备和幂等键重试同一任务时返回原请求，复用该键派发其他任务返回 `409`。Web 和控制端 App 都会发送幂等键。服务端按目标设备锁定派发/批准/本地启动及完成事务，并以数据库唯一部分索引保证每台设备至多一个运行中的任务；若升级时发现同设备已有多条运行中记录，服务端会明确拒绝启动，须先核实并修复记录。设备轮询结果包含待处理请求、运行中的请求及最近 50 条过期请求，方便设备端显示过期状态；运行中的请求包含 `run_id` 和 `stop_requested`。运行中的停止请求以幂等标记传给受控端，受控端执行期间每 5 秒查询，脚本在下一个停止检查点退出；此信令不强行终止 Android 进程或任意阻塞代码。Web/App 查询请求状态时也会看到停止标记，结束状态仍由受控端上报。设备只向服务端上报固定的安全诊断摘要，不会上传任意脚本异常或屏幕内容
-- `POST /runs/{id}`、`GET /runs`（包含可用于关联远程请求的 `remote_run_id`）
+- `POST /runs/{id}`、`GET /runs`（返回任务/版本、设备、状态、开始/结束时间、结果摘要及可空的 `remote_run_id`；两个 Android App 展示最近 10 条，并支持点击记录查看详情）
 - `GET/POST/DELETE /run-authorizations`、`GET /admin/audit`
 
 任务所有者和已获任务访问权限的用户，其设备会自动同步当前已发布版本；不需要逐台设备发布、设备确认接收或单独的设备版本授权。受控端收到控制端派发后自动启动，不需要逐次确认任务。服务端仍分别校验账号、设备归属、任务访问权限、已发布版本和请求有效期；撤销旧设备分发记录不会阻止该用户继续运行有权访问的任务，需撤销任务访问权限或暂停任务。此行为不等同于授予 Android 系统权限：请求需要的无障碍能力必须已启用；OCR/屏幕捕获仍要求 Android 系统授权。如果设备已主动开启持续 OCR 前台服务且会话有效，可在会话期间复用授权，否则客户端须先通过系统授权后运行。会话结束、系统回收或撤销共享后，必须重新授权。运行 API 只记录客户端回报状态，不在服务端或浏览器里执行 Python。

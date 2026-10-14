@@ -42,4 +42,4 @@ GitHub Actions runs these tests and both Android apps' JVM unit tests/Debug buil
 
 The native Android client setup, runtime bridge, permissions, and current limitations are documented in [`android/README.md`](android/README.md).
 
-For a concise handoff covering implemented features, end-to-end verification, known limitations, and blocked production work, see [`docs/开发交接.md`](docs/开发交接.md).
+For the product requirements and architecture, see [`docs/产品设计.md`](docs/产品设计.md) and [`docs/技术方案.md`](docs/技术方案.md). For the current implementation, test record, known limitations, test-account identifier, and AI handoff notes, see [`docs/开发交接.md`](docs/开发交接.md).
