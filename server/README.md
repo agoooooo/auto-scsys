@@ -100,6 +100,14 @@ For Compose PostgreSQL, configure an existing encrypted off-host directory (for 
 scripts/backup-postgres.sh /mnt/encrypted-backups/flowpilot
 ```
 
+To re-verify a saved backup before a recovery drill, pass its absolute dump path to the read-only verifier. It checks that the adjacent `.sha256` sidecar names the selected dump, verifies the digest, and validates the PostgreSQL custom-format archive using the running Compose `db` service:
+
+```bash
+scripts/verify-postgres-backup.sh /mnt/encrypted-backups/flowpilot/flowpilot-postgres-20261014T020000Z.dump
+```
+
+Run the verifier from the matching Compose project and environment. A successful archive check does not prove that the dump can be restored or that database and object-storage backups are mutually consistent; restore into a separate disposable database and verify application behavior before relying on a recovery point.
+
 For example, a host cron entry can run it daily after replacing the checkout and backup paths with the host's real paths:
 
 ```cron
