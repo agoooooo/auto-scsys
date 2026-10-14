@@ -1122,6 +1122,7 @@ private fun ControllerScreen(
                                     onClick = { onToggleDeviceSelection(device.id) },
                                     enabled = !state.loading && online,
                                     modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(18.dp),
                                     colors = CardDefaults.cardColors(
                                         containerColor = if (selected) {
                                             MaterialTheme.colorScheme.primaryContainer
@@ -1129,6 +1130,10 @@ private fun ControllerScreen(
                                             Color.White
                                         },
                                         disabledContainerColor = Color.White,
+                                    ),
+                                    elevation = CardDefaults.cardElevation(
+                                        defaultElevation = 2.dp,
+                                        disabledElevation = 2.dp,
                                     ),
                                     border = if (selected) {
                                         BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
@@ -1190,6 +1195,7 @@ private fun ControllerScreen(
                                 onClick = { onToggleTaskSelection(taskItem.id) },
                                 enabled = !state.loading,
                                 modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(18.dp),
                                 colors = CardDefaults.cardColors(
                                     containerColor = if (selected) {
                                         MaterialTheme.colorScheme.primaryContainer
@@ -1197,6 +1203,7 @@ private fun ControllerScreen(
                                         Color.White
                                     },
                                 ),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                                 border = if (selected) {
                                     BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
                                 } else {
