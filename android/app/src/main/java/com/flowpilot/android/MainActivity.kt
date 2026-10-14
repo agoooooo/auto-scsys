@@ -1564,27 +1564,36 @@ private fun FlowPilotScreen(
         Spacer(Modifier.height(8.dp))
       }
       if (user != null) {
-          NavigationBar(
-              containerColor = Color.White,
-              tonalElevation = 4.dp,
+          Surface(
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+              shape = RoundedCornerShape(24.dp),
+              color = Color.White,
+              tonalElevation = 2.dp,
+              shadowElevation = 8.dp,
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
           ) {
-              DeviceAppDestination.entries.forEach { destination ->
-                  NavigationBarItem(
-                      selected = selectedDestination == destination,
-                      onClick = {
-                          selectedDestinationName = destination.name
-                          accountPageName = DeviceAppAccountPage.HOME.name
-                      },
-                      icon = { DeviceAppNavigationIcon(destination, selectedDestination == destination) },
-                      label = { Text(destination.label) },
-                      colors = NavigationBarItemDefaults.colors(
-                          selectedIconColor = Color(0xFF07C160),
-                          selectedTextColor = Color(0xFF07C160),
-                          indicatorColor = Color(0xFFE1F5E9),
-                          unselectedIconColor = Color(0xFF80868B),
-                          unselectedTextColor = Color(0xFF80868B),
-                      ),
-                  )
+              NavigationBar(
+                  containerColor = Color.Transparent,
+                  tonalElevation = 0.dp,
+              ) {
+                  DeviceAppDestination.entries.forEach { destination ->
+                      NavigationBarItem(
+                          selected = selectedDestination == destination,
+                          onClick = {
+                              selectedDestinationName = destination.name
+                              accountPageName = DeviceAppAccountPage.HOME.name
+                          },
+                          icon = { DeviceAppNavigationIcon(destination, selectedDestination == destination) },
+                          label = { Text(destination.label) },
+                          colors = NavigationBarItemDefaults.colors(
+                              selectedIconColor = Color(0xFF07C160),
+                              selectedTextColor = Color(0xFF07C160),
+                              indicatorColor = Color(0xFFE1F5E9),
+                              unselectedIconColor = Color(0xFF80868B),
+                              unselectedTextColor = Color(0xFF80868B),
+                          ),
+                      )
+                  }
               }
           }
       }

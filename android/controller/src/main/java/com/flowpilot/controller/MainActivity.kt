@@ -1342,6 +1342,10 @@ private fun ControllerScreen(
                 }
             }
             if (selectedDestination == ControllerDestination.DEVICES) {
+                val visibleDevices = visibleControllerDevices(state.devices)
+                val selectedOnlineCount = state.devices.count {
+                    it.id in state.selectedDeviceIds && it.status == "online"
+                }
                 ControllerCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("快速开始", style = MaterialTheme.typography.titleSmall)
@@ -1533,22 +1537,8 @@ private fun ControllerScreen(
                                     verticalArrangement = Arrangement.spacedBy(9.dp),
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Surface(
-                                            modifier = Modifier.size(42.dp),
-                                            shape = RoundedCornerShape(13.dp),
-                                            color = if (selected) Color.White
-                                            else MaterialTheme.colorScheme.primaryContainer,
-                                        ) {
-                                            Box(contentAlignment = Alignment.Center) {
-                                                Text(
-                                                    taskItem.name.take(1).uppercase(),
-                                                    color = MaterialTheme.colorScheme.primary,
-                                                    style = MaterialTheme.typography.titleMedium,
-                                                )
-                                            }
-                                        }
                                         Column(
-                                            Modifier.weight(1f).padding(horizontal = 12.dp),
+                                            Modifier.weight(1f),
                                             verticalArrangement = Arrangement.spacedBy(5.dp),
                                         ) {
                                             Text(
@@ -1756,27 +1746,36 @@ private fun ControllerScreen(
         }
       }
       if (state.session != null) {
-          NavigationBar(
-              containerColor = Color.White,
-              tonalElevation = 4.dp,
+          Surface(
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+              shape = RoundedCornerShape(24.dp),
+              color = Color.White,
+              tonalElevation = 2.dp,
+              shadowElevation = 8.dp,
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
           ) {
-              ControllerDestination.entries.forEach { destination ->
-                  NavigationBarItem(
-                      selected = selectedDestination == destination,
-                      onClick = {
-                          selectedDestinationName = destination.name
-                          accountPageName = ControllerAccountPage.HOME.name
-                      },
-                      icon = { ControllerNavigationIcon(destination, selectedDestination == destination) },
-                      label = { Text(destination.label) },
-                      colors = NavigationBarItemDefaults.colors(
-                          selectedIconColor = Color(0xFF07C160),
-                          selectedTextColor = Color(0xFF07C160),
-                          indicatorColor = Color(0xFFE1F5E9),
-                          unselectedIconColor = Color(0xFF80868B),
-                          unselectedTextColor = Color(0xFF80868B),
-                      ),
-                  )
+              NavigationBar(
+                  containerColor = Color.Transparent,
+                  tonalElevation = 0.dp,
+              ) {
+                  ControllerDestination.entries.forEach { destination ->
+                      NavigationBarItem(
+                          selected = selectedDestination == destination,
+                          onClick = {
+                              selectedDestinationName = destination.name
+                              accountPageName = ControllerAccountPage.HOME.name
+                          },
+                          icon = { ControllerNavigationIcon(destination, selectedDestination == destination) },
+                          label = { Text(destination.label) },
+                          colors = NavigationBarItemDefaults.colors(
+                              selectedIconColor = Color(0xFF07C160),
+                              selectedTextColor = Color(0xFF07C160),
+                              indicatorColor = Color(0xFFE1F5E9),
+                              unselectedIconColor = Color(0xFF80868B),
+                              unselectedTextColor = Color(0xFF80868B),
+                          ),
+                      )
+                  }
               }
           }
       }
