@@ -74,18 +74,20 @@ class PythonRuntimeInstrumentedTest {
                 ready = bridge.wait_for_douyin(12)
                 text = bridge.ocr()
                 clicked = bridge.click_text("继续")
+                exact_clicked = bridge.click_text_exact("我")
                 bridge.log("bridge-called")
                 stopped = bridge.is_stopped()
-                result = text + ":" + str(ready) + ":" + str(clicked) + ":" + str(stopped)
+                result = text + ":" + str(ready) + ":" + str(clicked) + ":" + str(exact_clicked) + ":" + str(stopped)
             """.trimIndent(),
             bridge,
         )
 
-        assertEquals("识别结果:True:True:False", result)
+        assertEquals("识别结果:True:True:True:False", result)
         assertTrue(bridge.opened)
         assertEquals(12, bridge.waitTimeoutSeconds)
         assertEquals(1, bridge.ocrCalls)
         assertEquals("继续", bridge.clickedText)
+        assertEquals("我", bridge.exactClickedText)
         assertEquals("bridge-called", bridge.loggedMessage)
         assertFalse(bridge.stopped)
     }
@@ -154,6 +156,7 @@ class InstrumentedNativeBridge {
     var waitTimeoutSeconds = 0
     var ocrCalls = 0
     var clickedText: String? = null
+    var exactClickedText: String? = null
     var loggedMessage: String? = null
     var stopped = false
 
@@ -174,6 +177,11 @@ class InstrumentedNativeBridge {
 
     fun clickText(text: String): Boolean {
         clickedText = text
+        return true
+    }
+
+    fun clickTextExact(text: String): Boolean {
+        exactClickedText = text
         return true
     }
 

@@ -13,6 +13,13 @@ import java.util.concurrent.Callable
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 
+internal fun accessibilityTextMatches(query: String, candidate: String, exactOnly: Boolean): Boolean =
+    if (exactOnly) {
+        candidate.trim().equals(query, ignoreCase = true)
+    } else {
+        candidate.contains(query, ignoreCase = true)
+    }
+
 @Suppress("DEPRECATION")
 internal class DouyinAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
@@ -101,6 +108,17 @@ internal class DouyinAccessibilityService : AccessibilityService() {
     fun clickText(target: String): Boolean = onServiceThread {
         val query = target.trim()
         require(query.isNotEmpty()) { "点击目标不能为空" }
+        clickTextOnCurrentWindow(query, exactOnly = true) ||
+            clickTextOnCurrentWindow(query, exactOnly = false)
+    }
+
+    fun clickTextExact(target: String): Boolean = onServiceThread {
+        val query = target.trim()
+        require(query.isNotEmpty()) { "点击目标不能为空" }
+        clickTextOnCurrentWindow(query, exactOnly = true)
+    }
+
+    private fun clickTextOnCurrentWindow(query: String, exactOnly: Boolean): Boolean {
         val root = checkedRoot()
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
@@ -112,9 +130,9 @@ internal class DouyinAccessibilityService : AccessibilityService() {
                 try {
                     val textMatches = sequenceOf(node.text, node.contentDescription)
                         .filterNotNull()
-                        .any { it.toString().contains(query, ignoreCase = true) }
+                        .any { accessibilityTextMatches(query, it.toString(), exactOnly) }
                     if (textMatches && clickNodeOrClickableAncestor(node)) {
-                        return@onServiceThread true
+                        return true
                     }
                     for (index in 0 until node.childCount) {
                         node.getChild(index)?.let(queue::add)
@@ -123,7 +141,7 @@ internal class DouyinAccessibilityService : AccessibilityService() {
                     node.recycle()
                 }
             }
-            false
+            return false
         } finally {
             while (queue.isNotEmpty()) queue.removeFirst().recycle()
         }

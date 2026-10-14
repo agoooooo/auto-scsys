@@ -13,6 +13,8 @@ internal object PythonTaskRuntime {
                 return nativeBridge.ocr()
             def click_text(self, text):
                 return nativeBridge.clickText(text)
+            def click_text_exact(self, text):
+                return nativeBridge.clickTextExact(text)
             def log(self, message):
                 return nativeBridge.log(str(message))
             def is_stopped(self):

@@ -907,7 +907,7 @@ def test_user_devices_and_task_access_are_scoped(client):
     tasks_by_id = {task["id"]: task for task in tasks}
     assert set(tasks_by_id) == {"t-001", "t-003"}
     assert tasks_by_id["t-001"]["active_version"] == "v1.7.0"
-    assert tasks_by_id["t-003"]["active_version"] == "v1.0.0"
+    assert tasks_by_id["t-003"]["active_version"] == "v1.0.2"
     assert client.post("/devices/d-002/sync", headers=auth(user)).status_code == 200
     assert client.post("/devices/d-003/sync", headers=auth(user)).status_code == 404
     assert client.get("/devices/d-001/tasks/t-002/versions/v0.2.0/content", headers=auth(user)).status_code == 404

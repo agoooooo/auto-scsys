@@ -365,6 +365,13 @@ internal class TaskExecutionService : Service() {
             }
         }
 
+        fun clickTextExact(text: String): Boolean {
+            checkRunning()
+            return clickGate.click {
+                DouyinAccessibilityService.requireInstance().clickTextExact(text)
+            }
+        }
+
         fun log(message: String) {
             checkRunning()
             RunStatusStore(context).appendLog(message.take(MAX_LOG_ENTRY_CHARS))

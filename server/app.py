@@ -522,44 +522,62 @@ def _ensure_demo_douyin_login_task(db: sqlite3.Connection) -> None:
     demo_user = db.execute(
         "SELECT id FROM users WHERE id='u-1001' AND email='chen.xiao@example.com'"
     ).fetchone()
-    if not demo_user or db.execute("SELECT 1 FROM tasks WHERE id='t-003'").fetchone():
+    if not demo_user:
         return
 
     now = utc_now()
     script = DEMO_DOUYIN_LOGIN_SCRIPT_PATH.read_bytes()
-    db.execute(
-        """INSERT INTO tasks(id,name,description,category,status,owner_id,source,capabilities_json)
-           VALUES(?,?,?,?,?,?,?,?)""",
-        (
-            "t-003",
-            "抖音登录入口识别（人工完成认证）",
-            "OCR 识别并点击抖音登录入口；到达登录界面后由设备用户手动输入账号信息并完成验证。不会自动安装 App 或处理密码/验证码。",
-            "OCR 识别",
-            "published",
-            demo_user["id"],
-            "FlowPilot 演示任务",
-            json.dumps(
-                ["屏幕捕获（需系统授权）", "OCR 文字识别", "无障碍点击（需系统授权）"],
-                ensure_ascii=False,
+    task = db.execute("SELECT owner_id FROM tasks WHERE id='t-003'").fetchone()
+    if task and task["owner_id"] != demo_user["id"]:
+        return
+    if not task:
+        db.execute(
+            """INSERT INTO tasks(id,name,description,category,status,owner_id,source,capabilities_json)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (
+                "t-003",
+                "抖音登录页面引导（手动认证）",
+                "从抖音首页进入“我”页面并打开登录表单；用户自行输入手机号并完成验证。不会自动安装 App 或处理认证信息。",
+                "OCR 识别",
+                "published",
+                demo_user["id"],
+                "FlowPilot 演示任务",
+                json.dumps(
+                    ["屏幕捕获（需系统授权）", "OCR 文字识别", "无障碍点击（需系统授权）"],
+                    ensure_ascii=False,
+                ),
             ),
-        ),
-    )
+        )
+    if not db.execute(
+        "SELECT 1 FROM task_versions WHERE task_id='t-003' AND version='v1.0.2'"
+    ).fetchone():
+        db.execute(
+            """INSERT INTO task_versions(id,task_id,version,filename,content,sha256,notes,created_at)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (
+                "tv-009",
+                "t-003",
+                "v1.0.2",
+                "douyin_login_assist.py",
+                script,
+                hashlib.sha256(script).hexdigest(),
+                "通过无障碍精确匹配“我”标签进入个人页，再确认登录表单；不处理账号凭据",
+                now,
+            ),
+        )
+        db.execute(
+            """UPDATE tasks SET active_version='v1.0.2'
+               WHERE id='t-003' AND (active_version IS NULL OR active_version IN ('v1.0.0','v1.0.1'))"""
+        )
+        db.execute(
+            """UPDATE tasks
+               SET name='抖音登录页面引导（手动认证）',
+                   description='从抖音首页进入“我”页面并打开登录表单；用户自行输入手机号并完成验证。不会自动安装 App 或处理认证信息。'
+               WHERE id='t-003' AND owner_id=?""",
+            (demo_user["id"],),
+        )
     db.execute(
-        """INSERT INTO task_versions(id,task_id,version,filename,content,sha256,notes,created_at)
-           VALUES(?,?,?,?,?,?,?,?)""",
-        (
-            "tv-007",
-            "t-003",
-            "v1.0.0",
-            "douyin_login_assist.py",
-            script,
-            hashlib.sha256(script).hexdigest(),
-            "OCR 识别并打开登录入口；凭据和验证由设备用户手动处理",
-            now,
-        ),
-    )
-    db.execute(
-        "INSERT INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?)",
+        "INSERT OR IGNORE INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?)",
         ("t-003", demo_user["id"], now),
     )
 
