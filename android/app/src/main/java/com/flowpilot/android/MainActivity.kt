@@ -45,12 +45,14 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -657,6 +659,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun FlowPilotScreen(
     viewModel: FlowPilotViewModel,
     accessibilityEnabled: Boolean,
@@ -784,13 +787,23 @@ private fun FlowPilotScreen(
         if (request != null) onAutoRunRemoteRequest(request)
     }
     Column(modifier = Modifier.fillMaxSize()) {
+      PullToRefreshBox(
+        isRefreshing = state.loading || state.remoteRunsLoading || state.runHistoryLoading,
+        onRefresh = {
+            viewModel.refreshTasks()
+            viewModel.refreshRemoteRuns()
+            viewModel.refreshRunHistory()
+            viewModel.refreshRunStatus()
+        },
+        modifier = Modifier.weight(1f),
+      ) {
       Column(
         modifier = Modifier
-            .weight(1f)
+            .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
+      ) {
         if (user == null) {
             FlowPilotBrandHeader()
             TextButton(onClick = { showHelp = true }) {
@@ -1559,6 +1572,7 @@ private fun FlowPilotScreen(
             Text(message, color = MaterialTheme.colorScheme.error)
         }
         Spacer(Modifier.height(8.dp))
+      }
       }
       if (user != null) {
           Surface(

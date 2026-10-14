@@ -26,6 +26,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
@@ -34,6 +35,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -1057,6 +1059,7 @@ private fun defaultControllerApiUrl(): String {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun ControllerScreen(
     state: ControllerScreenState,
     onApiUrlChange: (String) -> Unit,
@@ -1184,8 +1187,13 @@ private fun ControllerScreen(
         persistScreenState()
     }
     Column(Modifier.fillMaxSize()) {
+      PullToRefreshBox(
+        isRefreshing = state.loading || state.runHistoryLoading,
+        onRefresh = onRefresh,
+        modifier = Modifier.weight(1f),
+      ) {
       Column(
-        Modifier.weight(1f).verticalScroll(scrollState).padding(20.dp),
+        Modifier.fillMaxSize().verticalScroll(scrollState).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(
             if (selectedDestination == ControllerDestination.ACCOUNT) 16.dp else 12.dp,
         ),
@@ -1882,6 +1890,7 @@ private fun ControllerScreen(
               }
             }
         }
+      }
       }
       if (state.session != null) {
           Surface(
