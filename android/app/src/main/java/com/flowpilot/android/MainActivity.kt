@@ -1106,7 +1106,14 @@ private fun FlowPilotScreen(
                                 status = device.status,
                             )
                         }
-                        Text("${device.name} · ${device.model}", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (shouldShowDeviceModel(device.name, device.model)) {
+                                "${device.name} · ${device.model}"
+                            } else {
+                                device.name
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                         HorizontalDivider()
                         DevicePermissionRow(
                             title = "无障碍操作",

@@ -94,6 +94,24 @@ private fun ControllerCard(
     )
 }
 
+@Composable
+private fun ControllerDeviceStatusBadge(status: String) {
+    val online = status == "online"
+    Surface(
+        shape = CircleShape,
+        color = if (online) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Text(
+            controllerDeviceStatusLabel(status),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            color = if (online) MaterialTheme.colorScheme.onPrimaryContainer
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
 private data class ControllerScreenState(
     val apiUrl: String = defaultControllerApiUrl(),
     val name: String = "",
@@ -1336,9 +1354,31 @@ private fun ControllerScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                            Text(device.name, style = MaterialTheme.typography.titleSmall)
-                                            Text(device.model, style = MaterialTheme.typography.bodySmall)
-                                            Text("ID ${device.id.take(8)}", style = MaterialTheme.typography.labelSmall)
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                Text(
+                                                    device.name,
+                                                    modifier = Modifier.weight(1f),
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                )
+                                                Spacer(Modifier.size(8.dp))
+                                                ControllerDeviceStatusBadge(device.status)
+                                            }
+                                            if (shouldShowControllerDeviceModel(device.name, device.model)) {
+                                                Text(
+                                                    device.model,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                            Text(
+                                                "设备 ID · ${device.id.take(8)}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
                                         }
                                         if (canUnbindControllerDevice(device.status)) {
                                             OutlinedButton(

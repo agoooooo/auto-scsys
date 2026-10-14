@@ -84,6 +84,13 @@ class ControllerPolicyTest {
     }
 
     @Test
+    fun deviceModelIsHiddenWhenItRepeatsTheDeviceName() {
+        assertFalse(shouldShowControllerDeviceModel("REDMI 25102RKBEC", "redmi 25102rkbec"))
+        assertFalse(shouldShowControllerDeviceModel("Phone", ""))
+        assertTrue(shouldShowControllerDeviceModel("Phone", "Model X"))
+    }
+
+    @Test
     fun offlineDeviceGroupStartsCollapsedAndOnlyOfflineDevicesCanBeUnbound() {
         assertFalse(isControllerDeviceGroupExpandedByDefault("offline"))
         assertTrue(isControllerDeviceGroupExpandedByDefault("online"))

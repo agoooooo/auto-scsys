@@ -419,3 +419,6 @@ internal fun controllerDeviceStatusLabel(status: String): String = when (status)
     "disabled" -> "已停用"
     else -> "离线"
 }
+
+internal fun shouldShowControllerDeviceModel(name: String, model: String): Boolean =
+    model.isNotBlank() && !model.equals(name, ignoreCase = true)

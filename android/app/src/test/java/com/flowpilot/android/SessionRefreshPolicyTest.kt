@@ -50,4 +50,11 @@ class SessionRefreshPolicyTest {
         assertEquals("online", markDeviceOnlineAfterHeartbeat(offlineDevice, "device-1")?.status)
         assertEquals(offlineDevice, markDeviceOnlineAfterHeartbeat(offlineDevice, "other-device"))
     }
+
+    @Test
+    fun deviceModelIsHiddenWhenItRepeatsTheDeviceName() {
+        assertFalse(shouldShowDeviceModel("REDMI 25102RKBEC", "redmi 25102rkbec"))
+        assertFalse(shouldShowDeviceModel("Phone", ""))
+        assertTrue(shouldShowDeviceModel("Phone", "Model X"))
+    }
 }

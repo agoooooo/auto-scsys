@@ -422,6 +422,9 @@ internal class ApiException(message: String, val statusCode: Int) : IOException(
 internal fun markDeviceOnlineAfterHeartbeat(device: BoundDevice?, heartbeatDeviceId: String): BoundDevice? =
     device?.takeIf { it.id == heartbeatDeviceId }?.copy(status = "online") ?: device
 
+internal fun shouldShowDeviceModel(name: String, model: String): Boolean =
+    model.isNotBlank() && !model.equals(name, ignoreCase = true)
+
 internal fun verifyScriptSha256(source: String, expectedHash: String) {
     val actualHash = MessageDigest.getInstance("SHA-256")
         .digest(source.toByteArray(Charsets.UTF_8))
