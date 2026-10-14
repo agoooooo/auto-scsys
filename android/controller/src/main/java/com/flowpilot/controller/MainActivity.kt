@@ -46,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -85,6 +86,21 @@ private fun ControllerCard(
     Card(
         modifier = modifier,
         colors = CardDefaults.cardColors(containerColor = Color.White),
+        content = content,
+    )
+}
+
+@Composable
+private fun ControllerAccountCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         content = content,
     )
 }
@@ -799,7 +815,9 @@ private fun ControllerScreen(
     Column(Modifier.fillMaxSize()) {
       Column(
         Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(
+            if (selectedDestination == ControllerDestination.ACCOUNT) 16.dp else 12.dp,
+        ),
       ) {
         if (state.session == null) {
             Text("FlowPilot 控制端", style = MaterialTheme.typography.headlineMedium)
@@ -835,14 +853,14 @@ private fun ControllerScreen(
                         if (selectedDestination == ControllerDestination.ACCOUNT) {
                             when (accountPage) {
                                 ControllerAccountPage.HOME -> "个人信息与账号设置"
-                                ControllerAccountPage.PROFILE -> "管理姓名与邮箱"
+                                ControllerAccountPage.PROFILE -> "管理姓名和邮箱"
                                 ControllerAccountPage.SECURITY -> "修改登录密码"
                             }
                         } else when (selectedDestination) {
                             ControllerDestination.DEVICES -> "查看受控设备状态并选择操作目标"
                             ControllerDestination.TASKS -> "浏览已发布任务并选择设备进行派发"
                             ControllerDestination.RUNS -> "查看设备执行状态与操作结果"
-                            ControllerDestination.ACCOUNT -> "管理个人资料、登录凭据和应用信息"
+                            ControllerDestination.ACCOUNT -> "个人资料、密码与应用设置"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -939,41 +957,39 @@ private fun ControllerScreen(
             if (selectedDestination == ControllerDestination.ACCOUNT) {
                 when (accountPage) {
                     ControllerAccountPage.HOME -> {
-                        ControllerCard(Modifier.fillMaxWidth()) {
-                            Column {
-                                Row(
-                                    Modifier.fillMaxWidth().clickable {
-                                        accountPageName = ControllerAccountPage.PROFILE.name
-                                    }.padding(16.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        ControllerAccountCard(Modifier.fillMaxWidth()) {
+                            Row(
+                                Modifier.fillMaxWidth().clickable {
+                                    accountPageName = ControllerAccountPage.PROFILE.name
+                                }.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            ) {
+                                Surface(
+                                    modifier = Modifier.size(56.dp),
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.primaryContainer,
                                 ) {
-                                    Surface(
-                                        modifier = Modifier.size(56.dp),
-                                        shape = CircleShape,
-                                        color = MaterialTheme.colorScheme.primaryContainer,
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Text(
-                                                state.session.name.firstOrNull()?.uppercase() ?: "我",
-                                                color = MaterialTheme.colorScheme.primary,
-                                                style = MaterialTheme.typography.headlineSmall,
-                                            )
-                                        }
-                                    }
-                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Text(state.session.name, style = MaterialTheme.typography.titleLarge)
+                                    Box(contentAlignment = Alignment.Center) {
                                         Text(
-                                            state.session.email,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            style = MaterialTheme.typography.bodySmall,
+                                            state.session.name.firstOrNull()?.uppercase() ?: "我",
+                                            color = MaterialTheme.colorScheme.primary,
+                                            style = MaterialTheme.typography.headlineSmall,
                                         )
                                     }
-                                    Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(state.session.name, style = MaterialTheme.typography.titleLarge)
+                                    Text(
+                                        state.session.email,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                                Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                        ControllerCard(Modifier.fillMaxWidth()) {
+                        ControllerAccountCard(Modifier.fillMaxWidth()) {
                             Column {
                                 ControllerAccountRow(
                                     title = "个人资料",
@@ -988,30 +1004,22 @@ private fun ControllerScreen(
                                 )
                             }
                         }
-                        ControllerCard(Modifier.fillMaxWidth()) {
-                            Column {
-                                ControllerAccountRow(
-                                    title = "帮助与关于",
-                                    onClick = { showHelp = true },
-                                )
-                                HorizontalDivider(Modifier.padding(start = 16.dp))
-                                ControllerAccountRow(
-                                    title = "刷新账号信息",
-                                    onClick = onRefresh,
-                                    enabled = !state.loading,
-                                )
-                            }
+                        ControllerAccountCard(Modifier.fillMaxWidth()) {
+                            ControllerAccountRow(
+                                title = "帮助与关于",
+                                onClick = { showHelp = true },
+                            )
                         }
-                        OutlinedButton(
+                        Button(
                             onClick = onLogout,
                             enabled = !state.loading,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text("退出登录", color = MaterialTheme.colorScheme.error)
+                            Text("退出登录")
                         }
                     }
                     ControllerAccountPage.PROFILE -> {
-                        ControllerCard(Modifier.fillMaxWidth()) {
+                        ControllerAccountCard(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 OutlinedTextField(
                                     value = state.profileName,
@@ -1030,14 +1038,15 @@ private fun ControllerScreen(
                                 OutlinedTextField(
                                     value = state.profileCurrentPassword,
                                     onValueChange = onProfileCurrentPasswordChange,
-                                    label = { Text("当前密码（仅改邮箱时需要）") },
+                                    label = { Text("当前密码（修改邮箱时需要）") },
                                     modifier = Modifier.fillMaxWidth(),
                                     visualTransformation = PasswordVisualTransformation(),
                                     singleLine = true,
                                 )
                                 Button(
                                     onClick = onSaveProfile,
-                                    enabled = !state.loading,
+                                    enabled = !state.loading &&
+                                        state.profileName.isNotBlank() && state.profileEmail.isNotBlank(),
                                     modifier = Modifier.fillMaxWidth(),
                                 ) {
                                     Text("保存")
@@ -1046,7 +1055,7 @@ private fun ControllerScreen(
                         }
                     }
                     ControllerAccountPage.SECURITY -> {
-                        ControllerCard(Modifier.fillMaxWidth()) {
+                        ControllerAccountCard(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 OutlinedTextField(
                                     value = state.currentPassword,
@@ -1066,7 +1075,8 @@ private fun ControllerScreen(
                                 )
                                 Button(
                                     onClick = onChangePassword,
-                                    enabled = !state.loading,
+                                    enabled = !state.loading && state.currentPassword.isNotBlank() &&
+                                        state.newPassword.length >= 6,
                                     modifier = Modifier.fillMaxWidth(),
                                 ) {
                                     Text("更新密码")
