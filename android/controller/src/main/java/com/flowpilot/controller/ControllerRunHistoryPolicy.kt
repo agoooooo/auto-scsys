@@ -18,6 +18,9 @@ internal fun controllerRunHistoryStatusColor(status: String): Color = when (stat
     else -> ControllerColorScheme.primary
 }
 
+internal fun controllerRunHistoryIsActive(status: String): Boolean =
+    isControllerRunActive(status)
+
 internal fun formatControllerRunTime(
     timestamp: String,
     zoneId: ZoneId = ZoneId.systemDefault(),

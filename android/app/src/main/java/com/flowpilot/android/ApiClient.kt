@@ -33,8 +33,11 @@ internal data class RunRecord(
     val taskName: String,
     val version: String,
     val deviceId: String,
+    val deviceName: String,
+    val remoteRunId: String?,
     val status: String,
     val startedAt: String,
+    val finishedAt: String,
     val resultSummary: String,
 )
 
@@ -307,8 +310,11 @@ internal class ApiClient(baseUrl: String) {
                 taskName = item.optString("task_name"),
                 version = item.optString("version"),
                 deviceId = item.optString("device_id"),
+                deviceName = item.optString("device_name"),
+                remoteRunId = item.optString("remote_run_id").takeUnless { it.isBlank() || it == "null" },
                 status = item.optString("status"),
                 startedAt = item.optString("started_at"),
+                finishedAt = item.optString("finished_at").takeUnless { it.isBlank() || it == "null" }.orEmpty(),
                 resultSummary = item.optString("result_summary"),
             )
         }

@@ -818,6 +818,7 @@ private fun ControllerScreen(
     onLogout: () -> Unit,
 ) {
     var showHelp by remember { mutableStateOf(false) }
+    var selectedRunHistory by remember { mutableStateOf<ControllerRunHistory?>(null) }
     var selectedDestinationName by rememberSaveable {
         mutableStateOf(ControllerDestination.DEVICES.name)
     }
@@ -1350,10 +1351,10 @@ private fun ControllerScreen(
                     }
                 }
               }
-              state.run?.let { run ->
+              state.run?.takeIf { controllerRunHistoryIsActive(it.status) }?.let { run ->
                 ControllerCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("最近一次运行", style = MaterialTheme.typography.titleMedium)
+                        Text("当前任务状态", style = MaterialTheme.typography.titleMedium)
                         Text(controllerRunStatusLabel(run.status))
                         run.runStatus?.takeIf(String::isNotBlank)?.let {
                             Text("执行状态：${controllerRunStatusLabel(it)}")
@@ -1375,7 +1376,9 @@ private fun ControllerScreen(
                     }
                 }
               }
-              if (state.run != null || state.batchRuns.isNotEmpty()) {
+              if (state.run?.let { controllerRunHistoryIsActive(it.status) } == true ||
+                  state.batchRuns.any { item -> item.run?.let { controllerRunHistoryIsActive(it.status) } == true }
+              ) {
                   Spacer(Modifier.height(8.dp))
                   Text("停止请求由受控端轮询，并在脚本的下一个停止检查点响应。", style = MaterialTheme.typography.bodySmall)
               }
@@ -1410,37 +1413,36 @@ private fun ControllerScreen(
               )
               val visibleHistory = visibleControllerRunHistory(state.runHistory)
               if (visibleHistory.isNotEmpty()) {
-                  ControllerCard(Modifier.fillMaxWidth()) {
-                      Column {
-                          visibleHistory.forEachIndexed { index, run ->
-                              Column(
-                                  Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                                  verticalArrangement = Arrangement.spacedBy(5.dp),
+                  visibleHistory.forEach { run ->
+                      ControllerCard(
+                          Modifier.fillMaxWidth().clickable { selectedRunHistory = run },
+                      ) {
+                          Column(
+                              Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                              verticalArrangement = Arrangement.spacedBy(5.dp),
+                          ) {
+                              Row(
+                                  modifier = Modifier.fillMaxWidth(),
+                                  horizontalArrangement = Arrangement.SpaceBetween,
+                                  verticalAlignment = Alignment.CenterVertically,
                               ) {
-                                  Row(
-                                      modifier = Modifier.fillMaxWidth(),
-                                      horizontalArrangement = Arrangement.SpaceBetween,
-                                      verticalAlignment = Alignment.CenterVertically,
-                                  ) {
-                                      Text(
-                                          run.taskName,
-                                          modifier = Modifier.weight(1f),
-                                          style = MaterialTheme.typography.titleSmall,
-                                      )
-                                      Text(
-                                          controllerRunStatusLabel(run.status),
-                                          color = controllerRunHistoryStatusColor(run.status),
-                                          style = MaterialTheme.typography.labelMedium,
-                                      )
-                                  }
-                                  Text(run.deviceName, style = MaterialTheme.typography.bodySmall)
                                   Text(
-                                      "版本：${run.version} · ${formatControllerRunTime(run.startedAt)}",
-                                      style = MaterialTheme.typography.bodySmall,
+                                      run.taskName,
+                                      modifier = Modifier.weight(1f),
+                                      style = MaterialTheme.typography.titleSmall,
                                   )
-                                  run.resultSummary.takeIf(String::isNotBlank)?.let { Text(it) }
+                                  Text(
+                                      controllerRunStatusLabel(run.status),
+                                      color = controllerRunHistoryStatusColor(run.status),
+                                      style = MaterialTheme.typography.labelMedium,
+                                  )
                               }
-                              if (index < visibleHistory.lastIndex) HorizontalDivider()
+                              Text(run.deviceName, style = MaterialTheme.typography.bodySmall)
+                              Text(
+                                  "版本：${run.version} · ${formatControllerRunTime(run.startedAt)}",
+                                  style = MaterialTheme.typography.bodySmall,
+                              )
+                              Text("点击查看详情", style = MaterialTheme.typography.labelSmall)
                           }
                       }
                   }
@@ -1493,6 +1495,34 @@ private fun ControllerScreen(
                 TextButton(onClick = { showHelp = false }) {
                     Text("关闭")
                 }
+            },
+        )
+    }
+    selectedRunHistory?.let { run ->
+        AlertDialog(
+            onDismissRequest = { selectedRunHistory = null },
+            title = { Text("运行详情") },
+            text = {
+                Column(
+                    modifier = Modifier.height(440.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("任务：${run.taskName}")
+                    Text("状态：${controllerRunStatusLabel(run.status)}")
+                    Text("版本：${run.version.ifBlank { "未知" }}")
+                    Text("设备：${run.deviceName.ifBlank { "未知设备" }}")
+                    Text("设备 ID：${run.deviceId}")
+                    Text("开始时间：${formatControllerRunTime(run.startedAt)}")
+                    Text(
+                        "结束时间：${run.finishedAt.takeIf(String::isNotBlank)?.let(::formatControllerRunTime) ?: "尚未结束"}",
+                    )
+                    run.resultSummary.takeIf(String::isNotBlank)?.let { Text("运行结果：$it") }
+                    Text("运行 ID：${run.id}", style = MaterialTheme.typography.bodySmall)
+                    run.remoteRunId?.let { Text("派发请求 ID：$it", style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { selectedRunHistory = null }) { Text("关闭") }
             },
         )
     }

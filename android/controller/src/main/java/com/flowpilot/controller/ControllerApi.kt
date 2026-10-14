@@ -30,11 +30,15 @@ internal data class ControllerRunStatus(
 )
 internal data class ControllerRunHistory(
     val id: String,
+    val taskId: String,
     val taskName: String,
     val version: String,
+    val deviceId: String,
     val deviceName: String,
+    val remoteRunId: String?,
     val status: String,
     val startedAt: String,
+    val finishedAt: String,
     val resultSummary: String,
 )
 
@@ -236,11 +240,15 @@ internal class ControllerApi(
         arrayRequest("/runs", token).map {
             ControllerRunHistory(
                 id = it.optString("id"),
+                taskId = it.optString("task_id"),
                 taskName = it.optString("task_name"),
                 version = it.optString("version"),
+                deviceId = it.optString("device_id"),
                 deviceName = it.optString("device_name"),
+                remoteRunId = it.optString("remote_run_id").takeUnless { value -> value.isBlank() || value == "null" },
                 status = it.optString("status"),
                 startedAt = it.optString("started_at"),
+                finishedAt = it.optString("finished_at").takeUnless { value -> value.isBlank() || value == "null" }.orEmpty(),
                 resultSummary = it.optString("result_summary"),
             )
         }

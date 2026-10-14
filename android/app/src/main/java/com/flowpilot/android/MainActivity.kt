@@ -703,6 +703,7 @@ private fun FlowPilotScreen(
     var profileCurrentPassword by rememberSaveable { mutableStateOf("") }
     var accountCurrentPassword by rememberSaveable { mutableStateOf("") }
     var accountNewPassword by rememberSaveable { mutableStateOf("") }
+    var selectedRunHistory by remember(user?.id) { mutableStateOf<RunRecord?>(null) }
     var selectedDestinationName by rememberSaveable {
         mutableStateOf(DeviceAppDestination.DEVICE.name)
     }
@@ -1293,49 +1294,44 @@ private fun FlowPilotScreen(
                     }
                 }
                 if (state.runHistory.isNotEmpty()) {
-                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-                        Column {
-                            val visibleRuns = visibleRunHistory(state.runHistory)
-                            visibleRuns.forEachIndexed { index, run ->
-                                Column(
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    visibleRunHistory(state.runHistory).forEach { run ->
+                        FlowPilotCard(
+                            modifier = Modifier.fillMaxWidth().clickable { selectedRunHistory = run },
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(
-                                            run.taskName,
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.titleSmall,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        StatusBadge(
-                                            label = runStatusLabel(run.status),
-                                            status = run.status,
-                                        )
-                                    }
                                     Text(
-                                        "版本：${run.version} · ${formatServerRunTime(run.startedAt)}",
-                                        style = MaterialTheme.typography.bodySmall,
+                                        run.taskName,
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.titleSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
-                                    run.resultSummary.takeIf(String::isNotBlank)?.let { summary ->
-                                        Text(summary, style = MaterialTheme.typography.bodySmall)
-                                    }
-                                    if (index < visibleRuns.lastIndex) {
-                                        HorizontalDivider(Modifier.padding(horizontal = 14.dp))
-                                    }
+                                    StatusBadge(
+                                        label = runStatusLabel(run.status),
+                                        status = run.status,
+                                    )
                                 }
+                                Text(
+                                    "${run.deviceName.ifBlank { "设备" }} · ${formatServerRunTime(run.startedAt)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                Text("点击查看详情", style = MaterialTheme.typography.labelSmall)
                             }
                         }
                     }
                 }
 
                 state.runStatus?.let { runStatus ->
-                    if (runStatus.status != null) {
+                    val currentStatus = runStatus.status
+                    if (currentStatus != null && isCurrentRunStatus(currentStatus)) {
                         FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                             Column(
                                 modifier = Modifier.padding(16.dp),
@@ -1346,10 +1342,10 @@ private fun FlowPilotScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Text("最近一次运行", style = MaterialTheme.typography.titleMedium)
+                                    Text("当前任务", style = MaterialTheme.typography.titleMedium)
                                     StatusBadge(
-                                        label = runStatusLabel(runStatus.status),
-                                        status = runStatus.status,
+                                        label = runStatusLabel(currentStatus),
+                                        status = currentStatus,
                                     )
                                 }
                                 Text(
@@ -1373,11 +1369,11 @@ private fun FlowPilotScreen(
                                     Text("运行日志", style = MaterialTheme.typography.titleSmall)
                                     Text(runStatus.log, style = MaterialTheme.typography.bodySmall)
                                 }
-                                if (runStatus.status == "running") {
+                                if (currentStatus == "running") {
                                     TextButton(onClick = onStopTask) {
                                         Text("停止任务")
                                     }
-                                } else if (runStatus.status == "awaiting_permission") {
+                                } else if (currentStatus == "awaiting_permission") {
                                     Text("等待 Android 系统授权")
                                 }
                               }
@@ -1607,6 +1603,35 @@ private fun FlowPilotScreen(
                 TextButton(onClick = { confirmDeviceUnbind = false }) {
                     Text("取消")
                 }
+            },
+        )
+    }
+
+    selectedRunHistory?.let { run ->
+        AlertDialog(
+            onDismissRequest = { selectedRunHistory = null },
+            title = { Text("运行详情") },
+            text = {
+                Column(
+                    modifier = Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("任务：${run.taskName}")
+                    Text("状态：${runStatusLabel(run.status)}")
+                    Text("版本：${run.version.ifBlank { "未知" }}")
+                    Text("设备：${run.deviceName.ifBlank { "未知设备" }}")
+                    Text("设备 ID：${run.deviceId}")
+                    Text("开始时间：${formatServerRunTime(run.startedAt)}")
+                    Text(
+                        "结束时间：${run.finishedAt.takeIf(String::isNotBlank)?.let(::formatServerRunTime) ?: "尚未结束"}",
+                    )
+                    run.resultSummary.takeIf(String::isNotBlank)?.let { Text("运行结果：$it") }
+                    Text("运行 ID：${run.id}", style = MaterialTheme.typography.bodySmall)
+                    run.remoteRunId?.let { Text("派发请求 ID：$it", style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { selectedRunHistory = null }) { Text("关闭") }
             },
         )
     }

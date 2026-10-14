@@ -10,11 +10,15 @@ class ControllerRunHistoryPolicyTest {
         val records = (12 downTo 1).map { index ->
             ControllerRunHistory(
                 id = "run-$index",
+                taskId = "task-$index",
                 taskName = "Task $index",
                 version = "v1.0",
+                deviceId = "device",
                 deviceName = "Device",
+                remoteRunId = null,
                 status = "success",
                 startedAt = "2026-10-14T00:00:00+00:00",
+                finishedAt = "2026-10-14T00:01:00+00:00",
                 resultSummary = "",
             )
         }
@@ -52,5 +56,13 @@ class ControllerRunHistoryPolicyTest {
             ControllerColorScheme.primary,
             controllerRunHistoryStatusColor("success"),
         )
+    }
+
+    @Test
+    fun completedRunsAreHistoryOnlyAndActiveRequestsRemainVisible() {
+        assertEquals(false, controllerRunHistoryIsActive("success"))
+        assertEquals(false, controllerRunHistoryIsActive("failure"))
+        assertEquals(true, controllerRunHistoryIsActive("running"))
+        assertEquals(true, controllerRunHistoryIsActive("pending"))
     }
 }
