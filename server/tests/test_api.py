@@ -904,8 +904,10 @@ def test_user_devices_and_task_access_are_scoped(client):
     devices = client.get("/devices", headers=auth(user)).json()
     assert {device["id"] for device in devices} == {"d-001", "d-002"}
     tasks = client.get("/tasks", headers=auth(user)).json()
-    assert [task["id"] for task in tasks] == ["t-001"]
-    assert tasks[0]["active_version"] == "v1.7.0"
+    tasks_by_id = {task["id"]: task for task in tasks}
+    assert set(tasks_by_id) == {"t-001", "t-003"}
+    assert tasks_by_id["t-001"]["active_version"] == "v1.7.0"
+    assert tasks_by_id["t-003"]["active_version"] == "v1.0.0"
     assert client.post("/devices/d-002/sync", headers=auth(user)).status_code == 200
     assert client.post("/devices/d-003/sync", headers=auth(user)).status_code == 404
     assert client.get("/devices/d-001/tasks/t-002/versions/v0.2.0/content", headers=auth(user)).status_code == 404
@@ -1515,9 +1517,13 @@ def test_admin_can_list_grant_and_revoke_task_access(client):
         "u-admin": True,
         "u-1001": False,
     }
-    assert {task["id"] for task in client.get("/tasks", headers=auth(chen)).json()} == {"t-001", "t-002"}
+    assert {task["id"] for task in client.get("/tasks", headers=auth(chen)).json()} == {
+        "t-001",
+        "t-002",
+        "t-003",
+    }
     pending_sync = client.post("/devices/d-001/sync", headers=auth(chen)).json()
-    assert {item["id"] for item in pending_sync["tasks"]} == {"t-001", "t-002"}
+    assert {item["id"] for item in pending_sync["tasks"]} == {"t-001", "t-002", "t-003"}
     assert pending_sync["pending_publications"] == []
     assert client.post(
         "/devices/d-001/publications/not-this-device/accept",
@@ -1553,7 +1559,10 @@ def test_admin_can_list_grant_and_revoke_task_access(client):
     assert revoked.status_code == 200
     remaining_grants = client.get("/tasks/t-002/grants", headers=auth(admin)).json()
     assert [(grant["id"], grant["is_owner"]) for grant in remaining_grants] == [("u-admin", True)]
-    assert {task["id"] for task in client.get("/tasks", headers=auth(chen)).json()} == {"t-001"}
+    assert {task["id"] for task in client.get("/tasks", headers=auth(chen)).json()} == {
+        "t-001",
+        "t-003",
+    }
     assert client.get(
         "/devices/d-001/tasks/t-002/versions/v1.0.0/content",
         headers=auth(chen),
@@ -1750,7 +1759,10 @@ def test_admin_can_pause_and_resume_tasks_with_access_and_run_controls(client):
     assert paused.status_code == 200
     assert paused.json()["status"] == "paused"
     assert next(task for task in client.get("/tasks", headers=auth(user)).json() if task["id"] == "t-001")["status"] == "paused"
-    assert client.post("/devices/d-001/sync", headers=auth(user)).json()["tasks"] == []
+    synced_task_ids = {
+        task["id"] for task in client.post("/devices/d-001/sync", headers=auth(user)).json()["tasks"]
+    }
+    assert synced_task_ids == {"t-003"}
     assert client.get(
         "/devices/d-001/tasks/t-001/versions/v1.4.0/content",
         headers=auth(user),
@@ -1777,7 +1789,9 @@ def test_admin_can_pause_and_resume_tasks_with_access_and_run_controls(client):
 
     resumed = client.patch("/tasks/t-001", headers=auth(admin), json={"status": "published"})
     assert resumed.status_code == 200
-    assert [task["id"] for task in client.post("/devices/d-001/sync", headers=auth(user)).json()["tasks"]] == ["t-001"]
+    assert {
+        task["id"] for task in client.post("/devices/d-001/sync", headers=auth(user)).json()["tasks"]
+    } == {"t-001", "t-003"}
     assert client.post(
         "/remote-runs",
         headers=auth(user),

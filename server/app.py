@@ -48,6 +48,7 @@ DEVICE_OFFLINE_AFTER_SECONDS = 2 * 60
 MAX_SCRIPT_BYTES = 2 * 1024 * 1024
 VERSION_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
 DEMO_OCR_SCRIPT_PATH = Path(__file__).with_name("demo_scripts") / "order_status_ocr.py"
+DEMO_DOUYIN_LOGIN_SCRIPT_PATH = Path(__file__).with_name("demo_scripts") / "douyin_login_assist.py"
 
 
 def utc_now() -> str:
@@ -404,6 +405,8 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
         )
         if seed_demo and db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
             _seed_database(db)
+        if seed_demo:
+            _ensure_demo_douyin_login_task(db)
         db.execute("UPDATE task_versions SET content_size=length(content) WHERE content_size=0 AND content IS NOT NULL")
         db.execute(
             """UPDATE tasks SET active_version=(
@@ -513,6 +516,52 @@ result = f"界面 OCR 完成；匹配到 {len(matched_statuses)} 项订单状态
         ],
     )
     db.execute("INSERT INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?)", ("t-001", "u-1001", now))
+
+
+def _ensure_demo_douyin_login_task(db: sqlite3.Connection) -> None:
+    demo_user = db.execute(
+        "SELECT id FROM users WHERE id='u-1001' AND email='chen.xiao@example.com'"
+    ).fetchone()
+    if not demo_user or db.execute("SELECT 1 FROM tasks WHERE id='t-003'").fetchone():
+        return
+
+    now = utc_now()
+    script = DEMO_DOUYIN_LOGIN_SCRIPT_PATH.read_bytes()
+    db.execute(
+        """INSERT INTO tasks(id,name,description,category,status,owner_id,source,capabilities_json)
+           VALUES(?,?,?,?,?,?,?,?)""",
+        (
+            "t-003",
+            "抖音登录入口识别（人工完成认证）",
+            "OCR 识别并点击抖音登录入口；到达登录界面后由设备用户手动输入账号信息并完成验证。不会自动安装 App 或处理密码/验证码。",
+            "OCR 识别",
+            "published",
+            demo_user["id"],
+            "FlowPilot 演示任务",
+            json.dumps(
+                ["屏幕捕获（需系统授权）", "OCR 文字识别", "无障碍点击（需系统授权）"],
+                ensure_ascii=False,
+            ),
+        ),
+    )
+    db.execute(
+        """INSERT INTO task_versions(id,task_id,version,filename,content,sha256,notes,created_at)
+           VALUES(?,?,?,?,?,?,?,?)""",
+        (
+            "tv-007",
+            "t-003",
+            "v1.0.0",
+            "douyin_login_assist.py",
+            script,
+            hashlib.sha256(script).hexdigest(),
+            "OCR 识别并打开登录入口；凭据和验证由设备用户手动处理",
+            now,
+        ),
+    )
+    db.execute(
+        "INSERT INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?)",
+        ("t-003", demo_user["id"], now),
+    )
 
 
 class LoginInput(BaseModel):

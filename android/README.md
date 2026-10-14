@@ -81,7 +81,7 @@ Release APK 输出到 `android/app/build/outputs/apk/release/app-release.apk`。
 - `bridge.log(message)`：将最多 4 KB 的当前运行日志保留在本机；开始新运行时清空上一运行的日志。
 - `bridge.is_stopped()`：查询用户是否已请求停止。脚本应在循环中检查该值，并及时退出。
 
-最小脚本示例见 [`examples/open_douyin.py`](examples/open_douyin.py)；[`examples/douyin_login_assist.py`](examples/douyin_login_assist.py) 会 OCR 查找并点击登录入口，然后停在登录界面，要求用户手动完成账号验证。若抖音未安装，Android 会报错并要求用户从官方应用商店手动安装；FlowPilot 脚本不具备静默安装其他应用的能力。登录辅助脚本不会读取、输入或保存密码、短信验证码及其他认证凭据，也不会尝试绕过验证码或平台验证。若任务名称包含“抖音”，客户端会在执行前启动抖音；脚本仍应调用 `bridge.open_douyin()`，以便在远程恢复或 App 切换场景下确保目标应用已打开。
+最小脚本示例见 [`examples/open_douyin.py`](examples/open_douyin.py)。仓库本地开发服务还会预置可远程派发的“抖音登录入口识别（人工完成认证）”任务，其正式脚本源码位于 [`../server/demo_scripts/douyin_login_assist.py`](../server/demo_scripts/douyin_login_assist.py)。该任务会 OCR 查找并点击登录入口，然后停在登录界面，由设备用户手动完成账号验证。若抖音未安装，用户须从官方应用商店手动安装；FlowPilot 脚本不具备静默安装其他应用的能力。登录辅助脚本不会读取、输入或保存密码、短信验证码及其他认证凭据，也不会尝试绕过验证码或平台验证。若任务名称包含“抖音”，客户端会在执行前启动抖音；脚本仍应调用 `bridge.open_douyin()`，以便在远程恢复或 App 切换场景下确保目标应用已打开。
 
 ## 权限和安全边界
 
