@@ -1608,9 +1608,7 @@ private fun ControllerScreen(
               ) {
                   Text("派发 ${dispatchTargets.size} 个任务请求")
               }
-              Text("可多选在线设备和脚本；同一设备按脚本列表顺序排队，前一项结束后继续。")
-              Spacer(Modifier.height(8.dp))
-              Text("派发队列保存在服务端，退出控制端后仍会继续；受控端需开启远程待命。", style = MaterialTheme.typography.bodySmall)
+              
             }
             if (selectedDestination == ControllerDestination.RUNS) {
               if (state.batchRuns.isNotEmpty()) {
