@@ -149,12 +149,17 @@ internal enum class ControllerAccountPage(val title: String) {
     SECURITY("账号与安全"),
 }
 
+private const val DEVICE_REFRESH_INTERVAL_MS = 5_000L
+private const val SESSION_CHECK_INTERVAL_MS = 15_000L
+
 class MainActivity : ComponentActivity() {
     private lateinit var sessionStore: ControllerSessionStore
     private var state by mutableStateOf(ControllerScreenState())
     private var monitorJob: Job? = null
     private var batchMonitorJob: Job? = null
     private var recoveryStatusJob: Job? = null
+    private var deviceRefreshInFlight = false
+    private var sessionCheckInFlight = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -215,6 +220,8 @@ class MainActivity : ComponentActivity() {
                         onRequestRecoveryCode = ::requestRecoveryCode,
                         onResetPassword = ::resetPassword,
                         onRefresh = ::refreshDashboard,
+                        onRefreshDevices = ::refreshDevices,
+                        onCheckSession = ::checkSession,
                         onRefreshRunHistory = ::refreshRunHistory,
                         onSaveProfile = ::saveProfile,
                         onChangePassword = ::changePassword,
@@ -347,8 +354,9 @@ class MainActivity : ComponentActivity() {
                 val devices = api.devices(session.token)
                 val tasks = api.tasks(session.token)
                 val profile = api.profile(session.token)
-                val selectedId = previousDeviceId?.takeIf { id -> devices.any { it.id == id } }
-                    ?: orderControllerDevices(devices).firstOrNull()?.id
+                val availableDevices = visibleControllerDevices(devices)
+                val selectedId = previousDeviceId?.takeIf { id -> availableDevices.any { it.id == id } }
+                    ?: orderControllerDevices(availableDevices).firstOrNull()?.id
                 Pair(
                     Triple(
                         devices,
@@ -359,10 +367,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
             val (devices, tasks, activeRun) = dashboard
-            val selectedDevice = state.selectedDeviceId?.takeIf { id -> devices.any { it.id == id } }
-                ?: orderControllerDevices(devices).firstOrNull()?.id
+            val availableDevices = visibleControllerDevices(devices)
+            val selectedDevice = state.selectedDeviceId?.takeIf { id -> availableDevices.any { it.id == id } }
+                ?: orderControllerDevices(availableDevices).firstOrNull()?.id
             val availableTasks = tasks.filter { it.status == "published" && it.version.isNotBlank() }
-            val deviceIds = devices.mapTo(mutableSetOf()) { it.id }
+            val onlineDeviceIds = availableDevices.filter { it.status == "online" }.mapTo(mutableSetOf()) { it.id }
             val taskIds = availableTasks.mapTo(mutableSetOf()) { it.id }
             val updatedSession = session.copy(
                 token = sessionStore.read()?.token ?: session.token,
@@ -377,7 +386,7 @@ class MainActivity : ComponentActivity() {
                 devices = devices,
                 tasks = tasks,
                 selectedDeviceId = selectedDevice,
-                selectedDeviceIds = state.selectedDeviceIds.intersect(deviceIds),
+                selectedDeviceIds = state.selectedDeviceIds.intersect(onlineDeviceIds),
                 selectedTaskIds = state.selectedTaskIds.intersect(taskIds),
                 run = activeRun,
                 loading = false,
@@ -403,6 +412,60 @@ class MainActivity : ComponentActivity() {
         val session = state.session ?: return
         state = state.copy(loading = true)
         lifecycleScope.launch { loadDashboard(session) }
+    }
+
+    private fun refreshDevices() {
+        val session = state.session ?: return
+        if (deviceRefreshInFlight || state.loading) return
+        deviceRefreshInFlight = true
+        lifecycleScope.launch {
+            try {
+                val devices = withContext(Dispatchers.IO) {
+                    controllerApi(session).devices(session.token)
+                }
+                if (state.session?.email == session.email && state.session?.apiUrl == session.apiUrl) {
+                    val visibleDevices = visibleControllerDevices(devices)
+                    val onlineDeviceIds = visibleDevices
+                        .filter { it.status == "online" }
+                        .mapTo(mutableSetOf()) { it.id }
+                    val selectedDeviceId = state.selectedDeviceId
+                        ?.takeIf { id -> visibleDevices.any { it.id == id } }
+                        ?: orderControllerDevices(visibleDevices).firstOrNull()?.id
+                    state = state.copy(
+                        devices = devices,
+                        selectedDeviceId = selectedDeviceId,
+                        selectedDeviceIds = state.selectedDeviceIds.intersect(onlineDeviceIds),
+                    )
+                }
+            } catch (error: Exception) {
+                if (state.session?.email == session.email && state.session?.apiUrl == session.apiUrl &&
+                    (error !is ControllerApiException || error.statusCode != 401)
+                ) {
+                    state = state.copy(error = error.message ?: "刷新设备状态失败")
+                }
+            } finally {
+                deviceRefreshInFlight = false
+            }
+        }
+    }
+
+    private fun checkSession() {
+        val session = state.session ?: return
+        if (sessionCheckInFlight) return
+        sessionCheckInFlight = true
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    controllerApi(session).profile(session.token)
+                }
+            } catch (error: Exception) {
+                if (error !is ControllerApiException || error.statusCode != 401) {
+                    state = state.copy(error = error.message ?: "验证登录状态失败")
+                }
+            } finally {
+                sessionCheckInFlight = false
+            }
+        }
     }
 
     private fun refreshRunHistory() {
@@ -440,7 +503,13 @@ class MainActivity : ComponentActivity() {
             session.apiUrl,
             initialAccessToken = sessionStore.read()?.token ?: session.token,
             onAccessTokenRefreshed = { refreshedToken ->
-                sessionStore.save(session.copy(token = refreshedToken))
+                val updatedSession = session.copy(token = refreshedToken)
+                sessionStore.save(updatedSession)
+                runOnUiThread {
+                    if (state.session?.email == session.email && state.session?.apiUrl == session.apiUrl) {
+                        state = state.copy(session = updatedSession)
+                    }
+                }
             },
             onSessionExpired = {
                 runOnUiThread {
@@ -842,6 +911,8 @@ private fun ControllerScreen(
     onRequestRecoveryCode: () -> Unit,
     onResetPassword: () -> Unit,
     onRefresh: () -> Unit,
+    onRefreshDevices: () -> Unit,
+    onCheckSession: () -> Unit,
     onRefreshRunHistory: () -> Unit,
     onSaveProfile: () -> Unit,
     onChangePassword: () -> Unit,
@@ -869,8 +940,18 @@ private fun ControllerScreen(
         it.name == selectedDestinationName
     } ?: ControllerDestination.DEVICES
     LaunchedEffect(selectedDestination, state.session?.apiUrl, state.session?.email) {
-        if (selectedDestination == ControllerDestination.RUNS && state.session != null) {
-            onRefreshRunHistory()
+        val session = state.session ?: return@LaunchedEffect
+        if (selectedDestination == ControllerDestination.RUNS) onRefreshRunHistory()
+        while (
+            state.session?.apiUrl == session.apiUrl &&
+            state.session?.email == session.email
+        ) {
+            delay(if (selectedDestination == ControllerDestination.DEVICES) DEVICE_REFRESH_INTERVAL_MS else SESSION_CHECK_INTERVAL_MS)
+            if (selectedDestination == ControllerDestination.DEVICES) {
+                onRefreshDevices()
+            } else {
+                onCheckSession()
+            }
         }
     }
     val accountPage = ControllerAccountPage.entries.firstOrNull {

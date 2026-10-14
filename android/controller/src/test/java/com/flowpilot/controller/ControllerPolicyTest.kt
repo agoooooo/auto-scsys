@@ -5,6 +5,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import androidx.compose.ui.graphics.Color
+import java.net.ServerSocket
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.concurrent.thread
 
 class ControllerPolicyTest {
     @Test
@@ -39,6 +42,38 @@ class ControllerPolicyTest {
             normalizeControllerApiUrl("http://localhost:8001", allowCleartext = false)
         }.isSuccess)
         assertFalse(runCatching { normalizeControllerApiUrl("https://example.com/api") }.isSuccess)
+    }
+
+    @Test
+    fun expiredSessionDuringTokenRefreshNotifiesTheActivityToReturnToLogin() {
+        val callbackCount = AtomicInteger()
+        ServerSocket(0).use { server ->
+            val responder = thread {
+                repeat(2) {
+                    server.accept().use { socket ->
+                        val reader = socket.getInputStream().bufferedReader()
+                        while (reader.readLine()?.isNotEmpty() == true) Unit
+                        val body = """{"detail":"session expired"}""".toByteArray()
+                        socket.getOutputStream().write(
+                            ("HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\n" +
+                                "Content-Length: ${body.size}\r\nConnection: close\r\n\r\n").toByteArray() + body,
+                        )
+                    }
+                }
+            }
+            val result = runCatching {
+                ControllerApi(
+                    "http://127.0.0.1:${server.localPort}",
+                    initialAccessToken = "expired-token",
+                    onSessionExpired = { callbackCount.incrementAndGet() },
+                ).profile("expired-token")
+            }
+            responder.join(5_000)
+
+            assertTrue(result.exceptionOrNull() is ControllerApiException)
+            assertEquals(1, callbackCount.get())
+            assertFalse(responder.isAlive)
+        }
     }
 
     @Test

@@ -68,7 +68,10 @@ internal fun shouldRefreshAccessToken(
     refreshLeadSeconds: Long,
 ): Boolean = expiresAtSeconds <= nowSeconds + refreshLeadSeconds
 
-internal class ApiClient(baseUrl: String) {
+internal class ApiClient(
+    baseUrl: String,
+    private val onSessionExpired: () -> Unit = {},
+) {
     private val baseUrl = normalizeApiBaseUrl(baseUrl)
 
     fun register(name: String, email: String, password: String) {
@@ -334,6 +337,7 @@ internal class ApiClient(baseUrl: String) {
         token: String? = null,
         payload: JSONObject? = null,
     ): String = exchange(path, method, token, payload).let { response ->
+        if (response.status == 401 && token != null) onSessionExpired()
         if (response.status !in 200..299) throw response.error()
         if (response.body.isEmpty()) throw IOException("服务器返回了空响应")
         response.body.toString(Charsets.UTF_8)
@@ -414,6 +418,9 @@ internal class ApiClient(baseUrl: String) {
 }
 
 internal class ApiException(message: String, val statusCode: Int) : IOException(message)
+
+internal fun markDeviceOnlineAfterHeartbeat(device: BoundDevice?, heartbeatDeviceId: String): BoundDevice? =
+    device?.takeIf { it.id == heartbeatDeviceId }?.copy(status = "online") ?: device
 
 internal fun verifyScriptSha256(source: String, expectedHash: String) {
     val actualHash = MessageDigest.getInstance("SHA-256")

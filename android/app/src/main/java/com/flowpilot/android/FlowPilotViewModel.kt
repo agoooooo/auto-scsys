@@ -48,6 +48,9 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
     private val _state = MutableStateFlow(AppUiState())
     val state: StateFlow<AppUiState> = _state.asStateFlow()
     private var taskSyncInFlight = false
+    private var sessionCheckInFlight = false
+
+    private fun apiClient(baseUrl: String) = ApiClient(baseUrl, ::expireSession)
 
     init {
         restoreRememberedLogin()
@@ -70,7 +73,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         )
         viewModelScope.launch {
             try {
-                val client = ApiClient(normalizedUrl)
+                val client = apiClient(normalizedUrl)
                 val login = withContext(Dispatchers.IO) { client.login(email.trim(), password) }
                 if (login.user.role != "user") {
                     throw IllegalArgumentException("Android 客户端仅支持普通用户账号，请使用后台管理员账号管理任务")
@@ -135,7 +138,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    ApiClient(normalizedUrl).register(name.trim(), email.trim(), password)
+                    apiClient(normalizedUrl).register(name.trim(), email.trim(), password)
                 }
                 _state.value = _state.value.copy(
                     loading = false,
@@ -160,7 +163,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
             try {
                 val (session, device) = withContext(Dispatchers.IO) {
                     val session = freshSession()
-                    val client = ApiClient(session.apiBaseUrl)
+                    val client = apiClient(session.apiBaseUrl)
                     client.registerDevice(
                         token = session.token,
                         name = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
@@ -171,7 +174,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                     sessionStore.saveDeviceId(user.id, device.id)
                 }
                 val taskSync = withContext(Dispatchers.IO) {
-                    ApiClient(session.apiBaseUrl).syncTasks(session.token, device.id)
+                    apiClient(session.apiBaseUrl).syncTasks(session.token, device.id)
                 }
                 _state.value = _state.value.copy(
                     loading = false,
@@ -201,7 +204,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
             try {
                 val session = withContext(Dispatchers.IO) { freshSession() }
                 val taskSync = withContext(Dispatchers.IO) {
-                    ApiClient(session.apiBaseUrl).syncTasks(session.token, device.id)
+                    apiClient(session.apiBaseUrl).syncTasks(session.token, device.id)
                 }
                 _state.value = _state.value.copy(
                     loading = if (showLoading) false else _state.value.loading,
@@ -230,7 +233,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
             try {
                 val session = withContext(Dispatchers.IO) { freshSession() }
                 val requests = withContext(Dispatchers.IO) {
-                    ApiClient(session.apiBaseUrl).also { client ->
+                    apiClient(session.apiBaseUrl).also { client ->
                         client.heartbeat(session.token, device.id)
                     }.pendingRemoteRuns(session.token, device.id)
                 }
@@ -238,6 +241,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                 _state.value = _state.value.copy(
                     token = session.token,
                     tokenExpiresAt = session.tokenExpiresAt,
+                    device = markDeviceOnlineAfterHeartbeat(_state.value.device, device.id),
                     remoteRuns = requests,
                     remoteRunsLoading = false,
                     remoteRunsError = null,
@@ -268,7 +272,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
             try {
                 val session = withContext(Dispatchers.IO) { freshSession() }
                 withContext(Dispatchers.IO) {
-                    ApiClient(session.apiBaseUrl).unbindDevice(session.token, device.id)
+                    apiClient(session.apiBaseUrl).unbindDevice(session.token, device.id)
                 }
                 sessionStore.clearDeviceId(user.id)
                 RemoteRunMonitorService.stop(getApplication())
@@ -297,7 +301,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
             viewModelScope.launch {
                 try {
                     withContext(Dispatchers.IO) {
-                        ApiClient(session.apiBaseUrl).logout(session.token)
+                        apiClient(session.apiBaseUrl).logout(session.token)
                     }
                 } catch (exception: Exception) {
                     _state.value = _state.value.copy(
@@ -347,7 +351,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
             try {
                 val session = withContext(Dispatchers.IO) { freshSession() }
                 val updatedUser = withContext(Dispatchers.IO) {
-                    val client = ApiClient(session.apiBaseUrl)
+                    val client = apiClient(session.apiBaseUrl)
                     client.updateProfile(session.token, name.trim(), email.trim(), currentPassword)
                     client.getCurrentUser(session.token)
                 }
@@ -380,7 +384,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
             try {
                 val session = withContext(Dispatchers.IO) { freshSession() }
                 withContext(Dispatchers.IO) {
-                    ApiClient(session.apiBaseUrl).changePassword(session.token, currentPassword, newPassword)
+                    apiClient(session.apiBaseUrl).changePassword(session.token, currentPassword, newPassword)
                 }
                 _state.value = _state.value.copy(
                     token = session.token,
@@ -401,6 +405,31 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         _state.value = _state.value.copy(runStatus = RunStatusStore(getApplication()).snapshot())
     }
 
+    fun checkSession() {
+        val current = _state.value
+        val token = current.token ?: return
+        if (sessionCheckInFlight) return
+        sessionCheckInFlight = true
+        viewModelScope.launch {
+            try {
+                val session = withContext(Dispatchers.IO) { freshSession() }
+                val user = withContext(Dispatchers.IO) {
+                    apiClient(session.apiBaseUrl).getCurrentUser(session.token)
+                }
+                if (_state.value.token != token) return@launch
+                _state.value = _state.value.copy(
+                    user = user,
+                    token = session.token,
+                    tokenExpiresAt = session.tokenExpiresAt,
+                )
+            } catch (exception: Exception) {
+                if (exception is ApiException && exception.statusCode == 401) expireSession()
+            } finally {
+                sessionCheckInFlight = false
+            }
+        }
+    }
+
     fun refreshRunHistory() {
         val current = _state.value
         val userId = current.user?.id ?: return
@@ -410,7 +439,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
             try {
                 val session = withContext(Dispatchers.IO) { freshSession() }
                 val runs = withContext(Dispatchers.IO) {
-                    ApiClient(session.apiBaseUrl).listRuns(session.token)
+                    apiClient(session.apiBaseUrl).listRuns(session.token)
                 }
                 if (_state.value.user?.id != userId) return@launch
                 _state.value = _state.value.copy(
@@ -437,12 +466,12 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
     suspend fun createLocalRun(task: AvailableTask): String = withContext(Dispatchers.IO) {
         val session = freshSession()
         val device = requireNotNull(_state.value.device) { "当前账号尚未绑定此设备" }
-        ApiClient(session.apiBaseUrl).startLocalRun(session.token, device.id, task)
+        apiClient(session.apiBaseUrl).startLocalRun(session.token, device.id, task)
     }
 
     suspend fun approveRemoteRun(requestId: String): String? = withContext(Dispatchers.IO) {
         val session = freshSession()
-        ApiClient(session.apiBaseUrl).approveRemoteRun(
+        apiClient(session.apiBaseUrl).approveRemoteRun(
             session.token,
             requestId,
         )
@@ -450,7 +479,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
 
     suspend fun failRun(runId: String, message: String) = withContext(Dispatchers.IO) {
         val session = freshSession()
-        ApiClient(session.apiBaseUrl).updateRun(session.token, runId, "failure", message.take(500))
+        apiClient(session.apiBaseUrl).updateRun(session.token, runId, "failure", message.take(500))
     }
 
     fun showError(message: String) {
@@ -491,7 +520,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         )
         viewModelScope.launch {
             try {
-                val client = ApiClient(stored.apiBaseUrl)
+                val client = apiClient(stored.apiBaseUrl)
                 var token = stored.token
                 var expiresAt = stored.tokenExpiresAt
                 if (shouldRefreshAccessToken(
@@ -553,10 +582,26 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         ) {
             return store
         }
-        val refreshed = ApiClient(store.apiBaseUrl).refreshToken(store.token)
+        val refreshed = apiClient(store.apiBaseUrl).refreshToken(store.token)
         val expiresAt = System.currentTimeMillis() / 1000 + refreshed.second
         sessionStore.updateToken(refreshed.first, expiresAt)
         return store.copy(token = refreshed.first, tokenExpiresAt = expiresAt)
+    }
+
+    private fun expireSession() {
+        val current = _state.value
+        if (current.token == null) return
+        sessionStore.clear()
+        RemoteRunMonitorService.stop(getApplication())
+        OcrStandbyService.stop(getApplication())
+        val remembered = sessionStore.readRememberedLogin()
+        _state.value = AppUiState(
+            apiBaseUrl = remembered?.apiBaseUrl ?: current.apiBaseUrl,
+            loginEmail = remembered?.email.orEmpty(),
+            loginPassword = remembered?.password.orEmpty(),
+            rememberLoginInfo = remembered != null,
+            error = "登录已过期，请重新登录",
+        )
     }
 
     private companion object {

@@ -289,19 +289,15 @@ internal class ControllerApi(
             val status = connection.responseCode
             if (status == 401 && effectiveToken != null && path != "/auth/refresh" && allowRefresh) {
                 connection.disconnect()
-                val refreshed = try {
-                    JSONObject(
-                        request("/auth/refresh", "POST", effectiveToken, allowRefresh = false),
-                    ).optString("access_token").takeIf(String::isNotBlank)
-                        ?: throw IOException("登录已过期，请重新登录")
-                } catch (error: ControllerApiException) {
-                    if (error.statusCode == 401) onSessionExpired()
-                    throw error
-                }
+                val refreshed = JSONObject(
+                    request("/auth/refresh", "POST", effectiveToken, allowRefresh = false),
+                ).optString("access_token").takeIf(String::isNotBlank)
+                    ?: throw IOException("登录已过期，请重新登录")
                 latestAccessToken = refreshed
                 onAccessTokenRefreshed(refreshed)
                 return request(path, method, refreshed, payload, idempotencyKey, allowRefresh = false)
             }
+            if (status == 401 && effectiveToken != null) onSessionExpired()
             if (status == 204) return ""
             val body = readLimited(if (status in 200..299) connection.inputStream else connection.errorStream)
             if (status !in 200..299) {

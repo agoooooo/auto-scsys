@@ -265,6 +265,7 @@ class MainActivity : ComponentActivity() {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 while (isActive) {
                     delay(FOREGROUND_REMOTE_POLL_INTERVAL_MILLIS)
+                    flowPilotViewModel.checkSession()
                     flowPilotViewModel.refreshRemoteRuns()
                 }
             }
@@ -318,6 +319,7 @@ class MainActivity : ComponentActivity() {
         remoteMonitoring.value = RemoteRunMonitorService.isMonitoring(this)
         ocrStandbyActive.value = OcrStandbyService.isActive(this)
         OcrStandbyService.consumeLastError(this)?.let(flowPilotViewModel::showError)
+        flowPilotViewModel.checkSession()
         flowPilotViewModel.refreshRunStatus()
         flowPilotViewModel.refreshRunHistory()
         flowPilotViewModel.refreshTasks(showLoading = false)
