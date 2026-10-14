@@ -1176,13 +1176,25 @@ def test_publish_script_validates_and_checks_content_hash(client):
     )
     assert published.status_code == 201
     assert published.json()["sha256"] == hashlib.sha256(content).hexdigest()
+    source = client.get(
+        "/tasks/t-002/versions/v1.0.0/source",
+        headers=auth(admin),
+    )
+    assert source.status_code == 200
+    assert source.content == content
+    assert source.headers["x-content-sha256"] == hashlib.sha256(content).hexdigest()
+    assert source.headers["cache-control"] == "no-store"
+    user = login(client)
+    assert client.get(
+        "/tasks/t-002/versions/v1.0.0/source",
+        headers=auth(user),
+    ).status_code == 404
     assert client.post("/tasks/t-002/grants/u-1001", headers=auth(admin)).status_code == 201
     assigned = client.post(
         "/tasks/t-002/publications",
         headers=auth(admin),
         json={"device_id": "d-001", "version": "v1.0.0"},
     )
-    user = login(client)
     assert client.post(
         f"/devices/d-001/publications/{assigned.json()['id']}/accept",
         headers=auth(user),
@@ -1251,8 +1263,20 @@ def test_s3_script_storage_keeps_content_out_of_database_and_verifies_download_h
     assert downloaded.status_code == 200
     assert downloaded.content == content
     assert downloaded.headers["x-content-sha256"] == hashlib.sha256(content).hexdigest()
+    source = client.get(
+        f"/tasks/{task['id']}/versions/v1.0.0/source",
+        headers=auth(owner),
+    )
+    assert source.status_code == 200
+    assert source.content == content
+    assert source.headers["x-content-sha256"] == hashlib.sha256(content).hexdigest()
 
     storage.objects[version["storage_key"]] = b"tampered"
+    corrupt_source = client.get(
+        f"/tasks/{task['id']}/versions/v1.0.0/source",
+        headers=auth(owner),
+    )
+    assert corrupt_source.status_code == 500
     corrupt = client.get(
         f"/devices/d-001/tasks/{task['id']}/versions/v1.0.0/content",
         headers=auth(owner),

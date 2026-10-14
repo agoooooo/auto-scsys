@@ -1,6 +1,6 @@
 # FlowPilot API
 
-这是 FlowPilot 的 FastAPI 服务端。默认开发模式在本机使用 SQLite，并预置演示账号、设备和任务；生产部署可使用 PostgreSQL 和 S3 兼容对象存储。遗留的有限预授权数据和 API 为旧客户端保留，不参与当前 Android 客户端的远程运行判断。脚本上传后只做 `.py` 格式、大小和 SHA-256 校验，不会执行脚本。
+这是 FlowPilot 的 FastAPI 服务端。默认开发模式在本机使用 SQLite，并预置本地测试账号、设备和任务；生产部署使用 PostgreSQL 和 S3 兼容对象存储，Web 管理后台由 React/TypeScript/Vite 构建并以 Nginx 静态托管。遗留的有限预授权数据和 API 为旧客户端保留，不参与当前 Android 客户端的远程运行判断。脚本上传后只做 `.py` 格式、大小和 SHA-256 校验，不会执行脚本。
 
 **当前实现尚不代表已具备全部生产运营保障。**登录及密码重置失败限制目前依赖数据库窗口计数，不替代边缘/API 网关限流；管理员 MFA、加密异地备份与恢复演练、监控告警和安全评审仍待落实。邮箱密码找回接口已实现，但只有完整配置 SMTP 后才开放；未配置时会明确返回 `503`。验证码仅保存服务端 HMAC 摘要、10 分钟有效、最多尝试 5 次，成功后撤销所有现有会话。登录创建 30 天绝对有效的服务端会话，访问令牌每小时过期并可在会话有效期间续期；用户退出会撤销当前会话，管理员可撤销普通用户所有会话，停用账号也会撤销其会话。生产 Web 上传及 Android 下载使用短时预签名 URL；API 在上传完成时核验内容大小及 SHA-256。SQLite 开发及兼容接口仍通过 API 上传/下载，单脚本限制为 2 MiB。Android Release 客户端必须使用 HTTPS API 地址。
 
@@ -25,7 +25,7 @@ FLOWPILOT_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32)
   uvicorn server.app:app --host 127.0.0.1 --port 8001
 ```
 
-首次启动会初始化演示账号、设备和任务。普通用户的订单 OCR 演示任务发布了 `v1.7.0`：脚本会打开抖音、等待目标应用进入前台，在设备本地识别界面并显示匹配到的常见订单状态；不执行点击、不上传 OCR 文本，服务端只接收通用运行状态。交互式 API 文档位于 <http://127.0.0.1:8001/docs>。
+首次启动会初始化本地测试账号、设备和任务。普通用户的订单 OCR 测试任务发布了 `v1.7.0`：脚本会打开抖音、等待目标应用进入前台，在设备本地识别界面并显示匹配到的常见订单状态；不执行点击、不上传 OCR 文本，服务端只接收通用运行状态。交互式 API 文档位于 <http://127.0.0.1:8001/docs>。
 
 | 角色 | 本地演示账号邮箱 |
 | --- | --- |
@@ -50,7 +50,7 @@ docker compose --env-file .env.staging -p flowpilot-staging -f compose.staging.y
 curl --fail http://127.0.0.1:18001/health/ready
 ```
 
-The console is `http://127.0.0.1:18000/demo/`. On its login screen, set the API address to `http://127.0.0.1:18001`. On a fresh database, initialize a dedicated staging administrator once:
+The production console build is served at `http://127.0.0.1:18000/`; `/api/*` is proxied to the private staging API at port `18001`. The browser login only accepts a server-verified administrator account. On a fresh database, initialize a dedicated staging administrator once:
 
 ```bash
 docker compose --env-file .env.staging -p flowpilot-staging -f compose.staging.yaml exec api python -m server.bootstrap_admin

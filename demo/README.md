@@ -1,16 +1,16 @@
-# FlowPilot 产品 Demo
+# FlowPilot 旧版浏览器原型
 
-这是一个可连接本地 API 的浏览器原型，也保留离线演示模式。可以在管理后台与 Android 手机端视图之间切换，体验用户、设备、任务发布、暂停和任务运行流程。
+此目录保留用于旧版 UI/业务逻辑回归的原生 JavaScript 原型，不再作为产品后台或生产部署入口。生产管理控制台位于 [`../console/`](../console/)，由 `make dev` 启动。
 
 ## 运行
 
-在仓库根目录启动一个静态文件服务器：
+如需单独检查旧原型：
 
 ```bash
 python3 -m http.server 8000
 ```
 
-然后访问 <http://localhost:8000/demo/>。原型不需要安装依赖。
+然后访问 <http://localhost:8000/demo/>。该原型的离线模式仅用于测试，不得部署为生产后台。
 
 FastAPI 服务端可按 [`server/README.md`](../server/README.md) 单独运行，也可在仓库根目录用 `make dev` 同时启动。LAN 访问时，登录界面会默认将当前页面主机名配合 API 端口 `8001` 作为服务端地址；也可以选择“仅浏览离线演示”。
 

@@ -1579,6 +1579,38 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         )
         return [dict(row) for row in rows]
 
+    @app.get("/tasks/{task_id}/versions/{version}/source")
+    def get_task_version_source(
+        task_id: str,
+        version: str,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        _task_for_user(db, task_id, user, require_published=False)
+        row = db.execute(
+            "SELECT filename,content,storage_key,sha256 FROM task_versions WHERE task_id=? AND version=?",
+            (task_id, version),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="脚本版本不存在")
+        script_content = (
+            app.state.script_storage.get(row["storage_key"])
+            if row["storage_key"] and app.state.script_storage
+            else row["content"]
+        )
+        if not hmac.compare_digest(hashlib.sha256(script_content).hexdigest(), row["sha256"]):
+            LOGGER.error("Stored script checksum mismatch for task %s version %s", task_id, version)
+            raise HTTPException(status_code=500, detail="脚本存储校验失败")
+        return Response(
+            content=script_content,
+            media_type="text/x-python",
+            headers={
+                "Content-Disposition": _content_disposition(row["filename"]),
+                "X-Content-SHA256": row["sha256"],
+                "Cache-Control": "no-store",
+            },
+        )
+
     @app.patch("/tasks/{task_id}")
     def set_task_status(
         task_id: str,

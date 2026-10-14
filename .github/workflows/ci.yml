@@ -27,6 +27,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - name: Install production console dependencies
+        run: npm ci --prefix console
       - name: Run server and Web tests
         run: make test
 

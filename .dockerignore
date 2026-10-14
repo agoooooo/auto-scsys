@@ -3,6 +3,8 @@
 **/__pycache__
 .pytest_cache
 android
+console/node_modules
+console/dist
 .env
 server/flowpilot.sqlite3
 server/flowpilot.sqlite3-shm

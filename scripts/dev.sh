@@ -52,6 +52,7 @@ mapfile -t LAN_IP_ADDRESSES <<< "$LAN_IPS"
 LAN_IP="${LAN_IP_ADDRESSES[0]:-}"
 
 export FLOWPILOT_DB_PATH="${FLOWPILOT_DB_PATH:-$ROOT_DIR/server/flowpilot.sqlite3}"
+export FLOWPILOT_API_PROXY="http://127.0.0.1:$API_PORT"
 if [[ -z "${FLOWPILOT_TOKEN_SECRET:-}" ]]; then
   FLOWPILOT_TOKEN_SECRET="$("$PYTHON" -c 'import secrets; print(secrets.token_hex(32))')"
   export FLOWPILOT_TOKEN_SECRET
@@ -67,7 +68,7 @@ fi
 cd "$ROOT_DIR"
 "$PYTHON" -m uvicorn server.app:app --host "$API_HOST" --port "$API_PORT" &
 API_PID=$!
-"$PYTHON" -m http.server "$WEB_PORT" --bind "$WEB_HOST" --directory "$ROOT_DIR" &
+npm --prefix "$ROOT_DIR/console" run dev -- --host "$WEB_HOST" --port "$WEB_PORT" &
 WEB_PID=$!
 
 cleanup() {
@@ -83,10 +84,10 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 printf 'FlowPilot API:  http://127.0.0.1:%s/docs\n' "$API_PORT"
-printf 'FlowPilot demo: http://127.0.0.1:%s/demo/\n' "$WEB_PORT"
+printf 'FlowPilot console: http://127.0.0.1:%s/\n' "$WEB_PORT"
 if [[ -n "$LAN_IP" ]]; then
   printf 'LAN API:        http://%s:%s/docs\n' "$LAN_IP" "$API_PORT"
-  printf 'LAN demo:       http://%s:%s/demo/\n' "$LAN_IP" "$WEB_PORT"
+  printf 'LAN console:    http://%s:%s/\n' "$LAN_IP" "$WEB_PORT"
 else
   printf 'LAN address could not be detected; use `ip addr` to find this machine address.\n'
 fi

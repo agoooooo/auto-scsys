@@ -1,7 +1,7 @@
 PYTHON ?= python3
 VENV_PYTHON := .venv/bin/python
 
-.PHONY: setup dev test
+.PHONY: setup console-install dev test
 
 setup:
 	@if [ ! -x "$(VENV_PYTHON)" ]; then $(PYTHON) -m venv .venv; fi
@@ -11,9 +11,15 @@ setup:
 	fi
 	@$(VENV_PYTHON) -m pip install -r server/requirements.txt
 
-dev: setup
+console-install:
+	@if [ ! -d console/node_modules ]; then npm ci --prefix console; fi
+
+dev: setup console-install
 	@./scripts/dev.sh
 
-test: setup
+test: setup console-install
 	@$(VENV_PYTHON) -m pytest server/tests -q
 	@node --test demo/*.test.mjs
+	@npm --prefix console run typecheck
+	@npm --prefix console test
+	@npm --prefix console run build
