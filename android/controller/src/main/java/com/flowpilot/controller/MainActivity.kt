@@ -1350,12 +1350,7 @@ private fun ControllerScreen(
                         ControllerQuickStartStep("3", "查看结果", "到“运行”页查看排队和执行状态")
                     }
                 }
-                val visibleDevices = visibleControllerDevices(state.devices)
-                Text("受控设备（${visibleDevices.size}）", style = MaterialTheme.typography.titleMedium)
-                val orderedDevices = orderControllerDevices(visibleDevices)
-                val selectedOnlineCount = orderedDevices.count {
-                    it.id in state.selectedDeviceIds && it.status == "online"
-                }
+                
                 Text(
                     "已选 ${state.selectedDeviceIds.size} 台 · 在线可派发 $selectedOnlineCount 台",
                     style = MaterialTheme.typography.bodySmall,
