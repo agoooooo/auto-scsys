@@ -1135,11 +1135,11 @@ private fun ControllerScreen(
                                         defaultElevation = 2.dp,
                                         disabledElevation = 2.dp,
                                     ),
-                                    border = if (selected) {
-                                        BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
-                                    } else {
-                                        null
-                                    },
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (selected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.outline,
+                                    ),
                                 ) {
                                     Row(
                                         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
@@ -1204,11 +1204,11 @@ private fun ControllerScreen(
                                     },
                                 ),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                                border = if (selected) {
-                                    BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
-                                } else {
-                                    null
-                                },
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outline,
+                                ),
                             ) {
                                 Column(
                                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
