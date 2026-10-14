@@ -2,7 +2,6 @@ package com.flowpilot.android
 
 import android.app.Application
 import android.os.Build
-import java.io.IOException
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -29,7 +28,6 @@ internal data class AppUiState(
     val runHistoryError: String? = null,
     val remoteRunsLoading: Boolean = false,
     val remoteRunsError: String? = null,
-    val scriptReview: ScriptReview? = null,
     val loading: Boolean = false,
     val error: String? = null,
     val runStatus: RunStatus? = null,
@@ -44,12 +42,6 @@ private fun isEmulator(): Boolean =
         Build.MODEL.contains("Android SDK built for", ignoreCase = true) ||
         Build.MANUFACTURER.contains("Genymotion", ignoreCase = true) ||
         (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
-
-internal data class ScriptReview(
-    val task: AvailableTask,
-    val script: DownloadedScript,
-    val cacheNotice: String? = null,
-)
 
 internal class FlowPilotViewModel(application: Application) : AndroidViewModel(application) {
     private val sessionStore = SessionStore(application)
@@ -130,8 +122,8 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
             _state.value = _state.value.copy(error = "两次输入的密码不一致", notice = null)
             return
         }
-        if (password.length < 12) {
-            _state.value = _state.value.copy(error = "密码至少需要 12 个字符", notice = null)
+        if (password.length < 6) {
+            _state.value = _state.value.copy(error = "密码至少需要 6 个字符", notice = null)
             return
         }
         _state.value = _state.value.copy(
@@ -299,70 +291,6 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         }
     }
 
-    fun inspectScript(task: AvailableTask, allowOlderCachedVersion: Boolean = true) {
-        if (_state.value.loading) return
-        _state.value = _state.value.copy(loading = true, error = null, scriptReview = null)
-        viewModelScope.launch {
-            try {
-                val (session, user, device) = withContext(Dispatchers.IO) {
-                    Triple(
-                        freshSession(),
-                        requireNotNull(_state.value.user) { "登录状态已失效，请重新登录" },
-                        requireNotNull(_state.value.device) { "当前账号尚未绑定此设备" },
-                    )
-                }
-                val review = withContext(Dispatchers.IO) {
-                    val client = ApiClient(session.apiBaseUrl)
-                    val cache = ScriptCache(getApplication<Application>().filesDir.resolve(SCRIPT_CACHE_DIRECTORY))
-                    val scope = ScriptCacheScope(session.apiBaseUrl, user.id, device.id)
-                    try {
-                        val script = client.downloadScript(session.token, device.id, task)
-                        val cacheNotice = try {
-                            cache.save(scope, task, script)
-                            null
-                        } catch (exception: IOException) {
-                            "脚本已校验，但无法保存本地缓存：${exception.message ?: "存储不可用"}"
-                        }
-                        ScriptReview(task, script, cacheNotice)
-                    } catch (exception: Exception) {
-                        if (exception is ApiException && exception.statusCode in 400..499) throw exception
-                        val cached = cache.load(scope, task)?.let {
-                            ScriptReview(task, it, "无法连接服务器，使用本机保存的已校验版本。运行仍需服务端授权。")
-                        }
-                            ?: if (allowOlderCachedVersion) {
-                                cache.latest(scope, task)?.let {
-                                    ScriptReview(
-                                        it.task,
-                                        it.script,
-                                        "无法下载请求版本 ${task.version}，改用本机最近一次成功校验的版本 ${it.task.version}。运行仍需服务端授权。",
-                                    )
-                                }
-                            } else {
-                                null
-                            }
-                        cached ?: throw exception
-                    }
-                }
-                _state.value = _state.value.copy(
-                    loading = false,
-                    token = session.token,
-                    tokenExpiresAt = session.tokenExpiresAt,
-                    scriptReview = review,
-                )
-            } catch (exception: Exception) {
-                _state.value = _state.value.copy(
-                    loading = false,
-                    scriptReview = null,
-                    error = exception.message ?: "无法下载并校验脚本",
-                )
-            }
-        }
-    }
-
-    fun clearScriptReview() {
-        _state.value = _state.value.copy(scriptReview = null)
-    }
-
     fun logout() {
         val current = _state.value
         sessionStore.read()?.let { session ->
@@ -443,8 +371,8 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         val current = _state.value
         if (current.loading) return
         if (current.user == null) return
-        if (currentPassword.isBlank() || newPassword.length < 12) {
-            _state.value = current.copy(error = "请输入当前密码，并设置至少 12 位的新密码", notice = null)
+        if (currentPassword.isBlank() || newPassword.length < 6) {
+            _state.value = current.copy(error = "请输入当前密码，并设置至少 6 位的新密码", notice = null)
             return
         }
         _state.value = current.copy(loading = true, error = null, notice = null)

@@ -414,8 +414,8 @@ def create_initial_admin(db_path: str | Path, name: str, email: str, password: s
         raise ValueError("管理员姓名必须为 1–80 个字符")
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized_email):
         raise ValueError("管理员邮箱格式无效")
-    if len(password) < 12 or len(password) > 256:
-        raise ValueError("管理员密码必须为 12–256 个字符")
+    if len(password) < 6 or len(password) > 256:
+        raise ValueError("管理员密码必须为 6–256 个字符")
 
     _initialize_database(database_path, seed_demo=False)
     if not database_path.startswith(POSTGRES_SCHEMES):
@@ -511,7 +511,7 @@ class LoginInput(BaseModel):
 class RegisterInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     email: str = Field(min_length=3, max_length=254)
-    password: str = Field(min_length=12, max_length=256)
+    password: str = Field(min_length=6, max_length=256)
 
 
 class ProfileUpdateInput(BaseModel):
@@ -522,7 +522,7 @@ class ProfileUpdateInput(BaseModel):
 
 class ChangePasswordInput(BaseModel):
     current_password: str = Field(min_length=1, max_length=256)
-    new_password: str = Field(min_length=12, max_length=256)
+    new_password: str = Field(min_length=6, max_length=256)
 
 
 class ForgotPasswordInput(BaseModel):
@@ -532,14 +532,14 @@ class ForgotPasswordInput(BaseModel):
 class ResetPasswordInput(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     code: str = Field(pattern=r"^\d{6}$")
-    new_password: str = Field(min_length=12, max_length=256)
+    new_password: str = Field(min_length=6, max_length=256)
 
 
 class CreateUserInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     email: str = Field(min_length=3, max_length=254)
     device_limit: int = Field(default=2, ge=1, le=50)
-    password: str = Field(min_length=12, max_length=256)
+    password: str = Field(min_length=6, max_length=256)
 
 
 class CreateTaskInput(BaseModel):

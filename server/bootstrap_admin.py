@@ -21,7 +21,7 @@ def main() -> int:
 
     name = input("Administrator name: ").strip()
     email = input("Administrator email: ").strip()
-    password = getpass.getpass("Administrator password (12+ characters): ")
+    password = getpass.getpass("Administrator password (6+ characters): ")
     confirmation = getpass.getpass("Confirm password: ")
     if password != confirmation:
         print("Passwords do not match.", file=sys.stderr)

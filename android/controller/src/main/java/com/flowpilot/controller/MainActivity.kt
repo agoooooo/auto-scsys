@@ -238,6 +238,10 @@ class MainActivity : ComponentActivity() {
     private fun requestRecoveryCode() {
         if (state.loading) return
         val snapshot = state
+        if (snapshot.isRegistering && snapshot.password.length < 6) {
+            state = state.copy(error = "密码至少需要 6 个字符")
+            return
+        }
         state = state.copy(loading = true, error = null, message = null)
         lifecycleScope.launch {
             try {
@@ -456,8 +460,8 @@ class MainActivity : ComponentActivity() {
     private fun changePassword() {
         val session = state.session ?: return
         if (state.loading) return
-        if (state.currentPassword.isBlank() || state.newPassword.length < 12) {
-            state = state.copy(error = "请输入当前密码和至少 12 位的新密码")
+        if (state.currentPassword.isBlank() || state.newPassword.length < 6) {
+            state = state.copy(error = "请输入当前密码和至少 6 位的新密码")
             return
         }
         val currentPassword = state.currentPassword
@@ -884,7 +888,7 @@ private fun ControllerScreen(
                     OutlinedTextField(
                         value = state.recoveryNewPassword,
                         onValueChange = onRecoveryNewPasswordChange,
-                        label = { Text("新密码（至少 12 位）") },
+                        label = { Text("新密码（至少 6 位）") },
                         modifier = Modifier.fillMaxWidth(),
                         visualTransformation = PasswordVisualTransformation(),
                         singleLine = true,
@@ -892,7 +896,7 @@ private fun ControllerScreen(
                     Button(
                         onClick = onResetPassword,
                         enabled = !state.loading && state.recoveryCode.length == 6 &&
-                            state.recoveryNewPassword.length >= 12,
+                            state.recoveryNewPassword.length >= 6,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("重置密码") }
                 } else {
@@ -915,7 +919,7 @@ private fun ControllerScreen(
                     visualTransformation = PasswordVisualTransformation(),
                     singleLine = true,
                 )
-                if (state.isRegistering) Text("注册仅创建普通用户；密码至少 12 位。")
+                if (state.isRegistering) Text("注册仅创建普通用户；密码至少 6 位。")
                 Button(onClick = onLoginOrRegister, enabled = !state.loading, modifier = Modifier.fillMaxWidth()) {
                     Text(if (state.isRegistering) "注册" else "登录")
                 }
@@ -1055,7 +1059,7 @@ private fun ControllerScreen(
                                 OutlinedTextField(
                                     value = state.newPassword,
                                     onValueChange = onNewPasswordChange,
-                                    label = { Text("新密码（至少 12 位）") },
+                                    label = { Text("新密码（至少 6 位）") },
                                     modifier = Modifier.fillMaxWidth(),
                                     visualTransformation = PasswordVisualTransformation(),
                                     singleLine = true,

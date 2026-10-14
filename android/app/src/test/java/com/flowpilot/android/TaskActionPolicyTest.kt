@@ -81,23 +81,16 @@ class TaskActionPolicyTest {
     }
 
     @Test
-    fun scriptCanBeInspectedWithoutAccessibilityPermission() {
-        assertTrue(canInspectTaskScript("active", null))
+    fun taskCanBeStartedWhenDeviceIsActiveAndHasPublishedVersion() {
+        assertTrue(canStartTask("active", null, "v1.0.0"))
     }
 
     @Test
-    fun scriptCannotBeInspectedForDisabledDevicesOrDuringRuns() {
-        assertFalse(canInspectTaskScript("disabled", null))
-        assertFalse(canInspectTaskScript("active", "running"))
-        assertFalse(canInspectTaskScript("active", "awaiting_permission"))
-    }
-
-    @Test
-    fun executionRequiresReviewConfirmationAndAccessibilityPermission() {
-        assertTrue(canExecuteTaskScript(true, true, true))
-        assertFalse(canExecuteTaskScript(false, true, true))
-        assertFalse(canExecuteTaskScript(true, false, true))
-        assertFalse(canExecuteTaskScript(true, true, false))
+    fun taskCannotBeStartedForDisabledDevicesMissingVersionsOrDuringRuns() {
+        assertFalse(canStartTask("disabled", null, "v1.0.0"))
+        assertFalse(canStartTask("active", null, ""))
+        assertFalse(canStartTask("active", "running", "v1.0.0"))
+        assertFalse(canStartTask("active", "awaiting_permission", "v1.0.0"))
     }
 
     @Test

@@ -83,7 +83,7 @@ Configure the Android app with `https://<FLOWPILOT_API_DOMAIN>`. The web console
 
 ## Production-mode startup guard
 
-For non-Compose deployments set a PostgreSQL URL via `FLOWPILOT_DATABASE_URL`, a stable `FLOWPILOT_TOKEN_SECRET`, and exact HTTPS `FLOWPILOT_CORS_ORIGINS`; configure `FLOWPILOT_S3_BUCKET`, `FLOWPILOT_S3_REGION`, `FLOWPILOT_S3_ACCESS_KEY`, `FLOWPILOT_S3_SECRET_KEY`, and optionally `FLOWPILOT_S3_ENDPOINT_URL` / `FLOWPILOT_S3_PUBLIC_ENDPOINT_URL` for an S3-compatible service. Configure bucket CORS to allow the exact web-console origin for `PUT` uploads, or set `FLOWPILOT_S3_CORS_ORIGINS` and run `python -m server.init_storage` with bucket-administration permission. `FLOWPILOT_DB_PATH` remains available for SQLite development and compatibility. Production disables demo CORS origins, OpenAPI/Swagger/ReDoc, and demo account seeding; startup also rejects known demo accounts. The bootstrap command prompts for an admin name, email, and 12+ character password without echoing the password. It refuses to run when the database already contains any user and must only be run once against a fresh database.
+For non-Compose deployments set a PostgreSQL URL via `FLOWPILOT_DATABASE_URL`, a stable `FLOWPILOT_TOKEN_SECRET`, and exact HTTPS `FLOWPILOT_CORS_ORIGINS`; configure `FLOWPILOT_S3_BUCKET`, `FLOWPILOT_S3_REGION`, `FLOWPILOT_S3_ACCESS_KEY`, `FLOWPILOT_S3_SECRET_KEY`, and optionally `FLOWPILOT_S3_ENDPOINT_URL` / `FLOWPILOT_S3_PUBLIC_ENDPOINT_URL` for an S3-compatible service. Configure bucket CORS to allow the exact web-console origin for `PUT` uploads, or set `FLOWPILOT_S3_CORS_ORIGINS` and run `python -m server.init_storage` with bucket-administration permission. `FLOWPILOT_DB_PATH` remains available for SQLite development and compatibility. Production disables demo CORS origins, OpenAPI/Swagger/ReDoc, and demo account seeding; startup also rejects known demo accounts. The bootstrap command prompts for an admin name, email, and password of at least 6 characters without echoing the password. It refuses to run when the database already contains any user and must only be run once against a fresh database.
 
 ## Backup and restore operations
 
@@ -137,7 +137,7 @@ FLOWPILOT_SMTP_USE_SSL=false
 
 ## 已实现接口
 
-- `POST /auth/register`（公开创建普通用户；姓名、唯一邮箱和至少 12 位密码；不强制邮箱验证，不接受管理员角色）
+- `POST /auth/register`（公开创建普通用户；姓名、唯一邮箱和至少 6 位密码；不强制邮箱验证，不接受管理员角色）
 - `POST /auth/login`、`POST /auth/refresh`、`POST /auth/logout`、`POST /auth/change-password`
 - `POST /auth/forgot-password`、`POST /auth/reset-password`（需要完整配置 SMTP；6 位验证码 10 分钟有效，最多 5 次错误尝试，成功后撤销所有现有会话）
 - `GET/PATCH /me`：读取或更新当前用户个人资料；更改邮箱须提供当前密码。改密时校验当前密码并撤销该用户其他会话，当前会话保持有效。

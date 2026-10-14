@@ -36,8 +36,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -75,7 +73,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -761,10 +758,7 @@ private fun FlowPilotScreen(
     val recoveryScope = rememberCoroutineScope()
     var showHelp by rememberSaveable { mutableStateOf(false) }
     var defaultStandbyRequestedFor by rememberSaveable { mutableStateOf<String?>(null) }
-    var selectedTask by remember { mutableStateOf<AvailableTask?>(null) }
     var confirmDeviceUnbind by rememberSaveable { mutableStateOf(false) }
-    var scriptReviewAttempt by remember { mutableStateOf<String?>(null) }
-    var confirmScriptRun by rememberSaveable { mutableStateOf(false) }
     var profileName by rememberSaveable(user?.id) { mutableStateOf(user?.name.orEmpty()) }
     var profileEmail by rememberSaveable(user?.id) { mutableStateOf(user?.email.orEmpty()) }
     var profileCurrentPassword by rememberSaveable { mutableStateOf("") }
@@ -850,18 +844,6 @@ private fun FlowPilotScreen(
         }
         if (request != null) onAutoRunRemoteRequest(request)
     }
-    LaunchedEffect(selectedTask?.id, selectedTask?.version, state.loading) {
-        if (state.loading) return@LaunchedEffect
-        val task = selectedTask
-        if (task != null) {
-            val key = "${task.id}:${task.version}"
-            if (scriptReviewAttempt != key) {
-                scriptReviewAttempt = key
-                viewModel.inspectScript(task)
-            }
-        }
-    }
-
     Column(modifier = Modifier.fillMaxSize()) {
       Column(
         modifier = Modifier
@@ -975,7 +957,7 @@ private fun FlowPilotScreen(
                         OutlinedTextField(
                             value = password,
                             onValueChange = { password = it },
-                            label = { Text("密码（至少 12 个字符）") },
+                            label = { Text("密码（至少 6 个字符）") },
                             visualTransformation = PasswordVisualTransformation(),
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
@@ -1022,7 +1004,7 @@ private fun FlowPilotScreen(
                             OutlinedTextField(
                                 value = recoveryNewPassword,
                                 onValueChange = { recoveryNewPassword = it },
-                                label = { Text("新密码（至少 12 个字符）") },
+                                label = { Text("新密码（至少 6 个字符）") },
                                 visualTransformation = PasswordVisualTransformation(),
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
@@ -1054,7 +1036,7 @@ private fun FlowPilotScreen(
                                     }
                                 },
                                 enabled = !state.loading && !recoveryBusy &&
-                                    recoveryCode.length == 6 && recoveryNewPassword.length >= 12,
+                                    recoveryCode.length == 6 && recoveryNewPassword.length >= 6,
                                 modifier = Modifier.fillMaxWidth(),
                             ) { Text("重置密码") }
                         } else {
@@ -1377,19 +1359,14 @@ private fun FlowPilotScreen(
                 if (state.tasks.isEmpty()) {
                     Text("当前没有分配给此账号的已发布任务。")
                 } else {
-                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-                        Column {
-                            state.tasks.forEachIndexed { index, task ->
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        state.tasks.forEach { task ->
+                            FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                                 TaskCard(
                                     task = task,
-                                    canInspectScript = canInspectTaskScript(device.status, state.runStatus?.status),
-                                    onRun = {
-                                        selectedTask = task
-                                        confirmScriptRun = false
-                                        scriptReviewAttempt = null
-                                    },
+                                    canStart = canStartTask(device.status, state.runStatus?.status, task.version),
+                                    onRun = { onRunTask(task, null, null) },
                                 )
-                                if (index < state.tasks.lastIndex) HorizontalDivider(Modifier.padding(horizontal = 14.dp))
                             }
                         }
                     }
@@ -1737,7 +1714,7 @@ private fun FlowPilotScreen(
                             OutlinedTextField(
                                 value = accountNewPassword,
                                 onValueChange = { accountNewPassword = it },
-                                label = { Text("新密码（至少 12 位）") },
+                                label = { Text("新密码（至少 6 位）") },
                                 visualTransformation = PasswordVisualTransformation(),
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
@@ -1749,7 +1726,7 @@ private fun FlowPilotScreen(
                                     accountNewPassword = ""
                                 },
                                 enabled = !state.loading && accountCurrentPassword.isNotBlank() &&
-                                    accountNewPassword.length >= 12,
+                                    accountNewPassword.length >= 6,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Text("更新密码")
@@ -1803,85 +1780,6 @@ private fun FlowPilotScreen(
       }
     }
 
-    selectedTask?.let { task ->
-        val review = state.scriptReview?.takeIf {
-            it.task.id == task.id
-        }
-        val reviewedTask = review?.task ?: task
-        AlertDialog(
-            onDismissRequest = {
-                selectedTask = null
-                scriptReviewAttempt = null
-                viewModel.clearScriptReview()
-            },
-            title = { Text("运行前检查脚本") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("${reviewedTask.name} · 版本 ${reviewedTask.version}")
-                    Text("来源：${sourceLabel(reviewedTask.source)}")
-                    if (reviewedTask.description.isNotBlank()) Text(reviewedTask.description)
-                    if (reviewedTask.capabilities.isNotEmpty()) {
-                        Text("声明能力：${reviewedTask.capabilities.joinToString("、")}")
-                    }
-                    if (!accessibilityEnabled) {
-                        Text("查看脚本不需要无障碍权限；运行前请先在 Android 系统设置中手动启用 FlowPilot 无障碍服务。")
-                    }
-                    if (state.loading && review == null) {
-                        CircularProgressIndicator()
-                    } else if (review == null) {
-                        Text("无法读取并校验脚本内容。请关闭后重试。")
-                    } else {
-                        review.cacheNotice?.let { notice ->
-                            Text(notice, color = MaterialTheme.colorScheme.error)
-                        }
-                        if (review.script.isCached) {
-                            Text("本机已校验缓存版本", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Text("SHA-256：${review.script.sha256}", style = MaterialTheme.typography.bodySmall)
-                        Text("脚本内容", style = MaterialTheme.typography.titleSmall)
-                        ScriptContent(review.script.source)
-                    }
-                    Text(
-                        "脚本会在应用进程内运行，不是安全沙箱；屏幕捕获和抖音点击仅按 Android 已授予的权限执行。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = confirmScriptRun,
-                            onCheckedChange = { confirmScriptRun = it },
-                        )
-                        Text("我已检查代码并同意运行此版本")
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        selectedTask = null
-                        scriptReviewAttempt = null
-                        viewModel.clearScriptReview()
-                        onRunTask(reviewedTask, null, null)
-                    },
-                    enabled = canExecuteTaskScript(review != null, confirmScriptRun, accessibilityEnabled),
-                ) {
-                    Text("授权并运行")
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        selectedTask = null
-                        scriptReviewAttempt = null
-                        viewModel.clearScriptReview()
-                    },
-                ) {
-                    Text("取消")
-                }
-            },
-        )
-    }
-
     if (confirmDeviceUnbind) {
         AlertDialog(
             onDismissRequest = { confirmDeviceUnbind = false },
@@ -1931,28 +1829,6 @@ private fun FlowPilotScreen(
         )
     }
 
-}
-
-@Composable
-private fun ScriptContent(source: String) {
-    val displayLines = remember(source) {
-        source.lineSequence().flatMap { line ->
-            if (line.isEmpty()) sequenceOf("") else line.chunked(300).asSequence()
-        }.toList()
-    }
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(max = 360.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        itemsIndexed(displayLines) { index, line ->
-            Text(
-                "${index + 1}: $line",
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-            )
-        }
-    }
 }
 
 @Composable
@@ -2173,7 +2049,7 @@ private fun FlowPilotCard(
 }
 
 @Composable
-private fun TaskCard(task: AvailableTask, canInspectScript: Boolean, onRun: () -> Unit) {
+private fun TaskCard(task: AvailableTask, canStart: Boolean, onRun: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -2212,9 +2088,9 @@ private fun TaskCard(task: AvailableTask, canInspectScript: Boolean, onRun: () -
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(
                     onClick = onRun,
-                    enabled = canInspectScript && task.version.isNotBlank(),
+                    enabled = canStart,
                 ) {
-                    Text("查看脚本")
+                    Text("启动")
                 }
             }
     }

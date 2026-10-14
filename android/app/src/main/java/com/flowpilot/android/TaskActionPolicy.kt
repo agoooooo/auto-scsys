@@ -1,16 +1,12 @@
 package com.flowpilot.android
 
-internal fun canInspectTaskScript(deviceStatus: String, runStatus: String?): Boolean =
-    deviceStatus != "disabled" && runStatus !in setOf("running", "awaiting_permission")
+internal fun canStartTask(deviceStatus: String, runStatus: String?, version: String): Boolean =
+    deviceStatus != "disabled" &&
+        runStatus !in setOf("running", "awaiting_permission") &&
+        version.isNotBlank()
 
 internal fun canLogoutDuringRun(runStatus: String?): Boolean =
     runStatus !in setOf("running", "awaiting_permission")
-
-internal fun canExecuteTaskScript(
-    scriptReviewed: Boolean,
-    confirmationChecked: Boolean,
-    accessibilityEnabled: Boolean,
-): Boolean = scriptReviewed && confirmationChecked && accessibilityEnabled
 
 internal fun shouldPollRemoteStop(remoteRequestId: String?, stopRequested: Boolean): Boolean =
     !remoteRequestId.isNullOrBlank() && !stopRequested

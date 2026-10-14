@@ -601,7 +601,7 @@ function renderLogin(error = "") {
       <div id="recovery-reset-fields" hidden>
         <form id="recovery-reset-form">
           <div class="form-field"><label for="recovery-code">邮箱验证码</label><input id="recovery-code" name="code" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" required /></div>
-          <div class="form-field"><label for="recovery-new-password">新密码（至少 12 位）</label><input id="recovery-new-password" name="newPassword" type="password" autocomplete="new-password" minlength="12" maxlength="256" required /></div>
+          <div class="form-field"><label for="recovery-new-password">新密码（至少 6 位）</label><input id="recovery-new-password" name="newPassword" type="password" autocomplete="new-password" minlength="6" maxlength="256" required /></div>
           <button class="primary-button" type="submit">重置密码</button>
         </form>
       </div>
@@ -709,7 +709,7 @@ function showUserModal() {
       <div class="form-field"><label for="user-name">用户姓名</label><input id="user-name" name="name" required placeholder="例如：林小满" /></div>
       <div class="form-field"><label for="user-email">邮箱地址</label><input id="user-email" name="email" type="email" required placeholder="name@example.com" /></div>
       <div class="form-field"><label for="device-limit">设备数量上限</label><select id="device-limit" name="deviceLimit"><option value="2">2 台设备</option><option value="3">3 台设备</option><option value="5" selected>5 台设备</option><option value="10">10 台设备</option></select></div>
-      ${session ? `<div class="form-field"><label for="user-password">初始密码</label><input id="user-password" name="password" type="password" minlength="12" maxlength="256" required placeholder="至少 12 个字符" /></div>` : ""}
+      ${session ? `<div class="form-field"><label for="user-password">初始密码</label><input id="user-password" name="password" type="password" minlength="6" maxlength="256" required placeholder="至少 6 个字符" /></div>` : ""}
       <div class="form-hint">${session ? "创建后用户可使用此邮箱和初始密码登录。" : "此 Demo 仅模拟创建账号，不会发送邀请邮件。"}</div>
     </div><div class="modal-footer"><button type="button" class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" type="submit">创建用户</button></div></form>
   </section></div>`;
@@ -749,7 +749,7 @@ function showAccountModal() {
     <form id="password-form"><div class="modal-body">
       <h3>修改密码</h3>
       <div class="form-field"><label for="current-password">当前密码</label><input id="current-password" name="currentPassword" type="password" autocomplete="current-password" required /></div>
-      <div class="form-field"><label for="new-password">新密码</label><input id="new-password" name="newPassword" type="password" autocomplete="new-password" minlength="12" maxlength="256" required /></div>
+      <div class="form-field"><label for="new-password">新密码（至少 6 位）</label><input id="new-password" name="newPassword" type="password" autocomplete="new-password" minlength="6" maxlength="256" required /></div>
       <div class="modal-footer"><button class="primary-button" type="submit">更新密码</button><button type="button" class="secondary-button" data-action="logout">退出登录</button></div>
     </div></form>
   </section></div>`;

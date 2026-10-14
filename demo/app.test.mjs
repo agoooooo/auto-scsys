@@ -35,3 +35,10 @@ test("task access grants allow direct device dispatch without device publication
   assert.match(appSource, /无需逐台设备发布脚本/);
   assert.doesNotMatch(appSource, /task-publication-form|revoke-publication|授权并发布到设备/);
 });
+
+test("Web account forms accept passwords from six characters", () => {
+  assert.match(appSource, /recovery-new-password[^>]+minlength="6"/);
+  assert.match(appSource, /user-password[^>]+minlength="6"/);
+  assert.match(appSource, /id="new-password"[^>]+minlength="6"/);
+  assert.doesNotMatch(appSource, /minlength="12"/);
+});

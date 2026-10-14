@@ -24,6 +24,6 @@ FastAPI 服务端可按 [`server/README.md`](../server/README.md) 单独运行�
 
 ## 产品边界
 
-浏览器原型不会运行真实设备操作或 Python 代码。API 使用本地 SQLite 开发存储，上传的脚本由 API 保存并计算 SHA-256，但不会执行；本地服务尚未适配生产 PostgreSQL/S3。演示中的 OCR 结果和运行记录仍是模拟流程。Android 客户端可实际运行已审阅脚本，但仍受 Android 系统授权与可见前台执行限制。
+浏览器原型不会运行真实设备操作或 Python 代码。API 使用本地 SQLite 开发存储，上传的脚本由 API 保存并计算 SHA-256，但不会执行；本地服务尚未适配生产 PostgreSQL/S3。演示中的 OCR 结果和运行记录仍是模拟流程。Android 客户端可直接启动获授权的脚本；脚本并非安全沙箱，仍受 Android 系统授权与可见前台执行限制。
 
 运行状态逻辑的单元测试可通过 `node --test demo/state.test.mjs` 执行。

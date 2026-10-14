@@ -69,7 +69,7 @@ def test_public_registration_creates_only_a_normalized_ordinary_user(client):
         json={
             "name": "  New User  ",
             "email": "  New.User@Example.COM  ",
-            "password": "long-enough-registration-password",
+            "password": "abc123",
             "role": "admin",
             "status": "disabled",
         },
@@ -80,7 +80,7 @@ def test_public_registration_creates_only_a_normalized_ordinary_user(client):
     assert response.json()["role"] == "user"
     assert response.json()["status"] == "active"
 
-    token = login(client, "NEW.USER@example.com", "long-enough-registration-password")
+    token = login(client, "NEW.USER@example.com", "abc123")
     profile = client.get("/me", headers=auth(token))
     assert profile.status_code == 200
     assert profile.json()["id"] == response.json()["id"]
@@ -162,6 +162,12 @@ def test_password_change_verifies_current_password_and_revokes_other_sessions(cl
         },
     )
     assert wrong_current.status_code == 403
+    short_new_password = client.post(
+        "/auth/change-password",
+        headers=auth(first_session),
+        json={"current_password": "user-demo", "new_password": "short"},
+    )
+    assert short_new_password.status_code == 422
     same_password = client.post(
         "/auth/change-password",
         headers=auth(first_session),
@@ -173,7 +179,7 @@ def test_password_change_verifies_current_password_and_revokes_other_sessions(cl
         headers=auth(first_session),
         json={
             "current_password": "user-demo",
-            "new_password": "replacement-password-123",
+            "new_password": "new123",
         },
     )
     assert changed.status_code == 200
@@ -182,7 +188,7 @@ def test_password_change_verifies_current_password_and_revokes_other_sessions(cl
     assert client.get("/me", headers=auth(second_session)).status_code == 401
     assert client.post(
         "/auth/login",
-        json={"email": "chen.xiao@example.com", "password": "replacement-password-123"},
+        json={"email": "chen.xiao@example.com", "password": "new123"},
     ).status_code == 200
     admin = login(client, "admin@example.com", "admin-demo")
     assert any(
@@ -282,12 +288,22 @@ def test_password_recovery_resets_password_once_and_revokes_all_sessions(tmp_pat
         requested = recovery.post("/auth/forgot-password", json={"email": "chen.xiao@example.com"})
         assert requested.status_code == 202
 
+        short_password = recovery.post(
+            "/auth/reset-password",
+            json={
+                "email": "chen.xiao@example.com",
+                "code": messages[0][1],
+                "new_password": "short",
+            },
+        )
+        assert short_password.status_code == 422
+
         invalid = recovery.post(
             "/auth/reset-password",
             json={
                 "email": "chen.xiao@example.com",
                 "code": "000000" if messages[0][1] != "000000" else "000001",
-                "new_password": "replacement-password-123",
+                "new_password": "new123",
             },
         )
         assert invalid.status_code == 400
@@ -297,7 +313,7 @@ def test_password_recovery_resets_password_once_and_revokes_all_sessions(tmp_pat
             json={
                 "email": "chen.xiao@example.com",
                 "code": messages[0][1],
-                "new_password": "replacement-password-123",
+                "new_password": "new123",
             },
         )
         assert changed.status_code == 200
@@ -312,7 +328,7 @@ def test_password_recovery_resets_password_once_and_revokes_all_sessions(tmp_pat
             "/auth/login",
             json={
                 "email": "chen.xiao@example.com",
-                "password": "replacement-password-123",
+                "password": "new123",
             },
         ).status_code == 200
         reused = recovery.post(
@@ -613,14 +629,14 @@ def test_admin_audit_contains_key_actions_without_sensitive_account_data(client)
     short_password = client.post(
         "/users",
         headers=auth(admin),
-        json={"name": "短密码用户", "email": "short-password@example.com", "password": "shortpass"},
+        json={"name": "短密码用户", "email": "short-password@example.com", "password": "short"},
     )
     assert short_password.status_code == 422
 
     created = client.post(
         "/users",
         headers=auth(admin),
-        json={"name": "审计用户", "email": "audit@example.com", "password": "audit-password"},
+        json={"name": "审计用户", "email": "audit@example.com", "password": "abc123"},
     )
     assert created.status_code == 201
     events = client.get("/admin/audit", headers=auth(admin)).json()
@@ -831,12 +847,12 @@ def test_production_mode_refuses_database_with_demo_accounts(tmp_path, monkeypat
 
 def test_initial_admin_bootstrap_creates_one_admin_without_demo_accounts(tmp_path):
     database = tmp_path / "fresh.sqlite3"
-    with pytest.raises(ValueError, match="12–256"):
+    with pytest.raises(ValueError, match="6–256"):
         create_initial_admin(database, "Admin", "admin@example.com", "short")
-    user_id = create_initial_admin(database, "Initial Admin", "admin@example.com", "a-strong-production-password")
+    user_id = create_initial_admin(database, "Initial Admin", "admin@example.com", "adm1n!")
     assert user_id
     with TestClient(create_app(database, b"test-secret-must-be-at-least-32-bytes")) as client:
-        token = login(client, "admin@example.com", "a-strong-production-password")
+        token = login(client, "admin@example.com", "adm1n!")
         assert client.get("/users", headers=auth(token)).status_code == 200
         assert client.post(
             "/auth/login",
