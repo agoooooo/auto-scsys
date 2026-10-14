@@ -1,3 +1,4 @@
 <resources>
+    <string name="app_name">FlowPilot 受控端</string>
     <string name="accessibility_service_description">仅在你启动已授权任务时，读取抖音界面的可访问文字并按脚本指定文字点击。</string>
 </resources>

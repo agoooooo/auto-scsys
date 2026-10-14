@@ -254,8 +254,10 @@ export function TasksPage({ session }: Props) {
                 暂停
               </Button>
           )}
-          {session.user.role === "user" && task.status === "published" && task.active_version && (
-            <Button type="primary" onClick={() => void prepareRun(task)}>运行</Button>
+          {task.status === "published" && task.active_version && (
+            <Button type="primary" onClick={() => void prepareRun(task)}>
+              {session.user.role === "admin" ? "派发" : "运行"}
+            </Button>
           )}
         </Space>
       ),
@@ -320,7 +322,10 @@ export function TasksPage({ session }: Props) {
     setLoadingDevices(true);
     try {
       const available = await apiRequest<Device[]>(session, "/devices");
-      setDevices(available.filter((device) => device.status === "online"));
+      setDevices(available.filter((device) =>
+        device.status === "online" &&
+        (session.user.role !== "admin" || device.account_status === "active"),
+      ));
     } catch (error) {
       notice.error(error instanceof Error ? error.message : "设备列表加载失败");
     } finally {
@@ -533,7 +538,9 @@ export function TasksPage({ session }: Props) {
       </Modal>
 
       <Modal
-        title={runTaskTarget ? `运行任务 · ${runTaskTarget.name}` : "运行任务"}
+        title={runTaskTarget
+          ? `${session.user.role === "admin" ? "派发任务" : "运行任务"} · ${runTaskTarget.name}`
+          : "运行任务"}
         open={Boolean(runTaskTarget)}
         onCancel={() => setRunTaskTarget(null)}
         footer={activeRemoteRun ? (
@@ -551,7 +558,7 @@ export function TasksPage({ session }: Props) {
           <Space>
             <Button onClick={() => setRunTaskTarget(null)}>取消</Button>
             <Button type="primary" disabled={!selectedDeviceId || devices.length === 0} onClick={() => void submitRun()}>
-              开始运行
+              {session.user.role === "admin" ? "确认派发" : "开始运行"}
             </Button>
           </Space>
         )}
@@ -578,7 +585,9 @@ export function TasksPage({ session }: Props) {
                 placeholder={loadingDevices ? "正在读取设备..." : "选择在线设备"}
                 options={devices.map((device) => ({
                   value: device.id,
-                  label: `${device.name} · ${device.model}`,
+                  label: session.user.role === "admin"
+                    ? `${device.name} · ${device.model} · ${device.user_name}`
+                    : `${device.name} · ${device.model}`,
                 }))}
                 notFoundContent={loadingDevices ? "正在加载" : "没有在线设备"}
               />
@@ -586,8 +595,10 @@ export function TasksPage({ session }: Props) {
             <Alert
               type="warning"
               showIcon
-              message="运行将在受控设备上执行"
-              description="发布脚本不会自动运行。运行期间设备遵循 Android 系统权限及可见通知要求。"
+              message={session.user.role === "admin" ? "管理员派发到用户设备" : "运行将在受控设备上执行"}
+              description={session.user.role === "admin"
+                ? "派发后任务会授权给设备所属用户，并在其在线设备上运行；设备仍须遵循 Android 系统权限及可见通知要求。"
+                : "运行期间设备遵循 Android 系统权限及可见通知要求。"}
             />
           </Form>
         )}

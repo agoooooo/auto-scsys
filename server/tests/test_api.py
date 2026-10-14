@@ -1976,19 +1976,55 @@ def test_remote_run_confirmation_rejection_and_run_record(client):
     assert rejected.json()["status"] == "rejected"
 
 
-def test_only_users_can_request_remote_runs_for_their_own_devices(client):
+def test_admins_and_users_can_request_runs_with_role_scoped_device_access(client):
     admin = login(client, "admin@example.com", "admin-demo")
     user = login(client)
     other_user = login(client, "zhou.ke@example.com", "user-demo")
     body = {"task_id": "t-001", "device_id": "d-001"}
 
-    assert client.post("/remote-runs", headers=auth(admin), json=body).status_code == 403
     assert client.post("/remote-runs", headers=auth(other_user), json=body).status_code == 404
+
+    admin_requested = client.post("/remote-runs", headers=auth(admin), json=body)
+    assert admin_requested.status_code == 201
+    assert admin_requested.json()["status"] == "pending"
 
     requested = client.post("/remote-runs", headers=auth(user), json=body)
     assert requested.status_code == 201
     assert requested.json()["device_id"] == "d-001"
-    assert requested.json()["status"] == "pending"
+    assert requested.json()["status"] == "queued"
+
+
+def test_admin_dispatch_grants_task_access_to_target_device_owner(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    zhou = login(client, "zhou.ke@example.com", "user-demo")
+    script = b"print('admin dispatched')\n"
+    published = client.post(
+        "/tasks/t-002/versions",
+        headers=auth(admin),
+        data={"version": "v1.0.0"},
+        files={"script": ("shared.py", script, "text/x-python")},
+    )
+    assert published.status_code == 201
+    assert client.post("/devices/d-003/heartbeat", headers=auth(zhou)).status_code == 200
+
+    dispatched = client.post(
+        "/remote-runs",
+        headers=auth(admin),
+        json={"task_id": "t-002", "device_id": "d-003"},
+    )
+    assert dispatched.status_code == 201
+    assert dispatched.json()["version"] == "v1.0.0"
+    assert any(
+        task["id"] == "t-002"
+        for task in client.post("/devices/d-003/sync", headers=auth(zhou)).json()["tasks"]
+    )
+    assert client.get(
+        "/devices/d-003/tasks/t-002/versions/v1.0.0/content",
+        headers=auth(zhou),
+    ).content == script
+    pending = client.get("/devices/d-003/remote-runs", headers=auth(zhou))
+    assert pending.status_code == 200
+    assert any(request["id"] == dispatched.json()["id"] for request in pending.json())
 
 
 def test_device_can_poll_remote_run_until_execution_finishes(client):

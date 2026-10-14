@@ -11,6 +11,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
@@ -23,6 +25,16 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class PythonRuntimeInstrumentedTest {
+    @Test
+    fun launcherIdentifiesTheControlledDeviceApp() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val application = context.applicationInfo
+
+        assertEquals("FlowPilot 受控端", application.loadLabel(context.packageManager).toString())
+        assertNotEquals(0, application.icon)
+        assertNotNull(context.packageManager.getApplicationIcon(application))
+    }
+
     @Test
     fun debugBuildAllowsLanHttpForLocalDevelopment() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext

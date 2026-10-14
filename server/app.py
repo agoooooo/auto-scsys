@@ -2342,10 +2342,8 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         user: dict = Depends(current_user),
         db: sqlite3.Connection = Depends(connection),
     ):
-        if user["role"] != "user":
-            raise HTTPException(status_code=403, detail="只有普通用户可以为自己的设备发起远程运行")
         device = _device_for_user(db, body.device_id, user)
-        if device["user_id"] != user["id"]:
+        if user["role"] == "user" and device["user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="只能为自己的设备发起远程运行")
         db.lock_device(device["id"])
         device = _device_for_user(db, body.device_id, user)
@@ -2373,9 +2371,16 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                 }
         if device["status"] != "online":
             raise HTTPException(status_code=409, detail="只能向在线设备发起运行请求")
-        task = _task_for_user(db, body.task_id, {"id": device["user_id"], "role": "user"})
+        task = _task_for_user(db, body.task_id, user)
         if not task["active_version"]:
             raise HTTPException(status_code=409, detail="任务没有可运行版本")
+        if user["role"] == "admin" and task["owner_id"] != device["user_id"]:
+            grant = db.execute(
+                "INSERT OR IGNORE INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?)",
+                (task["id"], device["user_id"], utc_now()),
+            )
+            if grant.rowcount:
+                audit(db, user["id"], "task.grant_created", "task_grant", f"{task['id']}:{device['user_id']}")
         _expire_requests(db)
         has_predecessor = db.execute(
             """SELECT 1 FROM remote_runs WHERE device_id=? AND status='pending'
