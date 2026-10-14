@@ -85,18 +85,6 @@ private fun ControllerCard(
 ) {
     Card(
         modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        content = content,
-    )
-}
-
-@Composable
-private fun ControllerAccountCard(
-    modifier: Modifier = Modifier,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    Card(
-        modifier = modifier,
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
@@ -957,7 +945,7 @@ private fun ControllerScreen(
             if (selectedDestination == ControllerDestination.ACCOUNT) {
                 when (accountPage) {
                     ControllerAccountPage.HOME -> {
-                        ControllerAccountCard(Modifier.fillMaxWidth()) {
+                        ControllerCard(Modifier.fillMaxWidth()) {
                             Row(
                                 Modifier.fillMaxWidth().clickable {
                                     accountPageName = ControllerAccountPage.PROFILE.name
@@ -989,7 +977,7 @@ private fun ControllerScreen(
                                 Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                        ControllerAccountCard(Modifier.fillMaxWidth()) {
+                        ControllerCard(Modifier.fillMaxWidth()) {
                             Column {
                                 ControllerAccountRow(
                                     title = "个人资料",
@@ -1004,7 +992,7 @@ private fun ControllerScreen(
                                 )
                             }
                         }
-                        ControllerAccountCard(Modifier.fillMaxWidth()) {
+                        ControllerCard(Modifier.fillMaxWidth()) {
                             ControllerAccountRow(
                                 title = "帮助与关于",
                                 onClick = { showHelp = true },
@@ -1019,7 +1007,7 @@ private fun ControllerScreen(
                         }
                     }
                     ControllerAccountPage.PROFILE -> {
-                        ControllerAccountCard(Modifier.fillMaxWidth()) {
+                        ControllerCard(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 OutlinedTextField(
                                     value = state.profileName,
@@ -1055,7 +1043,7 @@ private fun ControllerScreen(
                         }
                     }
                     ControllerAccountPage.SECURITY -> {
-                        ControllerAccountCard(Modifier.fillMaxWidth()) {
+                        ControllerCard(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 OutlinedTextField(
                                     value = state.currentPassword,
