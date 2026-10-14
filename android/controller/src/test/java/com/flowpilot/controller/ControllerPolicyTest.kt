@@ -197,6 +197,18 @@ class ControllerPolicyTest {
     }
 
     @Test
+    fun scrollPositionStorageIsScopedToTheControllerPage() {
+        assertEquals(
+            "scroll:TASKS:HOME",
+            controllerScrollPositionKey("TASKS", "HOME"),
+        )
+        assertEquals(
+            "scroll:DEVICES:HOME",
+            controllerScrollPositionKey("UNKNOWN", "UNKNOWN"),
+        )
+    }
+
+    @Test
     fun controllerThemeUsesGreenAccentAndLightSurfaces() {
         assertEquals(Color(0xFF07C160), ControllerColorScheme.primary)
         assertEquals(Color(0xFFF5F7F6), ControllerColorScheme.background)

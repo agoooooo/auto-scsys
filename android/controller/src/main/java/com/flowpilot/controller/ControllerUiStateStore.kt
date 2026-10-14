@@ -19,6 +19,13 @@ internal fun sanitizeControllerUiState(state: ControllerUiState): ControllerUiSt
             ?.name ?: ControllerAccountPage.HOME.name,
     )
 
+internal fun controllerScrollPositionKey(destination: String, accountPage: String): String {
+    val safe = sanitizeControllerUiState(
+        ControllerUiState(destination = destination, accountPage = accountPage),
+    )
+    return "scroll:${safe.destination}:${safe.accountPage}"
+}
+
 internal class ControllerUiStateStore(context: Context) {
     private val preferences = context.getSharedPreferences("flowpilot_controller_ui", Context.MODE_PRIVATE)
 
@@ -39,6 +46,16 @@ internal class ControllerUiStateStore(context: Context) {
             .putString(KEY_SELECTED_DEVICE, state.selectedDeviceId)
             .putStringSet(KEY_SELECTED_DEVICES, state.selectedDeviceIds)
             .putStringSet(KEY_SELECTED_TASKS, state.selectedTaskIds)
+            .apply()
+    }
+
+    fun readScrollPosition(destination: String, accountPage: String): Int =
+        preferences.getInt(controllerScrollPositionKey(destination, accountPage), 0)
+            .coerceAtLeast(0)
+
+    fun saveScrollPosition(destination: String, accountPage: String, position: Int) {
+        preferences.edit()
+            .putInt(controllerScrollPositionKey(destination, accountPage), position.coerceAtLeast(0))
             .apply()
     }
 

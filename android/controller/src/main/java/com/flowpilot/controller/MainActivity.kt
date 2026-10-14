@@ -35,11 +35,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,9 +61,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -246,6 +254,7 @@ internal enum class ControllerAccountPage(val title: String) {
 
 private const val DEVICE_REFRESH_INTERVAL_MS = 5_000L
 private const val SESSION_CHECK_INTERVAL_MS = 15_000L
+private const val CONTROLLER_UI_STATE_SAVE_DELAY_MS = 250L
 
 class MainActivity : ComponentActivity() {
     private lateinit var sessionStore: ControllerSessionStore
@@ -328,6 +337,7 @@ class MainActivity : ComponentActivity() {
                         onCheckSession = ::checkSession,
                         onRefreshRunHistory = ::refreshRunHistory,
                         onSaveUiState = ::saveUiState,
+                        uiStateStore = uiStateStore,
                         onSaveProfile = ::saveProfile,
                         onChangePassword = ::changePassword,
                         onToggleDeviceSelection = ::toggleDeviceSelection,
@@ -1070,6 +1080,7 @@ private fun ControllerScreen(
     onCheckSession: () -> Unit,
     onRefreshRunHistory: () -> Unit,
     onSaveUiState: (ControllerUiState) -> Unit,
+    uiStateStore: ControllerUiStateStore,
     onSaveProfile: () -> Unit,
     onChangePassword: () -> Unit,
     onToggleDeviceSelection: (String) -> Unit,
@@ -1094,15 +1105,6 @@ private fun ControllerScreen(
     var accountPageName by rememberSaveable(state.session?.email) {
         mutableStateOf(state.uiState.accountPage)
     }
-    fun persistScreenState() {
-        onSaveUiState(
-            state.uiState.copy(
-                destination = selectedDestinationName,
-                accountPage = accountPageName,
-                offlineDevicesExpanded = offlineDevicesExpanded,
-            ),
-        )
-    }
     val selectedDestination = ControllerDestination.entries.firstOrNull {
         it.name == selectedDestinationName
     } ?: ControllerDestination.DEVICES
@@ -1124,6 +1126,55 @@ private fun ControllerScreen(
     val accountPage = ControllerAccountPage.entries.firstOrNull {
         it.name == accountPageName
     } ?: ControllerAccountPage.HOME
+    val scrollState = key(state.session?.email, selectedDestinationName, accountPageName) {
+        rememberScrollState(
+            uiStateStore.readScrollPosition(selectedDestinationName, accountPageName),
+        )
+    }
+    fun persistScreenState() {
+        onSaveUiState(
+            state.uiState.copy(
+                destination = selectedDestinationName,
+                accountPage = accountPageName,
+                offlineDevicesExpanded = offlineDevicesExpanded,
+            ),
+        )
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(state.session?.email, selectedDestinationName, accountPageName, scrollState) {
+        if (state.session == null) return@LaunchedEffect
+        snapshotFlow { scrollState.value }
+            .distinctUntilChanged()
+            .collectLatest { position ->
+                delay(CONTROLLER_UI_STATE_SAVE_DELAY_MS)
+                uiStateStore.saveScrollPosition(
+                    selectedDestinationName,
+                    accountPageName,
+                    position,
+                )
+            }
+    }
+    DisposableEffect(
+        lifecycleOwner,
+        state.session?.email,
+        selectedDestinationName,
+        accountPageName,
+        scrollState,
+    ) {
+        if (state.session == null) return@DisposableEffect onDispose {}
+        val destination = selectedDestinationName
+        val page = accountPageName
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                uiStateStore.saveScrollPosition(destination, page, scrollState.value)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            uiStateStore.saveScrollPosition(destination, page, scrollState.value)
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
     BackHandler(
         enabled = state.session != null &&
             selectedDestination == ControllerDestination.ACCOUNT &&
@@ -1134,7 +1185,7 @@ private fun ControllerScreen(
     }
     Column(Modifier.fillMaxSize()) {
       Column(
-        Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
+        Modifier.weight(1f).verticalScroll(scrollState).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(
             if (selectedDestination == ControllerDestination.ACCOUNT) 16.dp else 12.dp,
         ),
