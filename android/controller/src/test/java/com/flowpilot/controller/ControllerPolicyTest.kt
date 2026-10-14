@@ -49,6 +49,16 @@ class ControllerPolicyTest {
     }
 
     @Test
+    fun offlineDeviceGroupStartsCollapsedAndOnlyOfflineDevicesCanBeUnbound() {
+        assertFalse(isControllerDeviceGroupExpandedByDefault("offline"))
+        assertTrue(isControllerDeviceGroupExpandedByDefault("online"))
+        assertTrue(isControllerDeviceGroupExpandedByDefault("disabled"))
+        assertTrue(canUnbindControllerDevice("offline"))
+        assertFalse(canUnbindControllerDevice("online"))
+        assertFalse(canUnbindControllerDevice("disabled"))
+    }
+
+    @Test
     fun onlineDevicesAppearFirstAndDispatchTargetsCoverSelectedDeviceTaskPairs() {
         val devices = listOf(
             ControllerDevice("offline", "旧设备", "model", "offline"),

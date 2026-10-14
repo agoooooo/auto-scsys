@@ -219,6 +219,7 @@ class MainActivity : ComponentActivity() {
                         onSaveProfile = ::saveProfile,
                         onChangePassword = ::changePassword,
                         onToggleDeviceSelection = ::toggleDeviceSelection,
+                        onUnbindOfflineDevice = ::unbindOfflineDevice,
                         onToggleTaskSelection = ::toggleTaskSelection,
                         onDispatch = ::dispatch,
                         onCancelPending = ::cancelPendingRun,
@@ -539,6 +540,42 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun unbindOfflineDevice(device: ControllerDevice) {
+        val session = state.session ?: return
+        if (state.loading || !canUnbindControllerDevice(device.status)) return
+        state = state.copy(loading = true, error = null, message = null)
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    controllerApi(session).unbindDevice(session.token, device.id)
+                }
+                val nextSelectedDevice = if (state.selectedDeviceId == device.id) {
+                    state.devices.firstOrNull { it.id != device.id && it.status == "online" }?.id
+                } else {
+                    state.selectedDeviceId
+                }
+                state = state.copy(
+                    devices = state.devices.map {
+                        if (it.id == device.id) it.copy(status = "disabled") else it
+                    },
+                    selectedDeviceIds = state.selectedDeviceIds - device.id,
+                    selectedDeviceId = nextSelectedDevice,
+                    run = if (state.selectedDeviceId == device.id) null else state.run,
+                    loading = false,
+                    error = null,
+                    message = "设备已解绑并停用；待处理请求和设备授权已撤销",
+                )
+            } catch (error: Exception) {
+                if (error is ControllerApiException && error.statusCode == 401) {
+                    sessionStore.clear()
+                    state = state.copy(session = null, loading = false, error = "登录已过期，请重新登录")
+                } else {
+                    state = state.copy(loading = false, error = error.message ?: "设备解绑失败")
+                }
+            }
+        }
+    }
+
     private fun toggleTaskSelection(taskId: String) {
         val selected = state.selectedTaskIds.toMutableSet()
         if (taskId in selected) selected.remove(taskId) else selected.add(taskId)
@@ -809,6 +846,7 @@ private fun ControllerScreen(
     onSaveProfile: () -> Unit,
     onChangePassword: () -> Unit,
     onToggleDeviceSelection: (String) -> Unit,
+    onUnbindOfflineDevice: (ControllerDevice) -> Unit,
     onToggleTaskSelection: (String) -> Unit,
     onDispatch: () -> Unit,
     onCancelPending: () -> Unit,
@@ -819,6 +857,8 @@ private fun ControllerScreen(
 ) {
     var showHelp by remember { mutableStateOf(false) }
     var selectedRunHistory by remember { mutableStateOf<ControllerRunHistory?>(null) }
+    var deviceToUnbind by remember { mutableStateOf<ControllerDevice?>(null) }
+    var offlineDevicesExpanded by rememberSaveable { mutableStateOf(false) }
     var selectedDestinationName by rememberSaveable {
         mutableStateOf(ControllerDestination.DEVICES.name)
     }
@@ -1146,18 +1186,42 @@ private fun ControllerScreen(
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         groupControllerDevices(state.devices).forEach { group ->
+                            val isOfflineGroup = group.status == "offline"
+                            val isExpanded = if (isOfflineGroup) {
+                                offlineDevicesExpanded
+                            } else {
+                                isControllerDeviceGroupExpandedByDefault(group.status)
+                            }
                             Row(
-                                Modifier.fillMaxWidth().padding(top = 8.dp),
+                                Modifier.fillMaxWidth()
+                                    .padding(top = 8.dp)
+                                    .clickable(enabled = isOfflineGroup) {
+                                        offlineDevicesExpanded = !offlineDevicesExpanded
+                                    }
+                                    .padding(vertical = 4.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(group.label, style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    group.devices.size.toString(),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        group.devices.size.toString(),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    if (isOfflineGroup) {
+                                        Text(
+                                            if (isExpanded) "收起" else "展开",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
                             }
+                            if (!isExpanded) return@forEach
                             group.devices.forEach { device ->
                                 val selected = device.id in state.selectedDeviceIds
                                 val online = device.status == "online"
@@ -1194,11 +1258,20 @@ private fun ControllerScreen(
                                             Text(device.model, style = MaterialTheme.typography.bodySmall)
                                             Text("ID ${device.id.take(8)}", style = MaterialTheme.typography.labelSmall)
                                         }
-                                        Checkbox(
-                                            checked = selected,
-                                            onCheckedChange = { onToggleDeviceSelection(device.id) },
-                                            enabled = !state.loading && online,
-                                        )
+                                        if (canUnbindControllerDevice(device.status)) {
+                                            OutlinedButton(
+                                                onClick = { deviceToUnbind = device },
+                                                enabled = !state.loading,
+                                            ) {
+                                                Text("解绑")
+                                            }
+                                        } else {
+                                            Checkbox(
+                                                checked = selected,
+                                                onCheckedChange = { onToggleDeviceSelection(device.id) },
+                                                enabled = !state.loading && online,
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1495,6 +1568,31 @@ private fun ControllerScreen(
                 TextButton(onClick = { showHelp = false }) {
                     Text("关闭")
                 }
+            },
+        )
+    }
+    deviceToUnbind?.let { device ->
+        AlertDialog(
+            onDismissRequest = { deviceToUnbind = null },
+            title = { Text("解绑离线设备？") },
+            text = {
+                Text(
+                    "将解绑并停用“${device.name}”。待处理的远程请求会过期，设备授权和分发记录会撤销；" +
+                        "设备重新接入前需要重新绑定。若设备其实仍在执行任务，解绑不会保证立即中止本地执行。",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val target = device
+                        deviceToUnbind = null
+                        onUnbindOfflineDevice(target)
+                    },
+                    enabled = !state.loading,
+                ) { Text("确认解绑") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deviceToUnbind = null }) { Text("取消") }
             },
         )
     }

@@ -159,6 +159,10 @@ internal class ControllerApi(
             ControllerDevice(it.optString("id"), it.optString("name"), it.optString("model"), it.optString("status"))
         }
 
+    fun unbindDevice(token: String, deviceId: String) {
+        request("/devices/${encode(deviceId)}", "DELETE", token)
+    }
+
     fun tasks(token: String): List<ControllerTask> =
         arrayRequest("/tasks", token).map {
             ControllerTask(
@@ -373,6 +377,12 @@ internal fun groupControllerDevices(devices: List<ControllerDevice>): List<Contr
         listOf(ControllerDeviceGroup("unknown", "其他状态", otherDevices))
     }
 }
+
+internal fun isControllerDeviceGroupExpandedByDefault(status: String): Boolean =
+    status != "offline"
+
+internal fun canUnbindControllerDevice(status: String): Boolean =
+    status == "offline"
 
 internal fun buildControllerDispatchTargets(
     devices: List<ControllerDevice>,

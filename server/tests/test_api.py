@@ -2348,6 +2348,72 @@ def test_disabling_a_device_revokes_its_preauthorizations_and_blocks_new_runs(cl
     assert client.post("/remote-runs", headers=auth(user), json={"task_id": "t-001", "device_id": "d-001"}).status_code == 409
 
 
+def test_unbinding_offline_device_expires_its_queue_and_revokes_associations(client):
+    import server.app as api
+
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    publication = client.post(
+        "/tasks/t-001/publications",
+        headers=auth(admin),
+        json={"device_id": "d-001", "version": "v1.7.0"},
+    )
+    assert publication.status_code == 201
+    authorization = client.post(
+        "/run-authorizations",
+        headers=auth(user),
+        json={"task_id": "t-001", "version": "v1.7.0", "device_id": "d-001"},
+    )
+    assert authorization.status_code == 201
+
+    pending = client.post(
+        "/remote-runs",
+        headers=auth(user),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).json()
+    queued = client.post(
+        "/remote-runs",
+        headers=auth(user),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).json()
+    assert pending["status"] == "pending"
+    assert queued["status"] == "queued"
+
+    with api._connect(client.app.state.db_path) as db:
+        db.execute("UPDATE devices SET status='offline' WHERE id='d-001'")
+    assert client.get("/devices", headers=auth(user)).status_code == 200
+
+    other_user = login(client, "zhou.ke@example.com", "user-demo")
+    assert client.delete(
+        "/devices/d-001",
+        headers=auth(other_user),
+    ).status_code == 404
+    unbound = client.delete("/devices/d-001", headers=auth(user))
+    assert unbound.status_code == 200
+    assert unbound.json()["status"] == "disabled"
+
+    with api._connect(client.app.state.db_path) as db:
+        assert db.execute("SELECT status FROM devices WHERE id='d-001'").fetchone()["status"] == "disabled"
+        assert {
+            row["status"]
+            for row in db.execute(
+                "SELECT status FROM remote_runs WHERE id IN (?, ?)",
+                (pending["id"], queued["id"]),
+            )
+        } == {"expired"}
+        assert db.execute(
+            "SELECT revoked_at FROM run_authorizations WHERE id=?",
+            (authorization.json()["id"],),
+        ).fetchone()["revoked_at"] is not None
+
+    revoked_publication = next(
+        item
+        for item in client.get("/tasks/t-001/publications", headers=auth(admin)).json()
+        if item["id"] == publication.json()["id"]
+    )
+    assert revoked_publication["status"] == "revoked"
+
+
 def test_disabling_user_revokes_grants_and_stops_active_remote_runs(client):
     admin = login(client, "admin@example.com", "admin-demo")
     user = login(client)

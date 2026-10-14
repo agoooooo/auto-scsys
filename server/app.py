@@ -783,7 +783,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             (now, device_id),
         )
         db.execute(
-            "UPDATE remote_runs SET status='expired' WHERE device_id=? AND status='pending'",
+            "UPDATE remote_runs SET status='expired' WHERE device_id=? AND status IN ('pending','queued')",
             (device_id,),
         )
         db.execute(
