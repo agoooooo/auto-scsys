@@ -94,11 +94,11 @@ class TaskActionPolicyTest {
     }
 
     @Test
-    fun devicePermissionRowsShowOnlyStateAndOpenActionWhenDisabled() {
-        assertEquals("开启", devicePermissionStatus(enabled = true))
-        assertEquals("未开启", devicePermissionStatus(enabled = false))
-        assertFalse(shouldShowPermissionOpenAction(enabled = true))
-        assertTrue(shouldShowPermissionOpenAction(enabled = false))
+    fun devicePermissionRowsUseButtonsForBothStates() {
+        assertEquals("已开启", devicePermissionActionLabel(enabled = true))
+        assertEquals("开启", devicePermissionActionLabel(enabled = false))
+        assertFalse(canEnableDevicePermission(enabled = true))
+        assertTrue(canEnableDevicePermission(enabled = false))
     }
 
     @Test

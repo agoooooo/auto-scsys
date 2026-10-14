@@ -5,10 +5,10 @@ internal fun canStartTask(deviceStatus: String, runStatus: String?, version: Str
         runStatus !in setOf("running", "awaiting_permission") &&
         version.isNotBlank()
 
-internal fun devicePermissionStatus(enabled: Boolean): String =
-    if (enabled) "开启" else "未开启"
+internal fun devicePermissionActionLabel(enabled: Boolean): String =
+    if (enabled) "已开启" else "开启"
 
-internal fun shouldShowPermissionOpenAction(enabled: Boolean): Boolean = !enabled
+internal fun canEnableDevicePermission(enabled: Boolean): Boolean = !enabled
 
 internal fun canLogoutDuringRun(runStatus: String?): Boolean =
     runStatus !in setOf("running", "awaiting_permission")

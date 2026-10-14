@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -39,6 +40,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -1101,49 +1103,8 @@ private fun FlowPilotScreen(
                                 status = device.status,
                             )
                         }
-                        Text("${device.name} · ${device.model}")
-                        Text("设备 ID：${device.id}", style = MaterialTheme.typography.bodySmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = {
-                                    viewModel.clearRunHistoryError()
-                                    viewModel.clearRemoteRunsError()
-                                    viewModel.refreshTasks()
-                                    viewModel.refreshRemoteRuns()
-                                    viewModel.refreshRunHistory()
-                                },
-                                enabled = !state.loading,
-                            ) {
-                                Text("同步")
-                            }
-                            TextButton(
-                                onClick = {
-                                    viewModel.clearRunHistoryError()
-                                    viewModel.clearRemoteRunsError()
-                                    viewModel.refreshRemoteRuns()
-                                    viewModel.refreshRunHistory()
-                                },
-                                enabled = !state.loading && !state.remoteRunsLoading,
-                            ) {
-                                Text(if (state.remoteRunsLoading) "刷新中" else "刷新远程请求和记录")
-                            }
-                        }
-                        state.remoteRunsError?.let { error ->
-                            Text(error, color = MaterialTheme.colorScheme.error)
-                        }
-                        TextButton(
-                            onClick = { confirmDeviceUnbind = true },
-                            enabled = !state.loading && canLogout,
-                        ) {
-                            Text("解绑此设备")
-                        }
-                    }
-                }
-
-                FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp),
-                    ) {
+                        Text("${device.name} · ${device.model}", style = MaterialTheme.typography.bodyMedium)
+                        HorizontalDivider()
                         DevicePermissionRow(
                             title = "无障碍操作",
                             enabled = accessibilityEnabled,
@@ -1161,6 +1122,34 @@ private fun FlowPilotScreen(
                             enabled = ocrStandbyActive,
                             onOpen = { onSetOcrStandby(true) },
                         )
+                        HorizontalDivider()
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    viewModel.clearRunHistoryError()
+                                    viewModel.clearRemoteRunsError()
+                                    viewModel.refreshTasks()
+                                    viewModel.refreshRemoteRuns()
+                                    viewModel.refreshRunHistory()
+                                },
+                                enabled = !state.loading,
+                            ) {
+                                Text(if (state.loading) "同步中…" else "同步")
+                            }
+                            TextButton(
+                                onClick = { confirmDeviceUnbind = true },
+                                enabled = !state.loading && canLogout,
+                            ) {
+                                Text("解绑设备")
+                            }
+                        }
+                        state.remoteRunsError?.let { error ->
+                            Text(error, color = MaterialTheme.colorScheme.error)
+                        }
                     }
                 }
 
@@ -1851,21 +1840,27 @@ private fun DevicePermissionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 52.dp),
+            .heightIn(min = 64.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(title, style = MaterialTheme.typography.bodyLarge)
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Button(
+            onClick = onOpen,
+            enabled = canEnableDevicePermission(enabled),
+            modifier = Modifier.width(92.dp),
+            shape = RoundedCornerShape(12.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            colors = ButtonDefaults.buttonColors(
+                disabledContainerColor = Color(0xFFE9EEF3),
+                disabledContentColor = Color(0xFF667085),
+            ),
+        ) {
             Text(
-                devicePermissionStatus(enabled),
-                color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                devicePermissionActionLabel(enabled),
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
             )
-            if (shouldShowPermissionOpenAction(enabled)) {
-                TextButton(onClick = onOpen) {
-                    Text("打开")
-                }
-            }
         }
     }
 }
