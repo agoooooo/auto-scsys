@@ -52,12 +52,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,8 +81,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -87,6 +92,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 internal enum class DeviceAppDestination(val label: String) {
     DEVICE("设备"),
@@ -101,8 +108,11 @@ internal enum class DeviceAppAccountPage(val title: String) {
     SECURITY("账号与安全"),
 }
 
+private const val UI_STATE_SAVE_DEBOUNCE_MS = 300L
+
 class MainActivity : ComponentActivity() {
     private val flowPilotViewModel: FlowPilotViewModel by viewModels()
+    private lateinit var uiStateStore: DeviceAppUiStateStore
     private val notificationPermissionGranted = mutableStateOf(false)
     private var startMonitoringAfterNotificationGrant = false
     private var startOcrStandbyAfterNotificationGrant = false
@@ -258,6 +268,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        uiStateStore = DeviceAppUiStateStore(this)
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 while (isActive) {
@@ -289,11 +300,13 @@ class MainActivity : ComponentActivity() {
                         },
                         onRememberLoginInfoChanged = flowPilotViewModel::setRememberLoginInfo,
                         onLogout = {
+                            uiStateStore.clear(flowPilotViewModel.state.value.user?.id)
                             RemoteRunMonitorService.stop(this)
                             OcrStandbyService.stop(this)
                             flowPilotViewModel.logout()
                         },
                         onStopTask = { TaskExecutionService.stop(this) },
+                        uiStateStore = uiStateStore,
                     )
                 }
             }
@@ -672,6 +685,7 @@ private fun FlowPilotScreen(
     onRememberLoginInfoChanged: (Boolean) -> Unit,
     onLogout: () -> Unit,
     onStopTask: () -> Unit,
+    uiStateStore: DeviceAppUiStateStore,
 ) {
     val context = LocalContext.current
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -703,11 +717,18 @@ private fun FlowPilotScreen(
     var accountCurrentPassword by rememberSaveable { mutableStateOf("") }
     var accountNewPassword by rememberSaveable { mutableStateOf("") }
     var selectedRunHistory by remember(user?.id) { mutableStateOf<RunRecord?>(null) }
-    var selectedDestinationName by rememberSaveable {
-        mutableStateOf(DeviceAppDestination.DEVICE.name)
+    val restoredUiState = remember(user?.id, uiStateStore) {
+        uiStateStore.read(
+            user?.id,
+            DeviceAppDestination.DEVICE.name,
+            DeviceAppAccountPage.HOME.name,
+        )
+    }
+    var selectedDestinationName by rememberSaveable(user?.id) {
+        mutableStateOf(restoredUiState.destination)
     }
     var accountPageName by rememberSaveable(user?.id) {
-        mutableStateOf(DeviceAppAccountPage.HOME.name)
+        mutableStateOf(restoredUiState.accountPage)
     }
     val selectedDestination = DeviceAppDestination.entries.firstOrNull {
         it.name == selectedDestinationName
@@ -715,6 +736,45 @@ private fun FlowPilotScreen(
     val accountPage = DeviceAppAccountPage.entries.firstOrNull {
         it.name == accountPageName
     } ?: DeviceAppAccountPage.HOME
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val screenScrollState = key(user?.id, selectedDestinationName, accountPageName) {
+        rememberScrollState(
+            uiStateStore.read(user?.id, selectedDestinationName, accountPageName).scrollPosition,
+        )
+    }
+    LaunchedEffect(user?.id, selectedDestinationName, accountPageName, screenScrollState) {
+        val userId = user?.id ?: return@LaunchedEffect
+        uiStateStore.saveNavigation(userId, selectedDestinationName, accountPageName)
+        snapshotFlow { screenScrollState.value }
+            .distinctUntilChanged()
+            .collect { position ->
+                delay(UI_STATE_SAVE_DEBOUNCE_MS)
+                if (screenScrollState.value != position) return@collect
+                uiStateStore.saveScrollPosition(
+                    userId,
+                    selectedDestinationName,
+                    accountPageName,
+                    position,
+                )
+            }
+    }
+    DisposableEffect(lifecycleOwner, user?.id, selectedDestinationName, accountPageName, screenScrollState) {
+        val userId = user?.id
+        if (userId == null) return@DisposableEffect onDispose {}
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                uiStateStore.saveNavigation(userId, selectedDestinationName, accountPageName)
+                uiStateStore.saveScrollPosition(
+                    userId,
+                    selectedDestinationName,
+                    accountPageName,
+                    screenScrollState.value,
+                )
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     BackHandler(
         enabled = user != null &&
             selectedDestination == DeviceAppDestination.ACCOUNT &&
@@ -787,7 +847,7 @@ private fun FlowPilotScreen(
       Column(
         modifier = Modifier
             .weight(1f)
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(screenScrollState)
             .padding(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
