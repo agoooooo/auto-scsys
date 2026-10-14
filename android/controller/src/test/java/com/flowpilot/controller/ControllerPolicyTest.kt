@@ -178,6 +178,25 @@ class ControllerPolicyTest {
     }
 
     @Test
+    fun restoredUiStateKeepsValidSelectionsAndFallsBackFromUnknownRoutes() {
+        val saved = ControllerUiState(
+            destination = "TASKS",
+            accountPage = "SECURITY",
+            offlineDevicesExpanded = true,
+            selectedDeviceId = "device-1",
+            selectedDeviceIds = setOf("device-1"),
+            selectedTaskIds = setOf("task-1"),
+        )
+        assertEquals(saved, sanitizeControllerUiState(saved))
+
+        val unknown = sanitizeControllerUiState(saved.copy(destination = "UNKNOWN", accountPage = "UNKNOWN"))
+        assertEquals("DEVICES", unknown.destination)
+        assertEquals("HOME", unknown.accountPage)
+        assertEquals(saved.selectedDeviceIds, unknown.selectedDeviceIds)
+        assertEquals(saved.selectedTaskIds, unknown.selectedTaskIds)
+    }
+
+    @Test
     fun controllerThemeUsesGreenAccentAndLightSurfaces() {
         assertEquals(Color(0xFF07C160), ControllerColorScheme.primary)
         assertEquals(Color(0xFFF5F7F6), ControllerColorScheme.background)

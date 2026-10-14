@@ -47,9 +47,6 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -1572,27 +1569,35 @@ private fun FlowPilotScreen(
               shadowElevation = 8.dp,
               border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
           ) {
-              NavigationBar(
-                  containerColor = Color.Transparent,
-                  tonalElevation = 0.dp,
+              Row(
+                  modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp),
+                  verticalAlignment = Alignment.CenterVertically,
               ) {
                   DeviceAppDestination.entries.forEach { destination ->
-                      NavigationBarItem(
-                          selected = selectedDestination == destination,
-                          onClick = {
-                              selectedDestinationName = destination.name
-                              accountPageName = DeviceAppAccountPage.HOME.name
-                          },
-                          icon = { DeviceAppNavigationIcon(destination, selectedDestination == destination) },
-                          label = { Text(destination.label) },
-                          colors = NavigationBarItemDefaults.colors(
-                              selectedIconColor = Color(0xFF07C160),
-                              selectedTextColor = Color(0xFF07C160),
-                              indicatorColor = Color(0xFFE1F5E9),
-                              unselectedIconColor = Color(0xFF80868B),
-                              unselectedTextColor = Color(0xFF80868B),
-                          ),
-                      )
+                      val selected = selectedDestination == destination
+                      Column(
+                          modifier = Modifier.weight(1f)
+                              .clip(RoundedCornerShape(18.dp))
+                              .clickable {
+                                  selectedDestinationName = destination.name
+                                  accountPageName = DeviceAppAccountPage.HOME.name
+                              }
+                              .background(
+                                  if (selected) MaterialTheme.colorScheme.primaryContainer
+                                  else Color.Transparent,
+                              )
+                              .padding(vertical = 7.dp),
+                          horizontalAlignment = Alignment.CenterHorizontally,
+                          verticalArrangement = Arrangement.spacedBy(3.dp),
+                      ) {
+                          DeviceAppNavigationIcon(destination, selected)
+                          Text(
+                              destination.label,
+                              color = if (selected) MaterialTheme.colorScheme.primary
+                              else MaterialTheme.colorScheme.onSurfaceVariant,
+                              style = MaterialTheme.typography.labelMedium,
+                          )
+                      }
                   }
               }
           }
@@ -1805,7 +1810,7 @@ private fun FlowPilotBrandHeader() {
                     Text("Pilot", style = MaterialTheme.typography.titleLarge, color = FlowPilotPalette.Accent)
                 }
                 Text(
-                    "ANDROID AUTOMATION",
+                    "受控端 · DEVICE CLIENT",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1816,7 +1821,7 @@ private fun FlowPilotBrandHeader() {
             color = FlowPilotPalette.AccentSoft,
         ) {
             Text(
-                "ANDROID",
+                "受控端",
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,

@@ -27,9 +27,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -46,6 +43,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -202,6 +200,7 @@ private data class ControllerScreenState(
     val recoveryCode: String = "",
     val recoveryNewPassword: String = "",
     val session: ControllerSession? = null,
+    val uiState: ControllerUiState = ControllerUiState(),
     val profileName: String = "",
     val profileEmail: String = "",
     val profileCurrentPassword: String = "",
@@ -250,6 +249,7 @@ private const val SESSION_CHECK_INTERVAL_MS = 15_000L
 
 class MainActivity : ComponentActivity() {
     private lateinit var sessionStore: ControllerSessionStore
+    private lateinit var uiStateStore: ControllerUiStateStore
     private var state by mutableStateOf(ControllerScreenState())
     private var monitorJob: Job? = null
     private var batchMonitorJob: Job? = null
@@ -260,6 +260,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         sessionStore = ControllerSessionStore(this)
+        uiStateStore = ControllerUiStateStore(this)
+        val restoredUiState = uiStateStore.read()
+        state = state.copy(
+            uiState = restoredUiState,
+            selectedDeviceId = restoredUiState.selectedDeviceId,
+            selectedDeviceIds = restoredUiState.selectedDeviceIds,
+            selectedTaskIds = restoredUiState.selectedTaskIds,
+        )
         checkPasswordRecovery(state.apiUrl)
         sessionStore.read()?.let { session ->
             state = state.copy(
@@ -319,6 +327,7 @@ class MainActivity : ComponentActivity() {
                         onRefreshDevices = ::refreshDevices,
                         onCheckSession = ::checkSession,
                         onRefreshRunHistory = ::refreshRunHistory,
+                        onSaveUiState = ::saveUiState,
                         onSaveProfile = ::saveProfile,
                         onChangePassword = ::changePassword,
                         onToggleDeviceSelection = ::toggleDeviceSelection,
@@ -490,6 +499,13 @@ class MainActivity : ComponentActivity() {
                 error = null,
                 message = null,
             )
+            saveUiState(
+                state.uiState.copy(
+                    selectedDeviceId = selectedDevice,
+                    selectedDeviceIds = state.selectedDeviceIds,
+                    selectedTaskIds = state.selectedTaskIds,
+                ),
+            )
             monitorJob?.cancel()
             activeRun?.let { run ->
                 monitorJob = lifecycleScope.launch { monitorRun(session, run.id) }
@@ -497,6 +513,7 @@ class MainActivity : ComponentActivity() {
         } catch (error: Exception) {
             if (error is ControllerApiException && error.statusCode == 401) {
                 sessionStore.clear()
+                clearUiState()
                 state = state.copy(session = null, loading = false, error = "登录已过期，请重新登录")
             } else {
                 state = state.copy(loading = false, error = error.message ?: "加载设备和任务失败")
@@ -531,6 +548,12 @@ class MainActivity : ComponentActivity() {
                         devices = devices,
                         selectedDeviceId = selectedDeviceId,
                         selectedDeviceIds = state.selectedDeviceIds.intersect(onlineDeviceIds),
+                    )
+                    saveUiState(
+                        state.uiState.copy(
+                            selectedDeviceId = selectedDeviceId,
+                            selectedDeviceIds = state.selectedDeviceIds,
+                        ),
                     )
                 }
             } catch (error: Exception) {
@@ -612,6 +635,7 @@ class MainActivity : ComponentActivity() {
                     monitorJob?.cancel()
                     batchMonitorJob?.cancel()
                     sessionStore.clear()
+                    clearUiState()
                     state = state.copy(
                         session = null,
                         loading = false,
@@ -703,6 +727,12 @@ class MainActivity : ComponentActivity() {
             dispatchUncertain = false,
             error = null,
         )
+        saveUiState(
+            state.uiState.copy(
+                selectedDeviceId = deviceId,
+                selectedDeviceIds = selected,
+            ),
+        )
     }
 
     private fun unbindOfflineDevice(device: ControllerDevice) {
@@ -730,9 +760,16 @@ class MainActivity : ComponentActivity() {
                     error = null,
                     message = "设备已解绑并停用；待处理请求和设备授权已撤销",
                 )
+                saveUiState(
+                    state.uiState.copy(
+                        selectedDeviceId = nextSelectedDevice,
+                        selectedDeviceIds = state.selectedDeviceIds,
+                    ),
+                )
             } catch (error: Exception) {
                 if (error is ControllerApiException && error.statusCode == 401) {
                     sessionStore.clear()
+                    clearUiState()
                     state = state.copy(session = null, loading = false, error = "登录已过期，请重新登录")
                 } else {
                     state = state.copy(loading = false, error = error.message ?: "设备解绑失败")
@@ -748,6 +785,27 @@ class MainActivity : ComponentActivity() {
             selectedTaskIds = selected,
             dispatchUncertain = false,
             error = null,
+        )
+        saveUiState(state.uiState.copy(selectedTaskIds = selected))
+    }
+
+    private fun saveUiState(uiState: ControllerUiState) {
+        val updated = uiState.copy(
+            selectedDeviceId = state.selectedDeviceId,
+            selectedDeviceIds = state.selectedDeviceIds,
+            selectedTaskIds = state.selectedTaskIds,
+        )
+        uiStateStore.save(updated)
+        state = state.copy(uiState = updated)
+    }
+
+    private fun clearUiState() {
+        uiStateStore.clear()
+        state = state.copy(
+            uiState = ControllerUiState(),
+            selectedDeviceId = null,
+            selectedDeviceIds = emptySet(),
+            selectedTaskIds = emptySet(),
         )
     }
 
@@ -964,6 +1022,7 @@ class MainActivity : ComponentActivity() {
                 logoutError = error.message ?: "服务端退出失败"
             } finally {
                 sessionStore.clear()
+                clearUiState()
                 state = ControllerScreenState(
                     apiUrl = session.apiUrl,
                     email = session.email,
@@ -1010,6 +1069,7 @@ private fun ControllerScreen(
     onRefreshDevices: () -> Unit,
     onCheckSession: () -> Unit,
     onRefreshRunHistory: () -> Unit,
+    onSaveUiState: (ControllerUiState) -> Unit,
     onSaveProfile: () -> Unit,
     onChangePassword: () -> Unit,
     onToggleDeviceSelection: (String) -> Unit,
@@ -1025,12 +1085,23 @@ private fun ControllerScreen(
     var showHelp by remember { mutableStateOf(false) }
     var selectedRunHistory by remember { mutableStateOf<ControllerRunHistory?>(null) }
     var deviceToUnbind by remember { mutableStateOf<ControllerDevice?>(null) }
-    var offlineDevicesExpanded by rememberSaveable { mutableStateOf(false) }
-    var selectedDestinationName by rememberSaveable {
-        mutableStateOf(ControllerDestination.DEVICES.name)
+    var offlineDevicesExpanded by rememberSaveable(state.session?.email) {
+        mutableStateOf(state.uiState.offlineDevicesExpanded)
     }
-    var accountPageName by rememberSaveable {
-        mutableStateOf(ControllerAccountPage.HOME.name)
+    var selectedDestinationName by rememberSaveable(state.session?.email) {
+        mutableStateOf(state.uiState.destination)
+    }
+    var accountPageName by rememberSaveable(state.session?.email) {
+        mutableStateOf(state.uiState.accountPage)
+    }
+    fun persistScreenState() {
+        onSaveUiState(
+            state.uiState.copy(
+                destination = selectedDestinationName,
+                accountPage = accountPageName,
+                offlineDevicesExpanded = offlineDevicesExpanded,
+            ),
+        )
     }
     val selectedDestination = ControllerDestination.entries.firstOrNull {
         it.name == selectedDestinationName
@@ -1059,6 +1130,7 @@ private fun ControllerScreen(
             accountPage != ControllerAccountPage.HOME,
     ) {
         accountPageName = ControllerAccountPage.HOME.name
+        persistScreenState()
     }
     Column(Modifier.fillMaxSize()) {
       Column(
@@ -1080,7 +1152,10 @@ private fun ControllerScreen(
                     accountPage != ControllerAccountPage.HOME
                 ) {
                     TextButton(
-                        onClick = { accountPageName = ControllerAccountPage.HOME.name },
+                        onClick = {
+                            accountPageName = ControllerAccountPage.HOME.name
+                            persistScreenState()
+                        },
                     ) {
                         Text("‹ 返回")
                     }
@@ -1216,6 +1291,7 @@ private fun ControllerScreen(
                             Row(
                                 Modifier.fillMaxWidth().clickable {
                                     accountPageName = ControllerAccountPage.PROFILE.name
+                                    persistScreenState()
                                 }.padding(16.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -1249,13 +1325,19 @@ private fun ControllerScreen(
                                 ControllerAccountRow(
                                     title = "个人资料",
                                     detail = "姓名、邮箱",
-                                    onClick = { accountPageName = ControllerAccountPage.PROFILE.name },
+                                    onClick = {
+                                        accountPageName = ControllerAccountPage.PROFILE.name
+                                        persistScreenState()
+                                    },
                                 )
                                 HorizontalDivider(Modifier.padding(start = 16.dp))
                                 ControllerAccountRow(
                                     title = "账号与安全",
                                     detail = "修改登录密码",
-                                    onClick = { accountPageName = ControllerAccountPage.SECURITY.name },
+                                    onClick = {
+                                        accountPageName = ControllerAccountPage.SECURITY.name
+                                        persistScreenState()
+                                    },
                                 )
                             }
                         }
@@ -1381,6 +1463,7 @@ private fun ControllerScreen(
                                     .padding(top = 8.dp)
                                     .clickable(enabled = isOfflineGroup) {
                                         offlineDevicesExpanded = !offlineDevicesExpanded
+                                        persistScreenState()
                                     }
                                     .padding(vertical = 4.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1486,7 +1569,10 @@ private fun ControllerScreen(
                 }
                 if (selectedOnlineCount > 0) {
                     Button(
-                        onClick = { selectedDestinationName = ControllerDestination.TASKS.name },
+                        onClick = {
+                            selectedDestinationName = ControllerDestination.TASKS.name
+                            persistScreenState()
+                        },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text("为已选设备选择脚本")
@@ -1587,6 +1673,7 @@ private fun ControllerScreen(
                 onClick = {
                     onDispatch()
                     selectedDestinationName = ControllerDestination.RUNS.name
+                    persistScreenState()
                 },
                 enabled = !state.loading && dispatchTargets.isNotEmpty() && !state.dispatchUncertain,
                 modifier = Modifier.fillMaxWidth(),
@@ -1754,27 +1841,36 @@ private fun ControllerScreen(
               shadowElevation = 8.dp,
               border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
           ) {
-              NavigationBar(
-                  containerColor = Color.Transparent,
-                  tonalElevation = 0.dp,
+              Row(
+                  modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp),
+                  verticalAlignment = Alignment.CenterVertically,
               ) {
                   ControllerDestination.entries.forEach { destination ->
-                      NavigationBarItem(
-                          selected = selectedDestination == destination,
-                          onClick = {
-                              selectedDestinationName = destination.name
-                              accountPageName = ControllerAccountPage.HOME.name
-                          },
-                          icon = { ControllerNavigationIcon(destination, selectedDestination == destination) },
-                          label = { Text(destination.label) },
-                          colors = NavigationBarItemDefaults.colors(
-                              selectedIconColor = Color(0xFF07C160),
-                              selectedTextColor = Color(0xFF07C160),
-                              indicatorColor = Color(0xFFE1F5E9),
-                              unselectedIconColor = Color(0xFF80868B),
-                              unselectedTextColor = Color(0xFF80868B),
-                          ),
-                      )
+                      val selected = selectedDestination == destination
+                      Column(
+                          modifier = Modifier.weight(1f)
+                              .clip(RoundedCornerShape(18.dp))
+                              .clickable {
+                                  selectedDestinationName = destination.name
+                                  accountPageName = ControllerAccountPage.HOME.name
+                                  persistScreenState()
+                              }
+                              .background(
+                                  if (selected) MaterialTheme.colorScheme.primaryContainer
+                                  else Color.Transparent,
+                              )
+                              .padding(vertical = 7.dp),
+                          horizontalAlignment = Alignment.CenterHorizontally,
+                          verticalArrangement = Arrangement.spacedBy(3.dp),
+                      ) {
+                          ControllerNavigationIcon(destination, selected)
+                          Text(
+                              destination.label,
+                              color = if (selected) MaterialTheme.colorScheme.primary
+                              else MaterialTheme.colorScheme.onSurfaceVariant,
+                              style = MaterialTheme.typography.labelMedium,
+                          )
+                      }
                   }
               }
           }
@@ -1904,16 +2000,22 @@ private fun ControllerAccountRow(
 
 @Composable
 private fun ControllerNavigationIcon(destination: ControllerDestination, selected: Boolean) {
-    Canvas(Modifier.size(24.dp)) {
+    Canvas(Modifier.size(26.dp)) {
         val color = if (selected) Color(0xFF07C160) else Color(0xFF80868B)
-        val stroke = 1.8.dp.toPx()
+        val stroke = if (selected) 2.2.dp.toPx() else 1.8.dp.toPx()
         when (destination) {
             ControllerDestination.DEVICES -> {
+                drawRoundRect(
+                    color = color.copy(alpha = 0.12f),
+                    topLeft = Offset(size.width * 0.18f, size.height * 0.08f),
+                    size = Size(size.width * 0.64f, size.height * 0.84f),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.13f),
+                )
                 drawRoundRect(
                     color = color,
                     topLeft = Offset(size.width * 0.18f, size.height * 0.08f),
                     size = Size(size.width * 0.64f, size.height * 0.84f),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.1f),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.13f),
                     style = Stroke(stroke),
                 )
                 drawLine(
@@ -1926,17 +2028,24 @@ private fun ControllerNavigationIcon(destination: ControllerDestination, selecte
             }
             ControllerDestination.TASKS -> {
                 drawRoundRect(
+                    color = color.copy(alpha = 0.1f),
+                    topLeft = Offset(size.width * 0.12f, size.height * 0.12f),
+                    size = Size(size.width * 0.76f, size.height * 0.76f),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.15f),
+                )
+                drawRoundRect(
                     color = color,
                     topLeft = Offset(size.width * 0.12f, size.height * 0.12f),
                     size = Size(size.width * 0.76f, size.height * 0.76f),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.12f),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.15f),
                     style = Stroke(stroke),
                 )
                 listOf(0.37f, 0.56f, 0.75f).forEach { y ->
+                    drawCircle(color, size.width * 0.045f, Offset(size.width * 0.29f, size.height * y))
                     drawLine(
                         color,
-                        Offset(size.width * 0.32f, size.height * y),
-                        Offset(size.width * 0.72f, size.height * y),
+                        Offset(size.width * 0.42f, size.height * y),
+                        Offset(size.width * 0.73f, size.height * y),
                         stroke,
                         cap = StrokeCap.Round,
                     )
@@ -1952,21 +2061,28 @@ private fun ControllerNavigationIcon(destination: ControllerDestination, selecte
                     lineTo(size.width * 0.86f, size.height * 0.28f)
                 }
                 drawPath(chart, color, style = Stroke(stroke, cap = StrokeCap.Round))
+                listOf(
+                    Offset(size.width * 0.22f, size.height * 0.68f),
+                    Offset(size.width * 0.43f, size.height * 0.48f),
+                    Offset(size.width * 0.60f, size.height * 0.60f),
+                    Offset(size.width * 0.86f, size.height * 0.28f),
+                ).forEach { point ->
+                    drawCircle(color, size.width * 0.07f, point)
+                }
             }
             ControllerDestination.ACCOUNT -> {
                 drawCircle(
                     color,
-                    size.minDimension * 0.16f,
-                    Offset(size.width * 0.5f, size.height * 0.31f),
-                    style = Stroke(stroke),
+                    size.minDimension * 0.15f,
+                    Offset(size.width * 0.5f, size.height * 0.29f),
                 )
                 drawArc(
                     color = color,
                     startAngle = 200f,
                     sweepAngle = 140f,
                     useCenter = false,
-                    topLeft = Offset(size.width * 0.19f, size.height * 0.47f),
-                    size = Size(size.width * 0.62f, size.height * 0.43f),
+                    topLeft = Offset(size.width * 0.17f, size.height * 0.45f),
+                    size = Size(size.width * 0.66f, size.height * 0.45f),
                     style = Stroke(stroke, cap = StrokeCap.Round),
                 )
             }
