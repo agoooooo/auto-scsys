@@ -1166,8 +1166,9 @@ private fun ControllerScreen(
                         ControllerQuickStartStep("3", "查看结果", "到“运行”页查看排队和执行状态")
                     }
                 }
-                Text("受控设备（${state.devices.size}）", style = MaterialTheme.typography.titleMedium)
-                val orderedDevices = orderControllerDevices(state.devices)
+                val visibleDevices = visibleControllerDevices(state.devices)
+                Text("受控设备（${visibleDevices.size}）", style = MaterialTheme.typography.titleMedium)
+                val orderedDevices = orderControllerDevices(visibleDevices)
                 val selectedOnlineCount = orderedDevices.count {
                     it.id in state.selectedDeviceIds && it.status == "online"
                 }
@@ -1176,10 +1177,10 @@ private fun ControllerScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (state.devices.isEmpty()) {
+                if (visibleDevices.isEmpty()) {
                     ControllerCard(Modifier.fillMaxWidth()) {
                         Text(
-                            "暂无已绑定设备。请先在受控端登录并绑定设备。",
+                            "暂无可用受控设备。请先在受控端登录并绑定设备；已停用设备不会显示。",
                             modifier = Modifier.padding(18.dp),
                         )
                     }

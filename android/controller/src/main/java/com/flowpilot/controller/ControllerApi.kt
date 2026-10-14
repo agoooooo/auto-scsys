@@ -358,11 +358,13 @@ internal fun orderControllerDevices(devices: List<ControllerDevice>): List<Contr
             .thenBy { it.id },
     )
 
+internal fun visibleControllerDevices(devices: List<ControllerDevice>): List<ControllerDevice> =
+    devices.filter { it.status != "disabled" }
+
 internal fun groupControllerDevices(devices: List<ControllerDevice>): List<ControllerDeviceGroup> {
     val groups = listOf(
         "online" to "在线设备",
         "offline" to "离线设备",
-        "disabled" to "已停用",
     ).mapNotNull { (status, label) ->
         orderControllerDevices(devices.filter { it.status == status })
             .takeIf { it.isNotEmpty() }

@@ -52,7 +52,6 @@ class ControllerPolicyTest {
     fun offlineDeviceGroupStartsCollapsedAndOnlyOfflineDevicesCanBeUnbound() {
         assertFalse(isControllerDeviceGroupExpandedByDefault("offline"))
         assertTrue(isControllerDeviceGroupExpandedByDefault("online"))
-        assertTrue(isControllerDeviceGroupExpandedByDefault("disabled"))
         assertTrue(canUnbindControllerDevice("offline"))
         assertFalse(canUnbindControllerDevice("online"))
         assertFalse(canUnbindControllerDevice("disabled"))
@@ -102,12 +101,21 @@ class ControllerPolicyTest {
         )
 
         assertEquals(
-            listOf("在线设备", "离线设备", "已停用", "其他状态"),
+            listOf("在线设备", "离线设备", "其他状态"),
             groupControllerDevices(devices).map(ControllerDeviceGroup::label),
         )
         assertEquals(
-            listOf(1, 1, 1, 1),
+            listOf(1, 1, 1),
             groupControllerDevices(devices).map { it.devices.size },
+        )
+        assertEquals(
+            listOf("other", "offline", "online"),
+            visibleControllerDevices(devices).map(ControllerDevice::id),
+        )
+        assertFalse(
+            groupControllerDevices(devices)
+                .flatMap(ControllerDeviceGroup::devices)
+                .any { it.status == "disabled" },
         )
         assertEquals(
             listOf("在线设备"),
