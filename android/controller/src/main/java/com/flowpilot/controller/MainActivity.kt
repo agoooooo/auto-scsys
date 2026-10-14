@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -51,6 +52,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -108,6 +110,82 @@ private fun ControllerDeviceStatusBadge(status: String) {
             color = if (online) MaterialTheme.colorScheme.onPrimaryContainer
             else MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
+@Composable
+private fun ControllerLoginBrand() {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                modifier = Modifier.size(44.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFF17201B),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text("F", color = Color.White, style = MaterialTheme.typography.headlineSmall)
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Row {
+                    Text("Flow", style = MaterialTheme.typography.titleLarge)
+                    Text("Pilot", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
+                }
+                Text(
+                    "CONTROL CENTER",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.primaryContainer,
+        ) {
+            Text(
+                "控制端",
+                modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ControllerLoginHero() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.linearGradient(listOf(Color(0xFF075B36), Color(0xFF07C160))),
+                RoundedCornerShape(20.dp),
+            )
+            .padding(horizontal = 20.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            "设备协作 · 任务管理",
+            color = Color.White.copy(alpha = 0.78f),
+            style = MaterialTheme.typography.labelMedium,
+        )
+        Text(
+            "让设备协作更简单",
+            color = Color.White,
+            style = MaterialTheme.typography.headlineSmall,
+        )
+        Text(
+            "查看设备状态，派发并跟踪自动化任务。",
+            color = Color.White.copy(alpha = 0.88f),
+            style = MaterialTheme.typography.bodyMedium,
         )
     }
 }
@@ -990,8 +1068,8 @@ private fun ControllerScreen(
         ),
       ) {
         if (state.session == null) {
-            Text("FlowPilot 控制端", style = MaterialTheme.typography.headlineMedium)
-            Text("管理你的受控设备，并在授权范围内下发脚本任务。")
+            ControllerLoginBrand()
+            ControllerLoginHero()
         } else {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1041,6 +1119,11 @@ private fun ControllerScreen(
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         state.message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
         if (state.session == null) {
+            ControllerCard(Modifier.fillMaxWidth()) {
+              Column(
+                Modifier.fillMaxWidth().padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+              ) {
             OutlinedTextField(
                 value = state.apiUrl,
                 onValueChange = onApiUrlChange,
@@ -1121,6 +1204,8 @@ private fun ControllerScreen(
                 TextButton(onClick = onToggleRegister, enabled = !state.loading) {
                     Text(if (state.isRegistering) "已有账号？返回登录" else "没有账号？注册")
                 }
+            }
+              }
             }
         } else {
             if (state.loading) CircularProgressIndicator()
@@ -1450,16 +1535,43 @@ private fun ControllerScreen(
                             ) {
                                 Column(
                                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalArrangement = Arrangement.spacedBy(9.dp),
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                            Text(taskItem.name, style = MaterialTheme.typography.titleSmall)
+                                        Surface(
+                                            modifier = Modifier.size(42.dp),
+                                            shape = RoundedCornerShape(13.dp),
+                                            color = if (selected) Color.White
+                                            else MaterialTheme.colorScheme.primaryContainer,
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(
+                                                    taskItem.name.take(1).uppercase(),
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                )
+                                            }
+                                        }
+                                        Column(
+                                            Modifier.weight(1f).padding(horizontal = 12.dp),
+                                            verticalArrangement = Arrangement.spacedBy(5.dp),
+                                        ) {
                                             Text(
-                                                taskItem.version,
-                                                color = MaterialTheme.colorScheme.primary,
-                                                style = MaterialTheme.typography.bodySmall,
+                                                taskItem.name,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                maxLines = 2,
                                             )
+                                            Surface(
+                                                shape = CircleShape,
+                                                color = MaterialTheme.colorScheme.primaryContainer,
+                                            ) {
+                                                Text(
+                                                    taskItem.version,
+                                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                )
+                                            }
                                         }
                                         Checkbox(
                                             checked = selected,
@@ -1468,7 +1580,12 @@ private fun ControllerScreen(
                                         )
                                     }
                                     if (taskItem.description.isNotBlank()) {
-                                        Text(taskItem.description, style = MaterialTheme.typography.bodySmall)
+                                        Text(
+                                            taskItem.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                        )
                                     }
                                 }
                             }
