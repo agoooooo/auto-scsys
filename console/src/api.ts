@@ -133,6 +133,15 @@ export class ApiError extends Error {
 }
 
 let refreshInFlight: Promise<void> | null = null;
+let idempotencySequence = 0;
+
+function createIdempotencyKey(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  idempotencySequence += 1;
+  return `web-${Date.now().toString(36)}-${idempotencySequence.toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
 
 async function refreshSession(session: Session): Promise<void> {
   refreshInFlight ??= (async () => {
@@ -268,7 +277,7 @@ export function deleteScriptDraft(session: Session, taskId: string, revision: nu
 export function startRemoteRun(session: Session, taskId: string, deviceId: string): Promise<RemoteRun> {
   return apiRequest(session, "/remote-runs", {
     method: "POST",
-    headers: { "Idempotency-Key": crypto.randomUUID() },
+    headers: { "Idempotency-Key": createIdempotencyKey() },
     body: JSON.stringify({ task_id: taskId, device_id: deviceId }),
   });
 }

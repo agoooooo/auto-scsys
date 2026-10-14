@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearSession, login, readSession, saveScriptDraft } from "./api";
+import { clearSession, login, readSession, saveScriptDraft, startRemoteRun } from "./api";
 import { canManageTask, draftKey, matchesTaskSearch, nextPatchVersion } from "./policies";
 
 afterEach(() => {
@@ -119,5 +119,41 @@ describe("script version policies", () => {
       message: "草稿已在其他会话中更新",
       status: 409,
     });
+  });
+
+  it("creates remote-run idempotency keys without randomUUID support", async () => {
+    vi.stubGlobal("crypto", {});
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "request-1",
+      device_id: "device-1",
+      status: "pending",
+      run_id: null,
+      run_status: null,
+      result_summary: "",
+      stop_requested: false,
+      expires_at: 123,
+    }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const session = {
+      baseUrl: "https://console.example.test/api",
+      token: "token",
+      accessTokenExpiresAt: Date.now() + 60_000,
+      rememberMe: false,
+      user: {
+        id: "user-1",
+        name: "User",
+        email: "user@example.test",
+        role: "user" as const,
+        status: "active" as const,
+        device_limit: 2,
+      },
+    };
+
+    await startRemoteRun(session, "task-1", "device-1");
+    await startRemoteRun(session, "task-1", "device-1");
+
+    const keys = fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Idempotency-Key"));
+    expect(keys[0]).toMatch(/^[A-Za-z0-9._:-]+$/);
+    expect(keys[0]).not.toBe(keys[1]);
   });
 });
