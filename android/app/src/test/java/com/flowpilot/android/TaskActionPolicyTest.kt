@@ -94,6 +94,14 @@ class TaskActionPolicyTest {
     }
 
     @Test
+    fun devicePermissionRowsShowOnlyStateAndOpenActionWhenDisabled() {
+        assertEquals("开启", devicePermissionStatus(enabled = true))
+        assertEquals("未开启", devicePermissionStatus(enabled = false))
+        assertFalse(shouldShowPermissionOpenAction(enabled = true))
+        assertTrue(shouldShowPermissionOpenAction(enabled = false))
+    }
+
+    @Test
     fun remoteStopPollingOnlyAppliesToActiveRemoteRuns() {
         assertTrue(shouldPollRemoteStop("remote-request", stopRequested = false))
         assertFalse(shouldPollRemoteStop(null, stopRequested = false))
@@ -227,14 +235,6 @@ class TaskActionPolicyTest {
         assertTrue(shouldRequestBatteryOptimizationExemption(exemptionSupported = true, alreadyExempt = false))
         assertFalse(shouldRequestBatteryOptimizationExemption(exemptionSupported = true, alreadyExempt = true))
         assertFalse(shouldRequestBatteryOptimizationExemption(exemptionSupported = false, alreadyExempt = false))
-    }
-
-    @Test
-    fun xiaomiFamilyManufacturersUseManufacturerSpecificAutoStartSettings() {
-        assertTrue(usesXiaomiAutoStartSettings("Xiaomi"))
-        assertTrue(usesXiaomiAutoStartSettings("REDMI"))
-        assertTrue(usesXiaomiAutoStartSettings("POCO"))
-        assertFalse(usesXiaomiAutoStartSettings("samsung"))
     }
 
     @Test

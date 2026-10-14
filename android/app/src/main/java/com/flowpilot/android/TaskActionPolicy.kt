@@ -5,6 +5,11 @@ internal fun canStartTask(deviceStatus: String, runStatus: String?, version: Str
         runStatus !in setOf("running", "awaiting_permission") &&
         version.isNotBlank()
 
+internal fun devicePermissionStatus(enabled: Boolean): String =
+    if (enabled) "开启" else "未开启"
+
+internal fun shouldShowPermissionOpenAction(enabled: Boolean): Boolean = !enabled
+
 internal fun canLogoutDuringRun(runStatus: String?): Boolean =
     runStatus !in setOf("running", "awaiting_permission")
 
@@ -44,11 +49,6 @@ internal fun shouldRequestBatteryOptimizationExemption(
     exemptionSupported: Boolean,
     alreadyExempt: Boolean,
 ): Boolean = exemptionSupported && !alreadyExempt
-
-internal fun usesXiaomiAutoStartSettings(manufacturer: String): Boolean =
-    manufacturer.contains("xiaomi", ignoreCase = true) ||
-        manufacturer.contains("redmi", ignoreCase = true) ||
-        manufacturer.contains("poco", ignoreCase = true)
 
 internal fun shouldDirectlyRunRemoteRequest(
     status: String,

@@ -3,7 +3,6 @@ package com.flowpilot.android
 import android.Manifest
 import android.app.Activity
 import android.content.BroadcastReceiver
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -106,7 +105,6 @@ internal enum class DeviceAppAccountPage(val title: String) {
 class MainActivity : ComponentActivity() {
     private val flowPilotViewModel: FlowPilotViewModel by viewModels()
     private val notificationPermissionGranted = mutableStateOf(false)
-    private val batteryOptimizationExempt = mutableStateOf(false)
     private var startMonitoringAfterNotificationGrant = false
     private var startOcrStandbyAfterNotificationGrant = false
     private var startDefaultOcrAfterNotificationGrant = false
@@ -134,7 +132,6 @@ class MainActivity : ComponentActivity() {
     private val batteryOptimizationSettings = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) {
-        batteryOptimizationExempt.value = isIgnoringBatteryOptimizations()
         if (startDefaultOcrAfterBatterySettings) {
             startDefaultOcrAfterBatterySettings = false
             requestDefaultOcrStandby()
@@ -280,15 +277,9 @@ class MainActivity : ComponentActivity() {
                         viewModel = flowPilotViewModel,
                         accessibilityEnabled = accessibilityEnabled.value,
                         notificationPermissionGranted = notificationPermissionGranted.value,
-                        batteryOptimizationExempt = batteryOptimizationExempt.value,
                         remoteMonitoring = remoteMonitoring.value,
                         ocrStandbyActive = ocrStandbyActive.value,
                         onStartDefaultStandby = ::startDefaultStandby,
-                        onRequestBatteryOptimizationExemption = {
-                            requestBatteryOptimizationExemption()
-                        },
-                        onOpenAppSystemSettings = ::openAppSystemSettings,
-                        onOpenManufacturerBackgroundSettings = ::openManufacturerBackgroundSettings,
                         onSetOcrStandby = ::setOcrStandby,
                         onAutoRunRemoteRequest = ::autoRunRemoteRequest,
                         onRunTask = ::beginExecution,
@@ -322,7 +313,6 @@ class MainActivity : ComponentActivity() {
             Build.VERSION.SDK_INT < 33 ||
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
                 android.content.pm.PackageManager.PERMISSION_GRANTED
-        batteryOptimizationExempt.value = isIgnoringBatteryOptimizations()
         remoteMonitoring.value = RemoteRunMonitorService.isMonitoring(this)
         ocrStandbyActive.value = OcrStandbyService.isActive(this)
         OcrStandbyService.consumeLastError(this)?.let(flowPilotViewModel::showError)
@@ -569,7 +559,6 @@ class MainActivity : ComponentActivity() {
                 alreadyExempt = isIgnoringBatteryOptimizations(),
             )
         ) {
-            batteryOptimizationExempt.value = isIgnoringBatteryOptimizations()
             if (continueToOcr) requestDefaultOcrStandby()
             return
         }
@@ -594,54 +583,6 @@ class MainActivity : ComponentActivity() {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
             (getSystemService(Context.POWER_SERVICE) as PowerManager)
                 .isIgnoringBatteryOptimizations(packageName)
-
-    private fun openAppSystemSettings() {
-        try {
-            startActivity(
-                Intent(
-                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                    Uri.fromParts("package", packageName, null),
-                ),
-            )
-        } catch (exception: Exception) {
-            flowPilotViewModel.showError(
-                "无法打开 FlowPilot 系统设置：${exception.message ?: "未知错误"}",
-            )
-        }
-    }
-
-    private fun openManufacturerBackgroundSettings() {
-        val intents = buildList {
-            if (usesXiaomiAutoStartSettings(Build.MANUFACTURER)) {
-                add(
-                    Intent("miui.intent.action.OP_AUTO_START")
-                        .setPackage("com.miui.securitycenter"),
-                )
-                add(
-                    Intent().setComponent(
-                        ComponentName(
-                            "com.miui.securitycenter",
-                            "com.miui.permcenter.autostart.AutoStartManagementActivity",
-                        ),
-                    ),
-                )
-            }
-            add(
-                Intent(
-                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                    Uri.fromParts("package", packageName, null),
-                ),
-            )
-        }
-        val intent = intents.firstOrNull { it.resolveActivity(packageManager) != null } ?: intents.last()
-        try {
-            startActivity(intent)
-        } catch (exception: Exception) {
-            flowPilotViewModel.showError(
-                "无法打开自启动/后台运行设置：${exception.message ?: "未知错误"}",
-            )
-        }
-    }
 
     private fun requestDefaultOcrStandby() {
         if (!canStartOcrStandby(RunStatusStore(this).snapshot().status)) {
@@ -719,13 +660,9 @@ private fun FlowPilotScreen(
     viewModel: FlowPilotViewModel,
     accessibilityEnabled: Boolean,
     notificationPermissionGranted: Boolean,
-    batteryOptimizationExempt: Boolean,
     remoteMonitoring: Boolean,
     ocrStandbyActive: Boolean,
     onStartDefaultStandby: () -> Unit,
-    onRequestBatteryOptimizationExemption: () -> Unit,
-    onOpenAppSystemSettings: () -> Unit,
-    onOpenManufacturerBackgroundSettings: () -> Unit,
     onSetOcrStandby: (Boolean) -> Unit,
     onRunTask: (AvailableTask, String?, String?) -> Unit,
     onAutoRunRemoteRequest: (RemoteRun) -> Unit,
@@ -1130,25 +1067,6 @@ private fun FlowPilotScreen(
             }
         } else {
             if (selectedDestination == DeviceAppDestination.DEVICE) {
-              FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text("快速开始", style = MaterialTheme.typography.titleMedium)
-                    DeviceQuickStartStep("1", "绑定此手机", if (device == null) "绑定后同步可用脚本" else "已完成")
-                    DeviceQuickStartStep(
-                        "2",
-                        "开启远程待命",
-                        if (remoteMonitoring) "已开启" else "开启后才能接收派发",
-                    )
-                    DeviceQuickStartStep(
-                        "3",
-                        "从控制端派发任务",
-                        "无需确认接收；首次需要的系统权限按提示授权",
-                    )
-                }
-              }
               if (device == null) {
                 FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
@@ -1224,127 +1142,25 @@ private fun FlowPilotScreen(
 
                 FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp),
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("远程运行待命", style = MaterialTheme.typography.titleMedium)
-                            StatusBadge(
-                                label = if (remoteMonitoring) "已开启" else "未开启",
-                                status = if (remoteMonitoring) "active" else "stopped",
-                            )
-                        }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                            Text(
-                                permissionStatusLabel("电池优化豁免", batteryOptimizationExempt),
-                                color = if (batteryOptimizationExempt) {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                } else {
-                                    MaterialTheme.colorScheme.error
-                                },
-                            )
-                            if (!batteryOptimizationExempt) {
-                                Button(
-                                    onClick = onRequestBatteryOptimizationExemption,
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    Text("允许后台保活")
-                                }
-                            }
-                            TextButton(
-                                onClick = onOpenManufacturerBackgroundSettings,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text("自启动/后台运行设置")
-                            }
-                            TextButton(
-                                onClick = onOpenAppSystemSettings,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text("应用设置")
-                            }
-                        }
-                        if (!notificationPermissionGranted) {
-                            Text(
-                                permissionStatusLabel("通知权限", available = false),
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                        Button(
-                            onClick = { onSetRemoteMonitoring(!remoteMonitoring) },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(if (remoteMonitoring) "停止远程待命" else "开启远程待命")
-                        }
-                    }
-                }
-
-                FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("屏幕捕获权限", style = MaterialTheme.typography.titleMedium)
-                            StatusBadge(
-                                label = if (ocrStandbyActive) "已授权" else "缺少授权",
-                                status = if (ocrStandbyActive) "active" else "stopped",
-                            )
-                        }
-                        Button(
-                            onClick = { onSetOcrStandby(!ocrStandbyActive) },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(if (ocrStandbyActive) "停止 OCR 待命" else "授权并开启 OCR 待命")
-                        }
-                    }
-                }
-
-                if (!accessibilityEnabled) {
-                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text("无障碍操作", style = MaterialTheme.typography.titleMedium)
-                                StatusBadge(
-                                    label = permissionStatusLabel("无障碍权限", available = false),
-                                    status = "disabled",
-                                )
-                            }
-                            TextButton(onClick = onOpenAccessibilitySettings) {
-                                Text("启用无障碍权限")
-                            }
-                        }
-                    }
-                } else {
-                    FlowPilotCard(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("无障碍操作", style = MaterialTheme.typography.titleSmall)
-                            StatusBadge(
-                                label = permissionStatusLabel("无障碍权限", available = true),
-                                status = "active",
-                            )
-                        }
+                        DevicePermissionRow(
+                            title = "无障碍操作",
+                            enabled = accessibilityEnabled,
+                            onOpen = onOpenAccessibilitySettings,
+                        )
+                        HorizontalDivider()
+                        DevicePermissionRow(
+                            title = "远程运行待命",
+                            enabled = remoteMonitoring,
+                            onOpen = { onSetRemoteMonitoring(true) },
+                        )
+                        HorizontalDivider()
+                        DevicePermissionRow(
+                            title = "屏幕捕获",
+                            enabled = ocrStandbyActive,
+                            onOpen = { onSetOcrStandby(true) },
+                        )
                     }
                 }
 
@@ -1832,28 +1648,6 @@ private fun FlowPilotScreen(
 }
 
 @Composable
-private fun DeviceQuickStartStep(number: String, title: String, detail: String) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Surface(
-            modifier = Modifier.size(26.dp),
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(number, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-            }
-        }
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium)
-            Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
 private fun DeviceAccountRow(
     title: String,
     detail: String? = null,
@@ -2046,6 +1840,34 @@ private fun FlowPilotCard(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         content = content,
     )
+}
+
+@Composable
+private fun DevicePermissionRow(
+    title: String,
+    enabled: Boolean,
+    onOpen: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyLarge)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                devicePermissionStatus(enabled),
+                color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (shouldShowPermissionOpenAction(enabled)) {
+                TextButton(onClick = onOpen) {
+                    Text("打开")
+                }
+            }
+        }
+    }
 }
 
 @Composable
