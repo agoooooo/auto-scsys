@@ -1150,6 +1150,98 @@ def test_user_can_create_and_publish_owned_task_but_not_another_users_task(clien
     assert forbidden_upload.status_code == 404
 
 
+def test_task_owner_access_does_not_depend_on_a_self_grant(client):
+    user = login(client)
+    user_id = client.get("/me", headers=auth(user)).json()["id"]
+    task = client.post(
+        "/tasks",
+        headers=auth(user),
+        json={"name": "Owned task without grant"},
+    ).json()
+    published = client.post(
+        f"/tasks/{task['id']}/versions",
+        headers=auth(user),
+        data={"version": "v1.0.0"},
+        files={"script": ("owned.py", b"print('mine')\n", "text/x-python")},
+    )
+    assert published.status_code == 201
+
+    with server_app._connect(client.app.state.db_path) as db:
+        db.execute("DELETE FROM task_grants WHERE task_id=? AND user_id=?", (task["id"], user_id))
+
+    tasks = client.get("/tasks", headers=auth(user))
+    assert task["id"] in {item["id"] for item in tasks.json()}
+    source = client.get(
+        f"/tasks/{task['id']}/versions/v1.0.0/source",
+        headers=auth(user),
+    )
+    assert source.status_code == 200
+    assert source.content == b"print('mine')\n"
+
+
+def test_task_drafts_are_persistent_owner_scoped_and_optimistically_locked(client):
+    owner = login(client)
+    other_user = login(client, "zhou.ke@example.com", "user-demo")
+    admin = login(client, "admin@example.com", "admin-demo")
+    task = client.post(
+        "/tasks",
+        headers=auth(owner),
+        json={"name": "Draft test task"},
+    ).json()
+    path = f"/tasks/{task['id']}/draft"
+
+    initial = client.get(path, headers=auth(owner))
+    assert initial.status_code == 200
+    assert initial.json() == {
+        "task_id": task["id"],
+        "source": "",
+        "filename": "main.py",
+        "notes": "",
+        "revision": 0,
+        "updated_at": None,
+        "saved": False,
+    }
+    payload = {
+        "source": "print('draft')\n",
+        "filename": "main.py",
+        "notes": "local edit",
+        "expected_revision": 0,
+    }
+    saved = client.put(path, headers=auth(owner), json=payload)
+    assert saved.status_code == 200
+    assert saved.json()["revision"] == 1
+    assert saved.json()["saved"] is True
+    assert client.get(path, headers=auth(owner)).json()["source"] == payload["source"]
+
+    stale = client.put(path, headers=auth(owner), json=payload)
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["current_revision"] == 1
+
+    assert client.get(path, headers=auth(other_user)).status_code == 404
+    assert client.put(path, headers=auth(other_user), json=payload).status_code == 404
+    assert client.delete(f"{path}?revision=1", headers=auth(other_user)).status_code == 404
+    assert client.get(path, headers=auth(admin)).status_code == 200
+
+    assert client.delete(f"{path}?revision=1", headers=auth(owner)).status_code == 204
+    deleted = client.get(path, headers=auth(owner)).json()
+    assert deleted["saved"] is False
+    assert deleted["source"] == ""
+    assert deleted["revision"] == 2
+    stale_after_delete = client.put(
+        path,
+        headers=auth(owner),
+        json={**payload, "expected_revision": 1},
+    )
+    assert stale_after_delete.status_code == 409
+    restored = client.put(
+        path,
+        headers=auth(owner),
+        json={**payload, "expected_revision": 2},
+    )
+    assert restored.status_code == 200
+    assert restored.json()["revision"] == 3
+
+
 def test_publish_script_validates_and_checks_content_hash(client):
     admin = login(client, "admin@example.com", "admin-demo")
     invalid_version = client.post(
@@ -1693,16 +1785,18 @@ def test_admin_can_pause_and_resume_tasks_with_access_and_run_controls(client):
     ).json()["status"] == "pending"
 
 
-def test_task_status_changes_require_admin_and_published_task_version(client):
+def test_task_status_changes_are_limited_to_task_owner_or_admin(client):
     admin = login(client, "admin@example.com", "admin-demo")
     user = login(client)
-    assert client.patch("/tasks/t-001", headers=auth(user), json={"status": "paused"}).status_code == 403
+    another_user = login(client, "zhou.ke@example.com", "user-demo")
+    assert client.patch("/tasks/t-001", headers=auth(another_user), json={"status": "paused"}).status_code == 404
+    assert client.patch("/tasks/t-001", headers=auth(user), json={"status": "paused"}).status_code == 200
     assert client.patch("/tasks/missing", headers=auth(admin), json={"status": "paused"}).status_code == 404
-    draft = client.post("/tasks", headers=auth(admin), json={"name": "No version"})
+    draft = client.post("/tasks", headers=auth(user), json={"name": "No version"})
     assert draft.status_code == 201
     assert client.patch(
         f"/tasks/{draft.json()['id']}",
-        headers=auth(admin),
+        headers=auth(user),
         json={"status": "published"},
     ).status_code == 409
     assert client.patch("/tasks/t-001", headers=auth(admin), json={"status": "draft"}).status_code == 422

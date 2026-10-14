@@ -27,9 +27,9 @@ export function Login({ onLogin }: Props) {
           <span className="brand-symbol">F</span>
           <span>FlowPilot</span>
         </div>
-        <Typography.Title level={2}>管理后台</Typography.Title>
+        <Typography.Title level={2}>登录 FlowPilot</Typography.Title>
         <Typography.Paragraph type="secondary">
-          登录以管理用户、设备和自动化脚本
+          管理设备、脚本和自动化任务
         </Typography.Paragraph>
         <Form layout="vertical" initialValues={{ remember: false }} onFinish={submit}>
           <Form.Item
@@ -50,11 +50,11 @@ export function Login({ onLogin }: Props) {
             <Checkbox>在此设备保持登录</Checkbox>
           </Form.Item>
           <Button type="primary" htmlType="submit" size="large" block loading={busy}>
-            登录管理后台
+            登录
           </Button>
         </Form>
         <Typography.Paragraph className="login-safety" type="secondary">
-          生产后台仅接受服务端授权的管理员账号。请勿在共享设备上保持登录。
+          根据账号角色进入对应工作区。请勿在共享设备上保持登录。
         </Typography.Paragraph>
       </section>
     </main>

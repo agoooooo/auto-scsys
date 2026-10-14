@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearSession, login, readSession } from "./api";
-import { draftKey, matchesTaskSearch, nextPatchVersion } from "./policies";
+import { clearSession, login, readSession, saveScriptDraft } from "./api";
+import { canManageTask, draftKey, matchesTaskSearch, nextPatchVersion } from "./policies";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -37,7 +37,14 @@ describe("script version policies", () => {
     expect(matchesTaskSearch(task, "   ")).toBe(true);
   });
 
-  it("stores an administrator session only after the API confirms the role", async () => {
+  it("limits task editing and release controls to owners and administrators", () => {
+    const task = { owner_id: "owner-1" };
+    expect(canManageTask(task, { id: "owner-1", role: "user" })).toBe(true);
+    expect(canManageTask(task, { id: "granted-user", role: "user" })).toBe(false);
+    expect(canManageTask(task, { id: "admin-1", role: "admin" })).toBe(true);
+  });
+
+  it("stores a server-confirmed administrator session", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       access_token: "signed-token",
       expires_in: 3600,
@@ -62,7 +69,7 @@ describe("script version policies", () => {
     clearSession();
   });
 
-  it("does not persist a non-admin session", async () => {
+  it("allows ordinary users into their role-specific workspace", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       access_token: "user-token",
       expires_in: 3600,
@@ -79,8 +86,38 @@ describe("script version policies", () => {
     window.localStorage.clear();
     window.sessionStorage.clear();
 
-    await expect(login("user@example.test", "secret", false, "https://console.example.test/api"))
-      .rejects.toThrow("此账号没有后台管理员权限");
-    expect(readSession(window.sessionStorage)).toBeNull();
+    const session = await login("user@example.test", "secret", false, "https://console.example.test/api");
+    expect(session.user.role).toBe("user");
+    expect(readSession(window.sessionStorage)?.user.role).toBe("user");
+  });
+
+  it("preserves structured draft conflict messages and status codes", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: { message: "草稿已在其他会话中更新", current_revision: 3 },
+    }), { status: 409, headers: { "Content-Type": "application/json" } })));
+    const session = {
+      baseUrl: "https://console.example.test/api",
+      token: "token",
+      accessTokenExpiresAt: Date.now() + 60_000,
+      rememberMe: false,
+      user: {
+        id: "user-1",
+        name: "User",
+        email: "user@example.test",
+        role: "user" as const,
+        status: "active" as const,
+        device_limit: 2,
+      },
+    };
+
+    await expect(saveScriptDraft(session, "task-1", {
+      source: "print('draft')",
+      filename: "main.py",
+      notes: "",
+      expected_revision: 2,
+    })).rejects.toMatchObject({
+      message: "草稿已在其他会话中更新",
+      status: 409,
+    });
   });
 });

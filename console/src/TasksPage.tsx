@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DiffEditor, Editor } from "@monaco-editor/react";
 import "./monaco";
 import {
@@ -9,6 +9,7 @@ import {
   Form,
   Input,
   Modal,
+  Select,
   Space,
   Table,
   Tag,
@@ -25,12 +26,20 @@ import {
 } from "@ant-design/icons";
 import {
   apiRequest,
+  deleteScriptDraft,
+  getRemoteRun,
+  getScriptDraft,
   publishScriptVersion,
   requestScriptSource,
+  saveScriptDraft,
+  startRemoteRun,
+  stopRemoteRun,
+  type Device,
+  type RemoteRun,
   type Session,
   type Task,
 } from "./api";
-import { draftKey, matchesTaskSearch, nextPatchVersion } from "./policies";
+import { canManageTask, matchesTaskSearch, nextPatchVersion } from "./policies";
 
 type Props = { session: Session };
 type EditorTarget = { task: Task; isNewTask: boolean } | null;
@@ -41,13 +50,18 @@ const taskStatus: Record<Task["status"], { label: string; color: string }> = {
   paused: { label: "已暂停", color: "orange" },
 };
 
-function localDraft(taskId: string): { source: string; notes: string } | null {
-  try {
-    const value = sessionStorage.getItem(draftKey(taskId));
-    return value ? JSON.parse(value) as { source: string; notes: string } : null;
-  } catch {
-    return null;
-  }
+function runStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    pending: "等待设备",
+    queued: "排队中",
+    running: "运行中",
+    success: "运行成功",
+    failure: "运行失败",
+    stopped: "已停止",
+    expired: "请求已过期",
+    rejected: "设备拒绝",
+  };
+  return labels[status] ?? status;
 }
 
 export function TasksPage({ session }: Props) {
@@ -65,6 +79,18 @@ export function TasksPage({ session }: Props) {
   const [filename, setFilename] = useState("main.py");
   const [notes, setNotes] = useState("");
   const [sourceLoading, setSourceLoading] = useState(false);
+  const [draftLoaded, setDraftLoaded] = useState(false);
+  const [draftStatus, setDraftStatus] = useState<"saved" | "saving" | "error" | "conflict">("saved");
+  const [draftRevision, setDraftRevision] = useState(0);
+  const [draftError, setDraftError] = useState("");
+  const [runTaskTarget, setRunTaskTarget] = useState<Task | null>(null);
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>();
+  const [loadingDevices, setLoadingDevices] = useState(false);
+  const [activeRemoteRun, setActiveRemoteRun] = useState<RemoteRun | null>(null);
+  const draftRevisionRef = useRef(0);
+  const draftQueueRef = useRef(Promise.resolve());
+  const lastSavedDraftRef = useRef("");
   const [publishing, setPublishing] = useState(false);
   const [notice, contextHolder] = message.useMessage();
   const [createForm] = Form.useForm<{
@@ -77,6 +103,78 @@ export function TasksPage({ session }: Props) {
     () => tasks.filter((task) => matchesTaskSearch(task, filter)),
     [filter, tasks],
   );
+  const draftSignature = JSON.stringify({ source, filename, notes });
+  async function persistDraft(taskId: string, snapshot: { source: string; filename: string; notes: string }) {
+    const signature = JSON.stringify(snapshot);
+    if (lastSavedDraftRef.current === signature) return draftRevisionRef.current;
+    setDraftStatus("saving");
+    const operation = draftQueueRef.current
+      .catch(() => undefined)
+      .then(() => saveScriptDraft(session, taskId, {
+        ...snapshot,
+        expected_revision: draftRevisionRef.current,
+      }));
+    draftQueueRef.current = operation.then(() => undefined, () => undefined);
+    try {
+      const result = await operation;
+      draftRevisionRef.current = result.revision;
+      lastSavedDraftRef.current = signature;
+      if (editorTarget?.task.id === taskId) {
+        setDraftRevision(result.revision);
+        setDraftStatus("saved");
+        setDraftError("");
+      }
+      return result.revision;
+    } catch (error) {
+      if (editorTarget?.task.id === taskId) {
+        setDraftStatus(error instanceof Error && "status" in error && error.status === 409 ? "conflict" : "error");
+        setDraftError(error instanceof Error ? error.message : "草稿保存失败");
+      }
+      throw error;
+    }
+  }
+
+  useEffect(() => {
+    if (!editorTarget || !draftLoaded || draftSignature === lastSavedDraftRef.current) return;
+    const taskId = editorTarget.task.id;
+    const snapshot = { source, filename, notes };
+    const timer = window.setTimeout(() => {
+      void persistDraft(taskId, snapshot).catch(() => undefined);
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [draftLoaded, draftSignature, editorTarget?.task.id, filename, notes, session.token, source]);
+
+  useEffect(() => {
+    if (!activeRemoteRun) return;
+    let active = true;
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const result = await getRemoteRun(session, activeRemoteRun.id);
+        if (!active) return;
+        setActiveRemoteRun(result);
+        if (["success", "failure", "stopped", "expired", "rejected"].includes(result.status)) {
+          notice.open({
+            type: result.status === "success" ? "success" : result.status === "running" ? "info" : "warning",
+            content: `任务状态：${runStatusLabel(result.status)}`,
+          });
+          void reload();
+        } else {
+          timer = window.setTimeout(() => void poll(), 2000);
+        }
+      } catch (error) {
+        if (active) {
+          notice.error(error instanceof Error ? error.message : "运行状态查询失败");
+          timer = window.setTimeout(() => void poll(), 4000);
+        }
+      }
+    };
+    timer = window.setTimeout(() => void poll(), 1500);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [activeRemoteRun?.id, activeRemoteRun?.status, session.token]);
 
   async function reload() {
     setLoading(true);
@@ -136,25 +234,28 @@ export function TasksPage({ session }: Props) {
       key: "actions",
       render: (_: unknown, task: Task) => (
         <Space wrap>
-          <Button icon={<CodeOutlined />} onClick={() => void openEditor(task)}>编写脚本</Button>
+          {canManageTask(task, session.user) && <Button icon={<CodeOutlined />} onClick={() => void openEditor(task)}>编写脚本</Button>}
           <Button icon={<HistoryOutlined />} onClick={() => setVersionsTask(task)}>版本历史</Button>
           {task.status === "paused" ? (
-            <Button
-              type="link"
-              icon={<PlayCircleOutlined />}
-              onClick={() => void setTaskStatus(task, "published")}
-            >
-              恢复
-            </Button>
+            canManageTask(task, session.user) && <Button
+                type="link"
+                icon={<PlayCircleOutlined />}
+                onClick={() => void setTaskStatus(task, "published")}
+              >
+                恢复
+              </Button>
           ) : (
-            <Button
-              type="link"
-              danger
-              icon={<PauseCircleOutlined />}
-              onClick={() => void setTaskStatus(task, "paused")}
-            >
-              暂停
-            </Button>
+            canManageTask(task, session.user) && <Button
+                type="link"
+                danger
+                icon={<PauseCircleOutlined />}
+                onClick={() => void setTaskStatus(task, "paused")}
+              >
+                暂停
+              </Button>
+          )}
+          {session.user.role === "user" && task.status === "published" && task.active_version && (
+            <Button type="primary" onClick={() => void prepareRun(task)}>运行</Button>
           )}
         </Space>
       ),
@@ -163,30 +264,78 @@ export function TasksPage({ session }: Props) {
 
   async function openEditor(task: Task, isNewTask = false) {
     setEditorTarget({ task, isNewTask });
-    const saved = localDraft(task.id);
-    setSource(saved?.source ?? "");
-    setNotes(saved?.notes ?? "");
+    setDraftLoaded(false);
+    setDraftStatus("saved");
+    setDraftError("");
+    setSource("");
+    setNotes("");
     setVersion(nextPatchVersion(task.active_version, task.versions.map((item) => item.version)));
     setFilename(task.versions?.[0]?.filename ?? "main.py");
-    if (!isNewTask && task.active_version) {
-      setSourceLoading(true);
-      try {
+    setSourceLoading(true);
+    try {
+      const draft = await getScriptDraft(session, task.id);
+      let editorSource = draft.source;
+      let editorFilename = draft.filename;
+      let editorNotes = draft.notes;
+      if (!draft.saved && !isNewTask && task.active_version) {
         const original = await requestScriptSource(session, task.id, task.active_version);
-        setSource(saved?.source ?? original);
-      } catch (error) {
-        notice.error(error instanceof Error ? error.message : "无法读取当前版本源码");
-      } finally {
-        setSourceLoading(false);
+        editorSource = original;
+        editorFilename = task.versions.find((item) => item.version === task.active_version)?.filename ?? "main.py";
       }
+      setSource(editorSource);
+      setFilename(editorFilename);
+      setNotes(editorNotes);
+      draftRevisionRef.current = draft.revision;
+      setDraftRevision(draft.revision);
+      lastSavedDraftRef.current = JSON.stringify({
+        source: editorSource,
+        filename: editorFilename,
+        notes: editorNotes,
+      });
+      setDraftLoaded(true);
+    } catch (error) {
+      setDraftStatus("error");
+      setDraftError(error instanceof Error ? error.message : "草稿读取失败");
+      notice.error(error instanceof Error ? error.message : "无法读取脚本草稿");
+    } finally {
+      setSourceLoading(false);
     }
   }
 
-  function rememberDraft(nextSource = source, nextNotes = notes) {
-    if (editorTarget) {
-      sessionStorage.setItem(
-        draftKey(editorTarget.task.id),
-        JSON.stringify({ source: nextSource, notes: nextNotes }),
-      );
+  async function reloadDraft() {
+    if (!editorTarget) return;
+    Modal.confirm({
+      title: "重新加载服务端草稿？",
+      content: "当前编辑器中尚未保存的内容会被服务端版本替换。",
+      okText: "重新加载",
+      cancelText: "继续编辑",
+      onOk: () => openEditor(editorTarget.task, editorTarget.isNewTask),
+    });
+  }
+
+  async function prepareRun(task: Task) {
+    setRunTaskTarget(task);
+    setSelectedDeviceId(undefined);
+    setActiveRemoteRun(null);
+    setLoadingDevices(true);
+    try {
+      const available = await apiRequest<Device[]>(session, "/devices");
+      setDevices(available.filter((device) => device.status === "online"));
+    } catch (error) {
+      notice.error(error instanceof Error ? error.message : "设备列表加载失败");
+    } finally {
+      setLoadingDevices(false);
+    }
+  }
+
+  async function submitRun() {
+    if (!runTaskTarget || !selectedDeviceId) return;
+    try {
+      const request = await startRemoteRun(session, runTaskTarget.id, selectedDeviceId);
+      setActiveRemoteRun(request);
+      notice.success("运行请求已提交");
+    } catch (error) {
+      notice.error(error instanceof Error ? error.message : "运行请求提交失败");
     }
   }
 
@@ -232,15 +381,22 @@ export function TasksPage({ session }: Props) {
       onOk: async () => {
         setPublishing(true);
         try {
-          await publishScriptVersion(session, editorTarget.task.id, {
+      const savedRevision = await persistDraft(editorTarget.task.id, { source, filename, notes });
+      await publishScriptVersion(session, editorTarget.task.id, {
             version,
             filename,
             notes,
             source,
           });
-          sessionStorage.removeItem(draftKey(editorTarget.task.id));
+          try {
+            await deleteScriptDraft(session, editorTarget.task.id, savedRevision);
+            draftRevisionRef.current = savedRevision + 1;
+          } catch (error) {
+            notice.warning(`版本已发布，但草稿有并发更新，已保留草稿：${error instanceof Error ? error.message : "请重新检查草稿"}`);
+          }
           notice.success(`版本 ${version} 已校验并发布`);
           setEditorTarget(null);
+          setDraftLoaded(false);
           await reload();
         } catch (error) {
           notice.error(error instanceof Error ? error.message : "版本发布失败");
@@ -377,11 +533,75 @@ export function TasksPage({ session }: Props) {
       </Modal>
 
       <Modal
+        title={runTaskTarget ? `运行任务 · ${runTaskTarget.name}` : "运行任务"}
+        open={Boolean(runTaskTarget)}
+        onCancel={() => setRunTaskTarget(null)}
+        footer={activeRemoteRun ? (
+          <Space>
+            {activeRemoteRun.status === "running" && (
+              <Button danger onClick={() => void stopRemoteRun(session, activeRemoteRun.id)
+                .then((result) => setActiveRemoteRun({ ...activeRemoteRun, ...result }))
+                .catch((error: unknown) => notice.error(error instanceof Error ? error.message : "停止请求失败"))}>
+                请求停止
+              </Button>
+            )}
+            <Button onClick={() => setRunTaskTarget(null)}>关闭</Button>
+          </Space>
+        ) : (
+          <Space>
+            <Button onClick={() => setRunTaskTarget(null)}>取消</Button>
+            <Button type="primary" disabled={!selectedDeviceId || devices.length === 0} onClick={() => void submitRun()}>
+              开始运行
+            </Button>
+          </Space>
+        )}
+        width="min(560px, calc(100vw - 24px))"
+        destroyOnClose
+      >
+        {activeRemoteRun ? (
+          <div className="run-progress">
+            <Typography.Title level={4}>{runStatusLabel(activeRemoteRun.status)}</Typography.Title>
+            <Typography.Paragraph>
+              {activeRemoteRun.result_summary || (
+                activeRemoteRun.status === "running" ? "任务正在受控设备上运行。" : "等待设备接收并开始执行。关闭此窗口不会取消运行请求。"
+              )}
+            </Typography.Paragraph>
+            {activeRemoteRun.status === "running" && <Typography.Text type="secondary">停止请求会在脚本下一个停止检查点生效。</Typography.Text>}
+          </div>
+        ) : (
+          <Form layout="vertical">
+            <Form.Item label="目标受控设备" required>
+              <Select
+                value={selectedDeviceId}
+                onChange={setSelectedDeviceId}
+                loading={loadingDevices}
+                placeholder={loadingDevices ? "正在读取设备..." : "选择在线设备"}
+                options={devices.map((device) => ({
+                  value: device.id,
+                  label: `${device.name} · ${device.model}`,
+                }))}
+                notFoundContent={loadingDevices ? "正在加载" : "没有在线设备"}
+              />
+            </Form.Item>
+            <Alert
+              type="warning"
+              showIcon
+              message="运行将在受控设备上执行"
+              description="发布脚本不会自动运行。运行期间设备遵循 Android 系统权限及可见通知要求。"
+            />
+          </Form>
+        )}
+      </Modal>
+
+      <Modal
         title={editorTarget ? `脚本编辑器 · ${editorTarget.task.name}` : ""}
         open={Boolean(editorTarget)}
-        onCancel={() => setEditorTarget(null)}
+        onCancel={() => {
+          setEditorTarget(null);
+          setDraftLoaded(false);
+        }}
         footer={null}
-        width={1120}
+        width="min(1120px, calc(100vw - 24px))"
         destroyOnClose
         className="script-editor-modal"
       >
@@ -391,8 +611,30 @@ export function TasksPage({ session }: Props) {
               type="warning"
               showIcon
               message="发布会使版本对已授权用户/设备可用；设备端可能自动运行"
-              description="编辑过程自动保存在当前浏览器标签页。发布不可撤回或覆盖；暂停任务可阻止后续下载与运行。"
+              description="编辑内容会自动保存到账号的服务端草稿，可在其他会话恢复。发布生成不可变版本；请确认源码和能力声明。"
             />
+            {draftStatus === "conflict" && (
+              <Alert
+                type="error"
+                showIcon
+                message="草稿版本冲突"
+                description={draftError}
+                action={<Button size="small" onClick={() => void reloadDraft()}>重新加载服务端草稿</Button>}
+              />
+            )}
+            {draftStatus === "error" && (
+              <Alert
+                type="error"
+                showIcon
+                message="草稿未保存"
+                description={draftError}
+                action={<Button size="small" onClick={() => {
+                  if (editorTarget) void persistDraft(editorTarget.task.id, { source, filename, notes })
+                    .then(() => notice.success("草稿已保存"))
+                    .catch((error: unknown) => notice.error(error instanceof Error ? error.message : "草稿保存失败"));
+                }}>重试保存</Button>}
+              />
+            )}
             <Space wrap className="editor-toolbar">
               <Input
                 aria-label="版本号"
@@ -410,13 +652,19 @@ export function TasksPage({ session }: Props) {
               />
               <Button
                 icon={<SaveOutlined />}
-                onClick={() => {
-                  rememberDraft();
-                  notice.success("草稿已保存在当前浏览器标签页");
-                }}
+                loading={draftStatus === "saving"}
+                onClick={() => editorTarget && void persistDraft(
+                  editorTarget.task.id,
+                  { source, filename, notes },
+                ).then(() => notice.success("草稿已保存")).catch((error: unknown) => notice.error(
+                  error instanceof Error ? error.message : "草稿保存失败",
+                ))}
               >
-                保存草稿
+                {draftStatus === "saving" ? "正在保存" : "保存草稿"}
               </Button>
+              <Typography.Text type={draftStatus === "saved" ? "success" : "secondary"}>
+                {draftStatus === "saved" ? `已保存 · 修订 ${draftRevision}` : draftStatus === "conflict" ? "存在并发修改" : draftStatus === "error" ? "保存失败" : "等待保存"}
+              </Typography.Text>
               <Button type="primary" danger loading={publishing} onClick={confirmPublish}>
                 校验并发布新版本
               </Button>
@@ -426,7 +674,6 @@ export function TasksPage({ session }: Props) {
               value={notes}
               onChange={(event) => {
                 setNotes(event.target.value);
-                rememberDraft(source, event.target.value);
               }}
               maxLength={500}
               placeholder="版本更新说明"
@@ -448,22 +695,22 @@ export function TasksPage({ session }: Props) {
                     wordWrap: "on",
                     accessibilitySupport: "on",
                   }}
-                  onChange={(value) => {
-                    const nextSource = value ?? "";
-                    setSource(nextSource);
-                    rememberDraft(nextSource, notes);
-                  }}
+                  onChange={(value) => setSource(value ?? "")}
                   onMount={(editor, monaco) => {
                     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-                      rememberDraft(editor.getValue(), notes);
-                      notice.success("草稿已保存在当前浏览器标签页；发布需单独确认");
+                      if (editorTarget) void persistDraft(
+                        editorTarget.task.id,
+                        { source: editor.getValue(), filename, notes },
+                      ).then(() => notice.success("草稿已保存；发布需单独确认")).catch((error: unknown) => notice.error(
+                        error instanceof Error ? error.message : "草稿保存失败",
+                      ));
                     });
                   }}
                 />
               {sourceLoading && <div className="editor-loading">正在读取当前版本...</div>}
             </div>
             <Descriptions size="small" column={2}>
-              <Descriptions.Item label="当前线上版本">
+              <Descriptions.Item label="当前发布版本">
                 {editorTarget.task.active_version || "尚无已发布版本"}
               </Descriptions.Item>
               <Descriptions.Item label="哈希校验">发布时计算 SHA-256，服务端复核</Descriptions.Item>
@@ -520,7 +767,7 @@ export function TasksPage({ session }: Props) {
                     )}
                     {item.version === versionsTask.active_version
                       ? "—"
-                      : <Button type="link" onClick={() => activateVersion(versionsTask, item.version)}>设为当前</Button>}
+                      : canManageTask(versionsTask, session.user) && <Button type="link" onClick={() => activateVersion(versionsTask, item.version)}>设为当前</Button>}
                   </Space>
                 ),
               },
@@ -540,7 +787,7 @@ export function TasksPage({ session }: Props) {
           setCompareVersions(null);
           setCompareSources(null);
         }}>关闭</Button>}
-        width={1200}
+        width="min(1200px, calc(100vw - 24px))"
         destroyOnClose
       >
         {compareSources ? (
@@ -552,7 +799,7 @@ export function TasksPage({ session }: Props) {
               modified={compareSources.modified}
               options={{
                 readOnly: true,
-                renderSideBySide: true,
+                renderSideBySide: window.innerWidth > 768,
                 minimap: { enabled: false },
                 automaticLayout: true,
                 scrollBeyondLastLine: false,

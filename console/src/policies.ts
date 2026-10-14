@@ -32,6 +32,13 @@ export function matchesTaskSearch(
   ].some((value) => value?.toLocaleLowerCase().includes(normalized));
 }
 
+export function canManageTask(
+  task: Pick<Task, "owner_id">,
+  user: { id: string; role: "admin" | "user" },
+): boolean {
+  return user.role === "admin" || task.owner_id === user.id;
+}
+
 export function draftKey(taskId: string): string {
   return `flowpilot-script-draft:${taskId}`;
 }

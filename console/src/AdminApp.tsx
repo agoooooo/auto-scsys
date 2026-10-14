@@ -2,9 +2,12 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import {
   Alert,
   Avatar,
+  Button,
   Card,
   Col,
   Dropdown,
+  Drawer,
+  Grid,
   Layout,
   Menu,
   Row,
@@ -21,6 +24,7 @@ import {
   DashboardOutlined,
   DesktopOutlined,
   LogoutOutlined,
+  MenuOutlined,
   SafetyCertificateOutlined,
   TeamOutlined,
   UnorderedListOutlined,
@@ -50,13 +54,32 @@ const pageLabels: Record<Page, string> = {
   audit: "操作审计",
 };
 
+const adminMenuItems = [
+  { key: "overview", icon: <DashboardOutlined />, label: "运营总览" },
+  { key: "users", icon: <TeamOutlined />, label: "用户管理" },
+  { key: "devices", icon: <DesktopOutlined />, label: "设备管理" },
+  { key: "tasks", icon: <CodeOutlined />, label: "脚本与任务" },
+  { key: "runs", icon: <UnorderedListOutlined />, label: "运行记录" },
+  { key: "audit", icon: <AuditOutlined />, label: "操作审计" },
+];
+
+const userMenuItems = [
+  { key: "overview", icon: <DashboardOutlined />, label: "工作台" },
+  { key: "devices", icon: <DesktopOutlined />, label: "我的设备" },
+  { key: "tasks", icon: <CodeOutlined />, label: "我的脚本" },
+  { key: "runs", icon: <UnorderedListOutlined />, label: "运行历史" },
+];
+
 function sessionFromStorage(): Session | null {
   return readSession(window.localStorage) ?? readSession(window.sessionStorage);
 }
 
 export function AdminApp() {
+  const screens = Grid.useBreakpoint();
+  const mobile = !screens.lg;
   const [session, setSession] = useState<Session | null>(sessionFromStorage);
   const [page, setPage] = useState<Page>("overview");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [checkingSession, setCheckingSession] = useState(Boolean(session));
   const [notice, contextHolder] = message.useMessage();
 
@@ -80,12 +103,6 @@ export function AdminApp() {
     apiRequest<User>(session, "/me")
       .then((user) => {
         if (!active) return;
-        if (user.role !== "admin") {
-          clearSession();
-          setSession(null);
-          notice.error("此账号没有后台管理员权限");
-          return;
-        }
         setSession({ ...session, user });
       })
       .catch((error: unknown) => {
@@ -120,45 +137,61 @@ export function AdminApp() {
   }
   if (!session) return <Login onLogin={setSession} />;
 
-  const menuItems = [
-    { key: "overview", icon: <DashboardOutlined />, label: "运营总览" },
-    { key: "users", icon: <TeamOutlined />, label: "用户管理" },
-    { key: "devices", icon: <DesktopOutlined />, label: "设备管理" },
-    { key: "tasks", icon: <CodeOutlined />, label: "脚本与任务" },
-    { key: "runs", icon: <UnorderedListOutlined />, label: "运行记录" },
-    { key: "audit", icon: <AuditOutlined />, label: "操作审计" },
-  ];
+  const isAdmin = session.user.role === "admin";
+  const menuItems = isAdmin ? adminMenuItems : userMenuItems;
+  const activeLabel = isAdmin
+    ? pageLabels[page]
+    : page === "devices" ? "我的设备" : page === "tasks" ? "我的脚本" : page === "runs" ? "运行历史" : "工作台";
+  const navigation = (
+    <>
+      <div className="sider-brand">
+        <span className="brand-symbol">F</span>
+        <span><strong>FlowPilot</strong><small>{isAdmin ? "管理控制台" : "用户工作台"}</small></span>
+      </div>
+      <div className="sider-caption">{isAdmin ? "平台管理" : "个人空间"}</div>
+      <Menu
+        mode="inline"
+        selectedKeys={[page]}
+        items={menuItems}
+        onClick={({ key }) => {
+          setPage(key as Page);
+          setMobileMenuOpen(false);
+        }}
+      />
+      <div className="sider-footer">
+        <SafetyCertificateOutlined />
+        <span>{isAdmin ? "所有操作均由服务端鉴权并记录" : "仅可访问本人有权操作的资源"}</span>
+      </div>
+    </>
+  );
 
   return (
     <Layout className="admin-layout">
       {contextHolder}
-      <Layout.Sider
-        breakpoint="lg"
-        collapsedWidth={0}
-        width={250}
-        className="admin-sider"
-      >
-        <div className="sider-brand">
-          <span className="brand-symbol">F</span>
-          <span><strong>FlowPilot</strong><small>管理控制台</small></span>
-        </div>
-        <div className="sider-caption">平台管理</div>
-        <Menu
-          mode="inline"
-          selectedKeys={[page]}
-          items={menuItems}
-          onClick={({ key }) => setPage(key as Page)}
-        />
-        <div className="sider-footer">
-          <SafetyCertificateOutlined />
-          <span>所有操作均由服务端鉴权并记录</span>
-        </div>
-      </Layout.Sider>
+      {mobile ? (
+        <Drawer
+          open={mobileMenuOpen}
+          onClose={() => setMobileMenuOpen(false)}
+          placement="left"
+          width={280}
+          className="mobile-navigation-drawer"
+        >
+          {navigation}
+        </Drawer>
+      ) : <Layout.Sider width={250} className="admin-sider">{navigation}</Layout.Sider>}
       <Layout className="main-layout">
         <Layout.Header className="top-header">
           <div>
+            {mobile && (
+              <Button
+                className="mobile-nav-trigger"
+                aria-label="打开导航"
+                icon={<MenuOutlined />}
+                onClick={() => setMobileMenuOpen(true)}
+              />
+            )}
             <Typography.Text type="secondary">FlowPilot /</Typography.Text>
-            <Typography.Text strong> {pageLabels[page]}</Typography.Text>
+            <Typography.Text strong> {activeLabel}</Typography.Text>
           </div>
           <Dropdown
             menu={{
@@ -171,24 +204,100 @@ export function AdminApp() {
               <Avatar size={34} style={{ backgroundColor: "#dff4e8", color: "#087744" }}>
                 {session.user.name.slice(0, 1)}
               </Avatar>
-              <span><strong>{session.user.name}</strong><small>系统管理员</small></span>
+              <span><strong>{session.user.name}</strong><small>{isAdmin ? "系统管理员" : "普通用户"}</small></span>
             </button>
           </Dropdown>
         </Layout.Header>
         <Layout.Content className="main-content">
-          {page === "overview" && <Overview session={session} onNavigate={setPage} />}
+          {page === "overview" && (isAdmin
+            ? <Overview session={session} onNavigate={setPage} />
+            : <UserOverview session={session} onNavigate={setPage} />)}
           {page === "tasks" && (
             <Suspense fallback={<Card bordered={false}><Skeleton active /></Card>}>
               <TasksPage session={session} />
             </Suspense>
           )}
-          {page === "users" && <ResourcesPage session={session} section="users" />}
+          {page === "users" && isAdmin && <ResourcesPage session={session} section="users" />}
           {page === "devices" && <ResourcesPage session={session} section="devices" />}
           {page === "runs" && <ResourcesPage session={session} section="runs" />}
-          {page === "audit" && <ResourcesPage session={session} section="audit" />}
+          {page === "audit" && isAdmin && <ResourcesPage session={session} section="audit" />}
         </Layout.Content>
       </Layout>
     </Layout>
+  );
+}
+
+function UserOverview({ session, onNavigate }: { session: Session; onNavigate: (page: Page) => void }) {
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      apiRequest<Device[]>(session, "/devices"),
+      apiRequest<Task[]>(session, "/tasks"),
+      apiRequest<RunRecord[]>(session, "/runs"),
+    ])
+      .then(([ownDevices, ownTasks, ownRuns]) => {
+        if (!active) return;
+        setDevices(ownDevices.filter((device) => device.status !== "disabled"));
+        setTasks(ownTasks);
+        setRuns(ownRuns);
+      })
+      .catch((reason: unknown) => {
+        if (active) setError(reason instanceof Error ? reason.message : "工作台数据加载失败");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [session.token]);
+
+  return (
+    <div className="page-stack">
+      <div className="page-heading">
+        <div>
+          <Typography.Title level={2}>我的工作台</Typography.Title>
+          <Typography.Paragraph type="secondary">管理个人设备和脚本，跟踪自动化任务</Typography.Paragraph>
+        </div>
+        <Tag color="green">个人空间</Tag>
+      </div>
+      {error && <Alert type="error" showIcon message="工作台数据暂不可用" description={error} />}
+      <Row gutter={[16, 16]}>
+        <Metric title="我的设备" value={devices.length} loading={loading} onClick={() => onNavigate("devices")} />
+        <Metric title="在线设备" value={devices.filter((device) => device.status === "online").length} loading={loading} onClick={() => onNavigate("devices")} />
+        <Metric title="我的脚本" value={tasks.filter((task) => task.owner_id === session.user.id).length} loading={loading} onClick={() => onNavigate("tasks")} />
+        <Metric title="运行记录" value={runs.length} loading={loading} onClick={() => onNavigate("runs")} />
+      </Row>
+      <Card
+        bordered={false}
+        title="最近运行"
+        extra={<Typography.Link onClick={() => onNavigate("runs")}>查看历史</Typography.Link>}
+      >
+        {loading ? <div className="inline-spinner"><Spin /></div> : runs.length === 0 ? (
+          <Typography.Text type="secondary">暂无运行记录。发布脚本后可从任务列表选择在线设备运行。</Typography.Text>
+        ) : (
+          <div className="recent-runs">
+            {runs.slice(0, 6).map((run) => (
+              <div className="recent-run-row" key={run.id}>
+                <div>
+                  <Typography.Text strong>{run.task_name}</Typography.Text>
+                  <Typography.Text type="secondary">{run.device_name} · {run.version}</Typography.Text>
+                </div>
+                <Tag color={run.status === "success" ? "green" : run.status === "running" ? "blue" : run.status === "failure" ? "red" : "default"}>
+                  {run.status}
+                </Tag>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
   );
 }
 

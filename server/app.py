@@ -23,7 +23,7 @@ from urllib.parse import quote, urlsplit
 
 import psycopg
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
@@ -245,6 +245,15 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
                 created_at TEXT NOT NULL,
                 UNIQUE(task_id, version)
             );
+            CREATE TABLE IF NOT EXISTS task_drafts (
+                task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+                source TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                notes TEXT NOT NULL,
+                revision INTEGER NOT NULL CHECK(revision > 0),
+                updated_at TEXT NOT NULL,
+                deleted_at TEXT
+            );
             CREATE TABLE IF NOT EXISTS pending_script_uploads (
                 id TEXT PRIMARY KEY,
                 task_id TEXT NOT NULL REFERENCES tasks(id),
@@ -367,6 +376,9 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
         authorization_columns = db.table_columns("run_authorizations")
         if "all_versions" not in authorization_columns:
             db.execute("ALTER TABLE run_authorizations ADD COLUMN all_versions INTEGER NOT NULL DEFAULT 0")
+        draft_columns = db.table_columns("task_drafts")
+        if "deleted_at" not in draft_columns:
+            db.execute("ALTER TABLE task_drafts ADD COLUMN deleted_at TEXT")
         remote_run_columns = db.table_columns("remote_runs")
         if "stop_requested_at" not in remote_run_columns:
             db.execute("ALTER TABLE remote_runs ADD COLUMN stop_requested_at TEXT")
@@ -616,6 +628,13 @@ class ScriptUploadCompletion(BaseModel):
     upload_id: str
 
 
+class ScriptDraftInput(BaseModel):
+    source: str = Field(max_length=MAX_SCRIPT_BYTES)
+    filename: str = Field(min_length=1, max_length=180)
+    notes: str = Field(default="", max_length=500)
+    expected_revision: int = Field(ge=0)
+
+
 def create_app(db_path: str | Path | None = None, token_secret: bytes | None = None) -> FastAPI:
     environment = os.environ.get("FLOWPILOT_ENV", "development").strip().lower()
     if environment not in {"development", "test", "staging", "production"}:
@@ -813,10 +832,16 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             raise HTTPException(status_code=404, detail="任务不存在")
         if user["role"] != "admin":
             grant = db.execute("SELECT 1 FROM task_grants WHERE task_id=? AND user_id=?", (task_id, user["id"])).fetchone()
-            if not grant:
+            if task["owner_id"] != user["id"] and not grant:
                 raise HTTPException(status_code=404, detail="任务不存在")
         if require_published and task["status"] != "published":
             raise HTTPException(status_code=409, detail="任务当前不可运行")
+        return task
+
+    def _editable_task(db: sqlite3.Connection, task_id: str, user: dict) -> sqlite3.Row:
+        task = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task or (user["role"] != "admin" and task["owner_id"] != user["id"]):
+            raise HTTPException(status_code=404, detail="任务不存在")
         return task
 
     def _expire_requests(db: sqlite3.Connection, request_id: str | None = None) -> None:
@@ -1568,7 +1593,118 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         db.execute("INSERT INTO task_grants(task_id,user_id,created_at) VALUES(?,?,?)", (task_id, user["id"], utc_now()))
         audit(db, user["id"], "task.created", "task", task_id)
         row = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-        return _task_dict(db, row)
+        return _task_dict(db, row, user)
+
+    @app.get("/tasks/{task_id}/draft")
+    def get_task_draft(
+        task_id: str,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        task = _editable_task(db, task_id, user)
+        draft = db.execute("SELECT * FROM task_drafts WHERE task_id=?", (task_id,)).fetchone()
+        if draft and not draft["deleted_at"]:
+            return {
+                "task_id": task_id,
+                "source": draft["source"],
+                "filename": draft["filename"],
+                "notes": draft["notes"],
+                "revision": draft["revision"],
+                "updated_at": draft["updated_at"],
+                "saved": True,
+            }
+        version = db.execute(
+            "SELECT filename,notes FROM task_versions WHERE task_id=? AND version=?",
+            (task_id, task["active_version"]),
+        ).fetchone() if task["active_version"] else None
+        return {
+            "task_id": task_id,
+            "source": "",
+            "filename": version["filename"] if version else "main.py",
+            "notes": "",
+            "revision": draft["revision"] if draft else 0,
+            "updated_at": None if not draft or draft["deleted_at"] else draft["updated_at"],
+            "saved": False,
+        }
+
+    @app.put("/tasks/{task_id}/draft")
+    def save_task_draft(
+        task_id: str,
+        body: ScriptDraftInput,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        _editable_task(db, task_id, user)
+        filename = Path(body.filename.replace("\\", "/")).name
+        content_size = len(body.source.encode("utf-8"))
+        if content_size > MAX_SCRIPT_BYTES:
+            raise HTTPException(status_code=413, detail="脚本草稿不得超过 2 MiB")
+        if not filename.lower().endswith(".py") or any(
+            ord(character) < 32 or ord(character) == 127 for character in filename
+        ):
+            raise HTTPException(status_code=422, detail="脚本文件名无效")
+
+        db.lock_task(task_id)
+        _editable_task(db, task_id, user)
+        current = db.execute("SELECT revision FROM task_drafts WHERE task_id=?", (task_id,)).fetchone()
+        current_revision = current["revision"] if current else 0
+        if current_revision != body.expected_revision:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "草稿已在其他会话中更新，请先重新加载以避免覆盖",
+                    "current_revision": current_revision,
+                },
+            )
+        revision = current_revision + 1
+        updated_at = utc_now()
+        db.execute(
+            """INSERT INTO task_drafts(task_id,source,filename,notes,revision,updated_at)
+               VALUES(?,?,?,?,?,?)
+               ON CONFLICT(task_id) DO UPDATE SET
+                   source=excluded.source,filename=excluded.filename,notes=excluded.notes,
+                   revision=excluded.revision,updated_at=excluded.updated_at,deleted_at=NULL""",
+            (task_id, body.source, filename, body.notes, revision, updated_at),
+        )
+        audit(db, user["id"], "task.draft_saved", "task", task_id)
+        return {
+            "task_id": task_id,
+            "source": body.source,
+            "filename": filename,
+            "notes": body.notes,
+            "revision": revision,
+            "updated_at": updated_at,
+            "saved": True,
+        }
+
+    @app.delete("/tasks/{task_id}/draft", status_code=204)
+    def delete_task_draft(
+        task_id: str,
+        revision: int = Query(ge=0),
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        _editable_task(db, task_id, user)
+        db.lock_task(task_id)
+        _editable_task(db, task_id, user)
+        current = db.execute("SELECT revision,deleted_at FROM task_drafts WHERE task_id=?", (task_id,)).fetchone()
+        if current and current["revision"] != revision:
+            raise HTTPException(status_code=409, detail="草稿在发布过程中有更新，已保留最新草稿")
+        if current and not current["deleted_at"]:
+            db.execute(
+                """UPDATE task_drafts SET source='',filename='main.py',notes='',revision=revision+1,
+                       updated_at=?,deleted_at=? WHERE task_id=?""",
+                (utc_now(), utc_now(), task_id),
+            )
+            audit(db, user["id"], "task.draft_deleted", "task", task_id)
+        elif not current:
+            now = utc_now()
+            db.execute(
+                """INSERT INTO task_drafts(task_id,source,filename,notes,revision,updated_at,deleted_at)
+                   VALUES(?,'','main.py','',1,?,?)""",
+                (task_id, now, now),
+            )
+        return Response(status_code=204)
 
     @app.get("/tasks/{task_id}/versions")
     def list_task_versions(task_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):
@@ -1615,12 +1751,10 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     def set_task_status(
         task_id: str,
         body: TaskStatusInput,
-        user: dict = Depends(require_admin),
+        user: dict = Depends(current_user),
         db: sqlite3.Connection = Depends(connection),
     ):
-        task = db.execute("SELECT id,status FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if not task:
-            raise HTTPException(status_code=404, detail="任务不存在")
+        task = _editable_task(db, task_id, user)
         if body.status == "published" and not db.execute(
             "SELECT 1 FROM task_versions WHERE task_id=? LIMIT 1", (task_id,)
         ).fetchone():

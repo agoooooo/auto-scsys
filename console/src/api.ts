@@ -51,6 +51,27 @@ export type Task = {
   assigned_device_count?: number;
 };
 
+export type ScriptDraft = {
+  task_id: string;
+  source: string;
+  filename: string;
+  notes: string;
+  revision: number;
+  updated_at: string | null;
+  saved: boolean;
+};
+
+export type RemoteRun = {
+  id: string;
+  device_id: string;
+  status: string;
+  run_id: string | null;
+  run_status: string | null;
+  result_summary: string;
+  stop_requested: boolean;
+  expires_at: number;
+};
+
 export type RunRecord = {
   id: string;
   task_id: string;
@@ -161,7 +182,11 @@ async function parseResponse<T>(response: Response): Promise<T> {
     const detail = typeof payload === "object" && payload && "detail" in payload
       ? payload.detail
       : null;
-    const message = typeof detail === "string" ? detail : `请求失败（HTTP ${response.status}）`;
+    const message = typeof detail === "string"
+      ? detail
+      : typeof detail === "object" && detail && "message" in detail && typeof detail.message === "string"
+        ? detail.message
+        : `请求失败（HTTP ${response.status}）`;
     throw new ApiError(message, response.status);
   }
   return payload as T;
@@ -205,9 +230,6 @@ export async function login(
     expires_in: number;
     user: User;
   }>(response);
-  if (payload.user.role !== "admin") {
-    throw new ApiError("此账号没有后台管理员权限", 403);
-  }
   const session: Session = {
     baseUrl,
     token: payload.access_token,
@@ -220,6 +242,45 @@ export async function login(
     rememberMe ? window.localStorage : window.sessionStorage,
   );
   return session;
+}
+
+export function getScriptDraft(session: Session, taskId: string): Promise<ScriptDraft> {
+  return apiRequest(session, `/tasks/${encodeURIComponent(taskId)}/draft`);
+}
+
+export function saveScriptDraft(
+  session: Session,
+  taskId: string,
+  draft: Pick<ScriptDraft, "source" | "filename" | "notes"> & { expected_revision: number },
+): Promise<ScriptDraft> {
+  return apiRequest(session, `/tasks/${encodeURIComponent(taskId)}/draft`, {
+    method: "PUT",
+    body: JSON.stringify(draft),
+  });
+}
+
+export function deleteScriptDraft(session: Session, taskId: string, revision: number): Promise<void> {
+  return apiRequest(session, `/tasks/${encodeURIComponent(taskId)}/draft?revision=${revision}`, {
+    method: "DELETE",
+  });
+}
+
+export function startRemoteRun(session: Session, taskId: string, deviceId: string): Promise<RemoteRun> {
+  return apiRequest(session, "/remote-runs", {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ task_id: taskId, device_id: deviceId }),
+  });
+}
+
+export function getRemoteRun(session: Session, requestId: string): Promise<RemoteRun> {
+  return apiRequest(session, `/remote-runs/${encodeURIComponent(requestId)}`);
+}
+
+export function stopRemoteRun(session: Session, requestId: string): Promise<RemoteRun> {
+  return apiRequest(session, `/remote-runs/${encodeURIComponent(requestId)}/stop`, {
+    method: "POST",
+  });
 }
 
 export async function publishScriptVersion(

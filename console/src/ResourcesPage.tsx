@@ -108,6 +108,16 @@ export function ResourcesPage({ session, section }: Props) {
     }
   }
 
+  async function unbindDevice(device: Device) {
+    try {
+      await apiRequest(session, `/devices/${encodeURIComponent(device.id)}`, { method: "DELETE" });
+      notice.success("设备已解绑");
+      await reload();
+    } catch (error) {
+      notice.error(error instanceof Error ? error.message : "设备解绑失败");
+    }
+  }
+
   const filteredUsers = useMemo(
     () => users.filter((item) => `${item.name} ${item.email}`.toLowerCase().includes(filter.toLowerCase())),
     [users, filter],
@@ -135,17 +145,53 @@ export function ResourcesPage({ session, section }: Props) {
 
   const deviceColumns = [
     { title: "设备", dataIndex: "name", render: (_: string, item: Device) => <Space direction="vertical" size={0}><Typography.Text strong>{item.name}</Typography.Text><Typography.Text type="secondary">{item.model}</Typography.Text></Space> },
-    { title: "所属用户", dataIndex: "user_name" },
+    ...(session.user.role === "admin" ? [{ title: "所属用户", dataIndex: "user_name" }] : []),
     { title: "App 版本", dataIndex: "app_version" },
     { title: "状态", dataIndex: "status", render: (value: Device["status"]) => <Tag color={value === "online" ? "green" : value === "offline" ? "default" : "red"}>{value === "online" ? "在线" : value === "offline" ? "离线" : "已停用"}</Tag> },
     { title: "最近活跃", dataIndex: "last_active", render: (value: string) => value ? new Date(value).toLocaleString() : "—" },
-    { title: "操作", render: (_: unknown, item: Device) => item.status === "disabled" ? "—" : <Select aria-label={`设备状态 ${item.name}`} value={item.status} style={{ width: 110 }} onChange={(value: Device["status"]) => Modal.confirm({ title: value === "disabled" ? "停用此设备？" : "更改设备状态？", content: value === "disabled" ? "停用会撤销该设备的待处理请求和授权；不保证中止已经开始的本地任务。" : "手动更改状态仅用于运维操作，在线状态通常由设备心跳更新。", okText: "确认", cancelText: "取消", onOk: () => updateDevice(item, value) })} options={[{ value: "online", label: "在线" }, { value: "offline", label: "离线" }, { value: "disabled", label: "停用" }]} /> },
+    {
+      title: "操作",
+      render: (_: unknown, item: Device) => {
+        if (item.status === "disabled") return "—";
+        if (session.user.role === "user") {
+          return <Button
+            type="link"
+            danger
+            onClick={() => Modal.confirm({
+              title: `解绑设备“${item.name}”？`,
+              content: "解绑会停用设备并撤销待处理请求；不会强制停止设备上已经开始的本地任务。",
+              okText: "确认解绑",
+              cancelText: "取消",
+              okButtonProps: { danger: true },
+              onOk: () => unbindDevice(item),
+            })}
+          >解绑</Button>;
+        }
+        return <Select
+          aria-label={`设备状态 ${item.name}`}
+          value={item.status}
+          style={{ width: 110 }}
+          onChange={(value: Device["status"]) => Modal.confirm({
+            title: value === "disabled" ? "停用此设备？" : "更改设备状态？",
+            content: value === "disabled" ? "停用会撤销该设备的待处理请求和授权；不保证中止已经开始的本地任务。" : "手动更改状态仅用于运维操作，在线状态通常由设备心跳更新。",
+            okText: "确认",
+            cancelText: "取消",
+            onOk: () => updateDevice(item, value),
+          })}
+          options={[
+            { value: "online", label: "在线" },
+            { value: "offline", label: "离线" },
+            { value: "disabled", label: "停用" },
+          ]}
+        />;
+      },
+    },
   ];
 
   const runColumns = [
     { title: "任务", dataIndex: "task_name", render: (value: string, item: RunRecord) => <Space direction="vertical" size={0}><Typography.Text strong>{value}</Typography.Text><Typography.Text type="secondary">{item.version}</Typography.Text></Space> },
     { title: "设备", dataIndex: "device_name" },
-    { title: "用户", dataIndex: "user_name" },
+    ...(session.user.role === "admin" ? [{ title: "用户", dataIndex: "user_name" }] : []),
     { title: "状态", dataIndex: "status", render: (value: string) => <Tag color={value === "success" ? "green" : value === "running" ? "blue" : value === "failure" ? "red" : "default"}>{value}</Tag> },
     { title: "开始时间", dataIndex: "started_at", render: (value: string) => value ? new Date(value).toLocaleString() : "—" },
     { title: "结果摘要", dataIndex: "result_summary", ellipsis: true },
@@ -165,9 +211,11 @@ export function ResourcesPage({ session, section }: Props) {
       {contextHolder}
       <div className="page-heading">
         <div>
-          <Typography.Title level={2}>{title[section]}</Typography.Title>
+          <Typography.Title level={2}>{session.user.role === "user" && section === "devices" ? "我的设备" : session.user.role === "user" && section === "runs" ? "运行历史" : title[section]}</Typography.Title>
           <Typography.Paragraph type="secondary">
-            {section === "audit" ? "追踪管理员关键操作，审计记录只读" : "服务端实时数据；变更操作会由 API 做权限校验并写入审计"}
+            {session.user.role === "user" && section === "devices"
+              ? "查看本人设备状态；解绑会停用设备，不会强制停止已开始的本地任务"
+              : section === "audit" ? "追踪管理员关键操作，审计记录只读" : "服务端数据；所有变更均由 API 校验权限"}
           </Typography.Paragraph>
         </div>
         <Space>
@@ -186,6 +234,7 @@ export function ResourcesPage({ session, section }: Props) {
             columns={userColumns}
             dataSource={filteredUsers}
             pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+            scroll={{ x: "max-content" }}
             locale={{ emptyText: "没有用户数据" }}
           />
         )}
@@ -196,6 +245,7 @@ export function ResourcesPage({ session, section }: Props) {
             columns={deviceColumns}
             dataSource={filteredDevices}
             pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+            scroll={{ x: "max-content" }}
             locale={{ emptyText: "没有设备数据" }}
           />
         )}
@@ -206,6 +256,7 @@ export function ResourcesPage({ session, section }: Props) {
             columns={runColumns}
             dataSource={filteredRuns}
             pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+            scroll={{ x: "max-content" }}
             locale={{ emptyText: "没有运行数据" }}
           />
         )}
@@ -216,6 +267,7 @@ export function ResourcesPage({ session, section }: Props) {
             columns={auditColumns}
             dataSource={filteredAudit}
             pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+            scroll={{ x: "max-content" }}
             locale={{ emptyText: "没有审计数据" }}
           />
         )}

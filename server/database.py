@@ -104,6 +104,12 @@ class DatabaseConnection:
         else:
             self.begin_immediate()
 
+    def lock_task(self, task_id: str) -> None:
+        if self.postgres:
+            self.execute("SELECT id FROM tasks WHERE id=? FOR UPDATE", (task_id,))
+        else:
+            self.begin_immediate()
+
     def commit(self) -> None:
         self._connection.commit()
 
