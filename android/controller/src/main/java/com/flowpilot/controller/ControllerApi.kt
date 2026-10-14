@@ -33,7 +33,7 @@ internal fun normalizeControllerApiUrl(value: String, allowCleartext: Boolean = 
     val uri = try {
         URI(value.trim())
     } catch (error: URISyntaxException) {
-        throw IllegalArgumentException("请输入有效的 API 地址，例如 http://192.168.0.101:8001", error)
+        throw IllegalArgumentException("请输入有效的 API 地址，例如 http://192.168.0.105:8001", error)
     }
     val scheme = uri.scheme?.lowercase(Locale.ROOT)
     if (scheme !in setOf("http", "https") ||

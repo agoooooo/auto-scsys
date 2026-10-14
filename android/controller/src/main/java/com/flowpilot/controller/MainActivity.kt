@@ -742,7 +742,7 @@ private fun defaultControllerApiUrl(): String {
     val isEmulator = Build.FINGERPRINT.startsWith("generic") ||
         Build.FINGERPRINT.startsWith("unknown") ||
         Build.MODEL.contains("Emulator", ignoreCase = true)
-    return if (isEmulator) "http://10.0.2.2:8001" else "http://192.168.0.101:8001"
+    return if (isEmulator) "http://10.0.2.2:8001" else "http://192.168.0.105:8001"
 }
 
 @Composable

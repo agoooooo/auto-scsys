@@ -48,7 +48,7 @@ class PythonRuntimeInstrumentedTest {
         val store = SessionStore(context)
         val previous = store.readRememberedLogin()
         val expected = RememberedLogin(
-            "http://192.168.0.101:8001",
+            "http://192.168.0.105:8001",
             "test@example.com",
             "test-password",
         )

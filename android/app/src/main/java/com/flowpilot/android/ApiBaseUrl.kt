@@ -4,13 +4,13 @@ import java.net.URI
 import java.util.Locale
 
 internal fun defaultApiBaseUrl(isEmulator: Boolean): String =
-    if (isEmulator) "http://10.0.2.2:8001" else "http://192.168.0.101:8001"
+    if (isEmulator) "http://10.0.2.2:8001" else "http://192.168.0.105:8001"
 
 internal fun normalizeApiBaseUrl(value: String, allowCleartext: Boolean = BuildConfig.DEBUG): String {
     val uri = try {
         URI(value.trim())
     } catch (exception: IllegalArgumentException) {
-        throw IllegalArgumentException("请输入有效的 API 地址，例如 http://192.168.0.101:8001", exception)
+        throw IllegalArgumentException("请输入有效的 API 地址，例如 http://192.168.0.105:8001", exception)
     }
     val scheme = uri.scheme?.lowercase(Locale.ROOT)
     if (scheme == "http" && !allowCleartext) {

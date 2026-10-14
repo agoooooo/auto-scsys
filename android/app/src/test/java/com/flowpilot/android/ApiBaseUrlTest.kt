@@ -8,14 +8,14 @@ class ApiBaseUrlTest {
     @Test
     fun defaultsToEmulatorHostOnlyForEmulators() {
         assertEquals("http://10.0.2.2:8001", defaultApiBaseUrl(isEmulator = true))
-        assertEquals("http://192.168.0.101:8001", defaultApiBaseUrl(isEmulator = false))
+        assertEquals("http://192.168.0.105:8001", defaultApiBaseUrl(isEmulator = false))
     }
 
     @Test
     fun normalizesLanHttpAddressAndTrailingSlash() {
         assertEquals(
-            "http://192.168.0.101:8001",
-            normalizeApiBaseUrl(" http://192.168.0.101:8001/ ", allowCleartext = true),
+            "http://192.168.0.105:8001",
+            normalizeApiBaseUrl(" http://192.168.0.105:8001/ ", allowCleartext = true),
         )
     }
 
@@ -31,22 +31,22 @@ class ApiBaseUrlTest {
             normalizeApiBaseUrl("https://api.example.com", allowCleartext = false),
         )
         assertThrows(IllegalArgumentException::class.java) {
-            normalizeApiBaseUrl("http://192.168.0.101:8001", allowCleartext = false)
+            normalizeApiBaseUrl("http://192.168.0.105:8001", allowCleartext = false)
         }
     }
 
     @Test
     fun debugConfigurationAllowsHttpForTrustedLanDevelopment() {
         assertEquals(
-            "http://192.168.0.101:8001",
-            normalizeApiBaseUrl("http://192.168.0.101:8001", allowCleartext = true),
+            "http://192.168.0.105:8001",
+            normalizeApiBaseUrl("http://192.168.0.105:8001", allowCleartext = true),
         )
     }
 
     @Test
     fun defaultCleartextPolicyFollowsBuildVariant() {
         val acceptsHttp = runCatching {
-            normalizeApiBaseUrl("http://192.168.0.101:8001")
+            normalizeApiBaseUrl("http://192.168.0.105:8001")
         }.isSuccess
 
         assertEquals(BuildConfig.DEBUG, acceptsHttp)
