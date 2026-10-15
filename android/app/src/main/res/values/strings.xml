@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">FlowPilot 受控端</string>
-    <string name="accessibility_service_description">仅在你启动已授权任务时，读取抖音界面的可访问文字并按脚本指定文字点击。</string>
+    <string name="accessibility_service_description">仅在你启动自动化任务或明确接受限时远程协助时，读取受支持应用界面的可访问文字或执行你授权的屏幕操作。远程协助会持续显示通知，并可随时结束。</string>
 </resources>

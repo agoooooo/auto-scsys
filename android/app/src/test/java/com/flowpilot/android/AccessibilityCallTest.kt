@@ -18,6 +18,19 @@ class AccessibilityCallTest {
     }
 
     @Test
+    fun remoteScreenCoordinatesAreNormalizedAndClampedToDisplayBounds() {
+        assertEquals(0f, normalizedScreenCoordinate(0f, 100), 0f)
+        assertEquals(49.5f, normalizedScreenCoordinate(0.5f, 100), 0.01f)
+        assertEquals(99f, normalizedScreenCoordinate(1f, 100), 0f)
+        assertThrows(IllegalArgumentException::class.java) {
+            normalizedScreenCoordinate(Float.NaN, 100)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            normalizedScreenCoordinate(0.5f, 0)
+        }
+    }
+
+    @Test
     fun timedOutQueuedAccessibilityActionCannotRunLater() {
         val actionCalls = AtomicInteger()
         val task = FutureTask(Callable { actionCalls.incrementAndGet() })

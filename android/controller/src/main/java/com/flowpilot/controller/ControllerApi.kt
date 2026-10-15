@@ -25,6 +25,49 @@ internal data class ControllerAppUpdate(
     val downloadUrl: String,
 )
 internal data class ControllerDevice(val id: String, val name: String, val model: String, val status: String)
+internal data class ControllerRemoteAssistSession(
+    val id: String,
+    val deviceId: String,
+    val deviceName: String,
+    val deviceModel: String,
+    val requestedByName: String,
+    val status: String,
+    val expiresAt: Long,
+)
+internal data class ControllerRemoteAssistInput(
+    val type: String,
+    val x: Float? = null,
+    val y: Float? = null,
+    val endX: Float? = null,
+    val endY: Float? = null,
+    val durationMs: Long = 300,
+)
+
+internal fun controllerRemoteAssistGesture(
+    startX: Float,
+    startY: Float,
+    endX: Float,
+    endY: Float,
+    width: Float,
+    height: Float,
+    contentWidth: Float = width,
+    contentHeight: Float = height,
+    contentOffsetX: Float = 0f,
+    contentOffsetY: Float = 0f,
+): ControllerRemoteAssistInput {
+    require(width > 0f && height > 0f && contentWidth > 0f && contentHeight > 0f) {
+        "远程画面尺寸必须大于零"
+    }
+    val x = ((startX - contentOffsetX) / contentWidth).coerceIn(0f, 1f)
+    val y = ((startY - contentOffsetY) / contentHeight).coerceIn(0f, 1f)
+    val normalizedEndX = ((endX - contentOffsetX) / contentWidth).coerceIn(0f, 1f)
+    val normalizedEndY = ((endY - contentOffsetY) / contentHeight).coerceIn(0f, 1f)
+    return if (kotlin.math.abs(endX - startX) < 20f && kotlin.math.abs(endY - startY) < 20f) {
+        ControllerRemoteAssistInput("tap", x, y)
+    } else {
+        ControllerRemoteAssistInput("swipe", x, y, normalizedEndX, normalizedEndY)
+    }
+}
 internal data class ControllerTask(
     val id: String,
     val name: String,
@@ -247,6 +290,88 @@ internal class ControllerApi(
         request("/devices/${encode(deviceId)}", "DELETE", token)
     }
 
+    fun createRemoteAssistSession(
+        token: String,
+        deviceId: String,
+        durationSeconds: Int = 300,
+    ): ControllerRemoteAssistSession =
+        JSONObject(
+            request(
+                "/remote-sessions",
+                "POST",
+                token,
+                JSONObject().put("device_id", deviceId).put("duration_seconds", durationSeconds),
+            ),
+        ).toRemoteAssistSession()
+
+    fun remoteAssistSession(token: String, sessionId: String): ControllerRemoteAssistSession =
+        JSONObject(request("/remote-sessions/${encode(sessionId)}", token = token)).toRemoteAssistSession()
+
+    fun remoteAssistTicket(token: String, sessionId: String): String =
+        JSONObject(
+            request(
+                "/remote-sessions/${encode(sessionId)}/controller-ticket",
+                "POST",
+                token,
+            ),
+        ).optString("ticket").takeIf(String::isNotBlank)
+            ?: throw IOException("服务器没有返回远程协助凭据")
+
+    fun remoteAssistFrame(sessionId: String, ticket: String, afterSequence: Long): Pair<ByteArray, Long>? {
+        val connection = URL(
+            "$baseUrl/remote-sessions/${encode(sessionId)}/frame?after_seq=$afterSequence",
+        ).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 5_000
+            connection.readTimeout = 5_000
+            connection.setRequestProperty("Authorization", "Bearer $ticket")
+            val status = connection.responseCode
+            if (status == 204) return null
+            val body = readLimited(
+                if (status in 200..299) connection.inputStream else connection.errorStream,
+                MAX_REMOTE_FRAME_BYTES,
+            )
+            if (status !in 200..299) {
+                val detail = runCatching { JSONObject(body.toString(Charsets.UTF_8)).optString("detail") }.getOrNull()
+                throw ControllerApiException(detail?.takeIf(String::isNotBlank) ?: "远程画面读取失败（HTTP $status）", status)
+            }
+            if (connection.contentType?.substringBefore(';') != "image/jpeg") {
+                throw IOException("服务器返回的远程画面格式无效")
+            }
+            val sequence = connection.getHeaderField("X-Frame-Sequence")?.toLongOrNull()
+                ?: throw IOException("服务器返回的远程画面缺少序号")
+            if (sequence <= afterSequence || body.isEmpty()) throw IOException("服务器返回了无效的远程画面")
+            return body to sequence
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    fun sendRemoteAssistInput(
+        sessionId: String,
+        ticket: String,
+        input: ControllerRemoteAssistInput,
+    ) {
+        val payload = JSONObject().put("type", input.type)
+        input.x?.let { payload.put("x", it) }
+        input.y?.let { payload.put("y", it) }
+        input.endX?.let { payload.put("end_x", it) }
+        input.endY?.let { payload.put("end_y", it) }
+        if (input.type == "swipe") payload.put("duration_ms", input.durationMs.coerceIn(100, 2_000))
+        request(
+            "/remote-sessions/${encode(sessionId)}/input",
+            "POST",
+            ticket,
+            payload,
+            allowRefresh = false,
+        )
+    }
+
+    fun endRemoteAssistSession(token: String, sessionId: String) {
+        request("/remote-sessions/${encode(sessionId)}/end", "POST", token)
+    }
+
     fun tasks(token: String): List<ControllerTask> =
         arrayRequest("/tasks", token).map {
             ControllerTask(
@@ -348,6 +473,16 @@ internal class ControllerApi(
         }
     }
 
+    private fun JSONObject.toRemoteAssistSession() = ControllerRemoteAssistSession(
+        id = optString("id"),
+        deviceId = optString("device_id"),
+        deviceName = optString("device_name"),
+        deviceModel = optString("device_model"),
+        requestedByName = optString("requested_by_name"),
+        status = optString("status"),
+        expiresAt = optLong("expires_at"),
+    )
+
     private fun request(
         path: String,
         method: String = "GET",
@@ -416,6 +551,7 @@ internal class ControllerApi(
     private companion object {
         const val MAX_RESPONSE_BYTES = 4 * 1024 * 1024
         const val MAX_APP_APK_BYTES = 100 * 1024 * 1024
+        const val MAX_REMOTE_FRAME_BYTES = 1024 * 1024
     }
 }
 

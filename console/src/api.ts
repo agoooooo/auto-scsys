@@ -72,6 +72,29 @@ export type RemoteRun = {
   expires_at: number;
 };
 
+export type RemoteAssistSession = {
+  id: string;
+  device_id: string;
+  device_name: string;
+  device_model: string;
+  requested_by: string;
+  requested_by_name: string;
+  status: "pending" | "active" | "rejected" | "ended" | "expired";
+  created_at: string;
+  expires_at: number;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type RemoteAssistInput = {
+  type: "tap" | "swipe" | "back" | "home";
+  x?: number;
+  y?: number;
+  end_x?: number;
+  end_y?: number;
+  duration_ms?: number;
+};
+
 export type RunRecord = {
   id: string;
   task_id: string;
@@ -302,6 +325,87 @@ export function stopRemoteRun(session: Session, requestId: string): Promise<Remo
   return apiRequest(session, `/remote-runs/${encodeURIComponent(requestId)}/stop`, {
     method: "POST",
   });
+}
+
+export function createRemoteAssistSession(
+  session: Session,
+  deviceId: string,
+  durationSeconds = 300,
+): Promise<RemoteAssistSession> {
+  return apiRequest(session, "/remote-sessions", {
+    method: "POST",
+    body: JSON.stringify({ device_id: deviceId, duration_seconds: durationSeconds }),
+  });
+}
+
+export function getRemoteAssistSession(session: Session, sessionId: string): Promise<RemoteAssistSession> {
+  return apiRequest(session, `/remote-sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export async function getRemoteAssistControllerTicket(session: Session, sessionId: string): Promise<string> {
+  const result = await apiRequest<{ ticket: string }>(
+    session,
+    `/remote-sessions/${encodeURIComponent(sessionId)}/controller-ticket`,
+    { method: "POST" },
+  );
+  if (!result.ticket) throw new Error("服务端没有返回远程协助凭据");
+  return result.ticket;
+}
+
+export async function getRemoteAssistFrame(
+  session: Session,
+  sessionId: string,
+  ticket: string,
+  afterSequence: number,
+): Promise<{ blob: Blob; sequence: number } | null> {
+  const response = await fetch(
+    `${session.baseUrl}/remote-sessions/${encodeURIComponent(sessionId)}/frame?after_seq=${afterSequence}`,
+    {
+      headers: { Authorization: `Bearer ${ticket}` },
+      cache: "no-store",
+    },
+  );
+  if (response.status === 204) return null;
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { detail?: unknown } | null;
+    const detail = typeof payload?.detail === "string" ? payload.detail : `远程画面读取失败（HTTP ${response.status}）`;
+    throw new ApiError(detail, response.status);
+  }
+  const sequence = Number(response.headers.get("X-Frame-Sequence"));
+  if (!Number.isSafeInteger(sequence) || sequence <= afterSequence) {
+    throw new Error("服务端返回了无效的远程画面序号");
+  }
+  return { blob: await response.blob(), sequence };
+}
+
+export function sendRemoteAssistInput(
+  session: Session,
+  sessionId: string,
+  ticket: string,
+  input: RemoteAssistInput,
+): Promise<{ seq: number }> {
+  return fetch(`${session.baseUrl}/remote-sessions/${encodeURIComponent(sessionId)}/input`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${ticket}`,
+    },
+    body: JSON.stringify(input),
+  }).then(async (response) => {
+    const payload = await response.json().catch(() => null) as { seq?: number; detail?: unknown } | null;
+    if (!response.ok) {
+      const detail = typeof payload?.detail === "string" ? payload.detail : `远程操作发送失败（HTTP ${response.status}）`;
+      throw new ApiError(detail, response.status);
+    }
+    if (typeof payload?.seq !== "number" || !Number.isSafeInteger(payload.seq)) {
+      throw new Error("服务端返回了无效的远程操作序号");
+    }
+    return { seq: payload.seq };
+  });
+}
+
+export function endRemoteAssistSession(session: Session, sessionId: string): Promise<{ id: string; status: string }> {
+  return apiRequest(session, `/remote-sessions/${encodeURIComponent(sessionId)}/end`, { method: "POST" });
 }
 
 export async function publishScriptVersion(

@@ -23,11 +23,14 @@ internal data class AppUiState(
     val device: BoundDevice? = null,
     val tasks: List<AvailableTask> = emptyList(),
     val remoteRuns: List<RemoteRun> = emptyList(),
+    val remoteAssistSessions: List<RemoteAssistSession> = emptyList(),
     val runHistory: List<RunRecord> = emptyList(),
     val runHistoryLoading: Boolean = false,
     val runHistoryError: String? = null,
     val remoteRunsLoading: Boolean = false,
     val remoteRunsError: String? = null,
+    val remoteAssistLoading: Boolean = false,
+    val remoteAssistError: String? = null,
     val loading: Boolean = false,
     val error: String? = null,
     val runStatus: RunStatus? = null,
@@ -49,6 +52,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
     val state: StateFlow<AppUiState> = _state.asStateFlow()
     private var taskSyncInFlight = false
     private var sessionCheckInFlight = false
+    private var remoteAssistRefreshInFlight = false
 
     private fun apiClient(baseUrl: String) = ApiClient(baseUrl, ::expireSession)
 
@@ -260,6 +264,51 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         _state.value = _state.value.copy(remoteRunsError = null)
     }
 
+    fun refreshRemoteAssistSessions() {
+        val current = _state.value
+        val userId = current.user?.id ?: return
+        if (current.token == null) return
+        val device = current.device ?: return
+        if (remoteAssistRefreshInFlight) return
+        remoteAssistRefreshInFlight = true
+        _state.value = current.copy(remoteAssistLoading = true, remoteAssistError = null)
+        viewModelScope.launch {
+            try {
+                val session = withContext(Dispatchers.IO) { freshSession() }
+                val sessions = withContext(Dispatchers.IO) {
+                    apiClient(session.apiBaseUrl).pendingRemoteAssistSessions(session.token, device.id)
+                }
+                if (_state.value.user?.id != userId || _state.value.device?.id != device.id) return@launch
+                _state.value = _state.value.copy(
+                    token = session.token,
+                    tokenExpiresAt = session.tokenExpiresAt,
+                    remoteAssistSessions = sessions,
+                    remoteAssistLoading = false,
+                    remoteAssistError = null,
+                )
+            } catch (exception: Exception) {
+                if (_state.value.user?.id != userId || _state.value.device?.id != device.id) return@launch
+                _state.value = _state.value.copy(
+                    remoteAssistLoading = false,
+                    remoteAssistError = exception.message ?: "远程协助请求同步失败",
+                )
+            } finally {
+                remoteAssistRefreshInFlight = false
+            }
+        }
+    }
+
+    suspend fun decideRemoteAssistSession(sessionId: String, accept: Boolean): RemoteAssistAccess? =
+        withContext(Dispatchers.IO) {
+            val session = freshSession()
+            apiClient(session.apiBaseUrl).decideRemoteAssistSession(session.token, sessionId, accept)
+        }
+
+    suspend fun endRemoteAssistSession(sessionId: String) = withContext(Dispatchers.IO) {
+        val session = freshSession()
+        apiClient(session.apiBaseUrl).endRemoteAssistSession(session.token, sessionId)
+    }
+
     fun unbindDevice() {
         val current = _state.value
         val user = current.user ?: return
@@ -276,12 +325,14 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                 }
                 sessionStore.clearDeviceId(user.id)
                 RemoteRunMonitorService.stop(getApplication())
+                RemoteAssistService.stop(getApplication())
                 _state.value = _state.value.copy(
                     token = session.token,
                     tokenExpiresAt = session.tokenExpiresAt,
                     device = null,
                     tasks = emptyList(),
                     remoteRuns = emptyList(),
+                    remoteAssistSessions = emptyList(),
                     remoteRunsLoading = false,
                     remoteMonitoring = false,
                     loading = false,
@@ -594,6 +645,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         sessionStore.clear()
         RemoteRunMonitorService.stop(getApplication())
         OcrStandbyService.stop(getApplication())
+        RemoteAssistService.stop(getApplication())
         val remembered = sessionStore.readRememberedLogin()
         _state.value = AppUiState(
             apiBaseUrl = remembered?.apiBaseUrl ?: current.apiBaseUrl,

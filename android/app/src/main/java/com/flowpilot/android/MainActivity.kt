@@ -92,6 +92,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+private const val REMOTE_ASSIST_POLL_INTERVAL_MILLIS = 5_000L
+
 internal enum class DeviceAppDestination(val label: String) {
     DEVICE("设备"),
     TASKS("任务"),
@@ -111,18 +113,22 @@ class MainActivity : ComponentActivity() {
     private var appUpdateCheckInFlight = false
     private var startMonitoringAfterNotificationGrant = false
     private var startOcrStandbyAfterNotificationGrant = false
+    private var startRemoteAssistAfterNotificationGrant = false
     private var startDefaultOcrAfterNotificationGrant = false
     private var startDefaultOcrAfterBatterySettings = false
     private var pendingOcrStandbyStart = false
+    private var pendingRemoteAssist: RemoteAssistSession? = null
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         notificationPermissionGranted.value = granted || Build.VERSION.SDK_INT < 33
         val shouldStartMonitoring = startMonitoringAfterNotificationGrant
         val shouldStartOcrStandby = startOcrStandbyAfterNotificationGrant
+        val shouldStartRemoteAssist = startRemoteAssistAfterNotificationGrant
         val shouldStartDefaultOcr = startDefaultOcrAfterNotificationGrant
         startMonitoringAfterNotificationGrant = false
         startOcrStandbyAfterNotificationGrant = false
+        startRemoteAssistAfterNotificationGrant = false
         startDefaultOcrAfterNotificationGrant = false
         if (granted && shouldStartDefaultOcr) {
             if (remoteMonitoring.value || startRemoteMonitoring()) {
@@ -131,6 +137,11 @@ class MainActivity : ComponentActivity() {
         }
         else if (granted && shouldStartMonitoring) startRemoteMonitoring()
         else if (granted && shouldStartOcrStandby) requestOcrStandbyCapturePermission()
+        else if (granted && shouldStartRemoteAssist) requestRemoteAssistCapturePermission()
+        else if (!granted && shouldStartRemoteAssist) {
+            pendingRemoteAssist?.let(::rejectRemoteAssist)
+            pendingRemoteAssist = null
+        }
         else if (!granted) flowPilotViewModel.showError("未授予通知权限，无法显示远程待命和运行状态")
     }
     private val batteryOptimizationSettings = registerForActivityResult(
@@ -156,6 +167,40 @@ class MainActivity : ComponentActivity() {
             } catch (exception: Exception) {
                 flowPilotViewModel.showError("无法开启持续 OCR 待命：${exception.message ?: "未知错误"}")
                 return@registerForActivityResult
+            }
+            return@registerForActivityResult
+        }
+        val assistRequest = pendingRemoteAssist
+        if (assistRequest != null) {
+            pendingRemoteAssist = null
+            if (result.resultCode != Activity.RESULT_OK || result.data == null) {
+                rejectRemoteAssist(assistRequest)
+                flowPilotViewModel.showError("未授予屏幕捕获权限，远程协助请求已拒绝")
+                return@registerForActivityResult
+            }
+            lifecycleScope.launch {
+                var acceptedSessionId: String? = null
+                try {
+                    val access = flowPilotViewModel.decideRemoteAssistSession(assistRequest.id, accept = true)
+                        ?: throw IllegalStateException("设备未能同意远程协助")
+                    acceptedSessionId = access.session.id
+                    RemoteAssistService.start(
+                        context = this@MainActivity,
+                        session = access.session,
+                        ticket = access.deviceTicket,
+                        apiBaseUrl = flowPilotViewModel.state.value.apiBaseUrl,
+                        resultCode = result.resultCode,
+                        resultData = result.data!!,
+                    )
+                    flowPilotViewModel.refreshRemoteAssistSessions()
+                } catch (exception: Exception) {
+                    if (acceptedSessionId != null) {
+                        runCatching { flowPilotViewModel.endRemoteAssistSession(acceptedSessionId) }
+                    } else {
+                        rejectRemoteAssist(assistRequest)
+                    }
+                    flowPilotViewModel.showError("无法开始远程协助：${exception.message ?: "未知错误"}")
+                }
             }
             return@registerForActivityResult
         }
@@ -240,6 +285,58 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestRemoteAssist(session: RemoteAssistSession) {
+        if (!accessibilityEnabled.value) {
+            flowPilotViewModel.showError("远程协助需要先在系统设置中启用 FlowPilot 无障碍操作服务")
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            return
+        }
+        if (RunStatusStore(this).snapshot().status in setOf("running", "awaiting_permission") || ocrStandbyActive.value) {
+            flowPilotViewModel.showError("请先停止当前任务或持续 OCR 待命，再开始远程协助")
+            return
+        }
+        pendingRemoteAssist = session
+        if (Build.VERSION.SDK_INT >= 33 && !notificationPermissionGranted.value) {
+            startRemoteAssistAfterNotificationGrant = true
+            requestNotificationPermission()
+            return
+        }
+        requestRemoteAssistCapturePermission()
+    }
+
+    private fun requestRemoteAssistCapturePermission() {
+        if (!accessibilityEnabled.value) {
+            flowPilotViewModel.showError("请先启用 FlowPilot 无障碍操作服务")
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            return
+        }
+        val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        screenCapturePermission.launch(manager.createScreenCaptureIntent())
+    }
+
+    private fun rejectRemoteAssist(session: RemoteAssistSession) {
+        lifecycleScope.launch {
+            try {
+                flowPilotViewModel.decideRemoteAssistSession(session.id, accept = false)
+                flowPilotViewModel.refreshRemoteAssistSessions()
+            } catch (exception: Exception) {
+                flowPilotViewModel.showError("拒绝远程协助失败：${exception.message ?: "未知错误"}")
+            }
+        }
+    }
+
+    private fun endRemoteAssist(sessionId: String) {
+        lifecycleScope.launch {
+            try {
+                flowPilotViewModel.endRemoteAssistSession(sessionId)
+                RemoteAssistService.stop(this@MainActivity)
+                flowPilotViewModel.refreshRemoteAssistSessions()
+            } catch (exception: Exception) {
+                flowPilotViewModel.showError("结束远程协助失败：${exception.message ?: "未知错误"}")
+            }
+        }
+    }
+
     private val accessibilityEnabled = mutableStateOf(false)
     private val remoteMonitoring = mutableStateOf(false)
     private val ocrStandbyActive = mutableStateOf(false)
@@ -269,6 +366,7 @@ class MainActivity : ComponentActivity() {
                     delay(FOREGROUND_REMOTE_POLL_INTERVAL_MILLIS)
                     flowPilotViewModel.checkSession()
                     flowPilotViewModel.refreshRemoteRuns()
+                    flowPilotViewModel.refreshRemoteAssistSessions()
                 }
             }
         }
@@ -296,10 +394,14 @@ class MainActivity : ComponentActivity() {
                         onLogout = {
                             RemoteRunMonitorService.stop(this)
                             OcrStandbyService.stop(this)
+                            RemoteAssistService.stop(this)
                             flowPilotViewModel.logout()
                         },
                         onStopTask = { TaskExecutionService.stop(this) },
                         onCheckAppUpdate = ::checkForAppUpdate,
+                        onAcceptRemoteAssist = ::requestRemoteAssist,
+                        onRejectRemoteAssist = ::rejectRemoteAssist,
+                        onEndRemoteAssist = ::endRemoteAssist,
                     )
                 }
             }
@@ -310,6 +412,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         flowPilotViewModel.refreshRemoteRuns()
+        flowPilotViewModel.refreshRemoteAssistSessions()
     }
 
     override fun onResume() {
@@ -327,6 +430,7 @@ class MainActivity : ComponentActivity() {
         flowPilotViewModel.refreshRunHistory()
         flowPilotViewModel.refreshTasks(showLoading = false)
         flowPilotViewModel.refreshRemoteRuns()
+        flowPilotViewModel.refreshRemoteAssistSessions()
         checkForAppUpdate()
     }
 
@@ -734,11 +838,16 @@ private fun FlowPilotScreen(
     onLogout: () -> Unit,
     onStopTask: () -> Unit,
     onCheckAppUpdate: () -> Unit,
+    onAcceptRemoteAssist: (RemoteAssistSession) -> Unit,
+    onRejectRemoteAssist: (RemoteAssistSession) -> Unit,
+    onEndRemoteAssist: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val state by viewModel.state.collectAsStateWithLifecycle()
     val user = state.user
     val device = state.device
+    val pendingRemoteAssist = state.remoteAssistSessions.firstOrNull { it.status == "pending" }
+    val activeRemoteAssist = state.remoteAssistSessions.firstOrNull { it.status == "active" }
     val canLogout = canLogoutDuringRun(state.runStatus?.status)
     var apiBaseUrl by rememberSaveable { mutableStateOf(state.apiBaseUrl) }
     var registering by rememberSaveable { mutableStateOf(false) }
@@ -788,6 +897,13 @@ private fun FlowPilotScreen(
         if (state.notice != null) {
             registering = false
             passwordConfirmation = ""
+        }
+    }
+    LaunchedEffect(user?.id, device?.id) {
+        if (user == null || device == null) return@LaunchedEffect
+        while (true) {
+            viewModel.refreshRemoteAssistSessions()
+            delay(REMOTE_ASSIST_POLL_INTERVAL_MILLIS)
         }
     }
     LaunchedEffect(apiBaseUrl, user?.id) {
@@ -1229,6 +1345,23 @@ private fun FlowPilotScreen(
                         }
                         state.remoteRunsError?.let { error ->
                             Text(error, color = MaterialTheme.colorScheme.error)
+                        }
+                        state.remoteAssistError?.let { error ->
+                            Text(error, color = MaterialTheme.colorScheme.error)
+                        }
+                        activeRemoteAssist?.let { session ->
+                            HorizontalDivider()
+                            Text(
+                                "远程协助进行中 · ${session.requestedByName} 正在查看屏幕",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Button(
+                                onClick = { onEndRemoteAssist(session.id) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("立即结束远程协助")
+                            }
                         }
                     }
                 }
@@ -1699,6 +1832,34 @@ private fun FlowPilotScreen(
             dismissButton = {
                 TextButton(onClick = { confirmDeviceUnbind = false }) {
                     Text("取消")
+                }
+            },
+        )
+    }
+
+    pendingRemoteAssist?.let { session ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("远程协助请求") },
+            text = {
+                Column(
+                    modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text("${session.requestedByName} 请求连接此设备。")
+                    Text("同意后，屏幕画面会实时传输；对方可点击、滑动或使用返回/主页操作。")
+                    Text("此会话最长 10 分钟，不保存录像。你可以随时使用通知中的“立即结束”或返回此页面终止会话。")
+                    Text("Android 会另行显示屏幕共享授权；拒绝系统授权不会建立会话。")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { onAcceptRemoteAssist(session) }) {
+                    Text("查看系统授权")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { onRejectRemoteAssist(session) }) {
+                    Text("拒绝")
                 }
             },
         )

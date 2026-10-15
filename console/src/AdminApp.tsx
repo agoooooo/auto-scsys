@@ -29,6 +29,7 @@ import {
   SafetyCertificateOutlined,
   TeamOutlined,
   UnorderedListOutlined,
+  VideoCameraOutlined,
 } from "@ant-design/icons";
 import {
   apiRequest,
@@ -44,8 +45,9 @@ import { Login } from "./Login";
 import { ResourcesPage } from "./ResourcesPage";
 const AppReleasesPage = lazy(() => import("./AppReleasesPage").then((module) => ({ default: module.AppReleasesPage })));
 const TasksPage = lazy(() => import("./TasksPage").then((module) => ({ default: module.TasksPage })));
+const RemoteAssistPage = lazy(() => import("./RemoteAssistPage").then((module) => ({ default: module.RemoteAssistPage })));
 
-type Page = "overview" | "users" | "devices" | "tasks" | "runs" | "audit" | "app-updates";
+type Page = "overview" | "users" | "devices" | "tasks" | "runs" | "audit" | "app-updates" | "remote-assist";
 
 const pageLabels: Record<Page, string> = {
   overview: "总览",
@@ -55,6 +57,7 @@ const pageLabels: Record<Page, string> = {
   runs: "运行记录",
   audit: "操作审计",
   "app-updates": "App 自动更新",
+  "remote-assist": "远程协助",
 };
 
 const adminMenuItems = [
@@ -65,6 +68,7 @@ const adminMenuItems = [
   { key: "runs", icon: <UnorderedListOutlined />, label: "运行记录" },
   { key: "audit", icon: <AuditOutlined />, label: "操作审计" },
   { key: "app-updates", icon: <CloudDownloadOutlined />, label: "App 自动更新" },
+  { key: "remote-assist", icon: <VideoCameraOutlined />, label: "远程协助" },
 ];
 
 const userMenuItems = [
@@ -72,6 +76,7 @@ const userMenuItems = [
   { key: "devices", icon: <DesktopOutlined />, label: "我的设备" },
   { key: "tasks", icon: <CodeOutlined />, label: "我的脚本" },
   { key: "runs", icon: <UnorderedListOutlined />, label: "运行历史" },
+  { key: "remote-assist", icon: <VideoCameraOutlined />, label: "远程协助" },
 ];
 
 function sessionFromStorage(): Session | null {
@@ -145,7 +150,7 @@ export function AdminApp() {
   const menuItems = isAdmin ? adminMenuItems : userMenuItems;
   const activeLabel = isAdmin
     ? pageLabels[page]
-    : page === "devices" ? "我的设备" : page === "tasks" ? "我的脚本" : page === "runs" ? "运行历史" : "工作台";
+    : page === "devices" ? "我的设备" : page === "tasks" ? "我的脚本" : page === "runs" ? "运行历史" : page === "remote-assist" ? "远程协助" : "工作台";
   const navigation = (
     <>
       <div className="sider-brand">
@@ -224,6 +229,11 @@ export function AdminApp() {
           {page === "users" && isAdmin && <ResourcesPage session={session} section="users" />}
           {page === "devices" && <ResourcesPage session={session} section="devices" />}
           {page === "runs" && <ResourcesPage session={session} section="runs" />}
+          {page === "remote-assist" && (
+            <Suspense fallback={<Card bordered={false}><Skeleton active /></Card>}>
+              <RemoteAssistPage session={session} />
+            </Suspense>
+          )}
           {page === "audit" && isAdmin && <ResourcesPage session={session} section="audit" />}
           {page === "app-updates" && isAdmin && (
             <Suspense fallback={<Card bordered={false}><Skeleton active /></Card>}>

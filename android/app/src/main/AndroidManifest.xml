@@ -45,6 +45,10 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
         <service
+            android:name=".RemoteAssistService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync|mediaProjection" />
+        <service
             android:name=".TaskExecutionService"
             android:exported="false"
             android:foregroundServiceType="dataSync|mediaProjection" />

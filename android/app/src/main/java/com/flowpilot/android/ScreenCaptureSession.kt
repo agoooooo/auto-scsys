@@ -18,6 +18,7 @@ import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
+import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
@@ -82,6 +83,33 @@ internal class ScreenCaptureSession(
             ).text
         } finally {
             image.recycle()
+        }
+    }
+
+    fun captureJpeg(maxDimension: Int = 800, quality: Int = 55): ByteArray {
+        require(maxDimension >= 320)
+        require(quality in 20..90)
+        val original = captureFrame()
+        val scale = minOf(1f, maxDimension.toFloat() / maxOf(original.width, original.height))
+        val bitmap = if (scale < 1f) {
+            Bitmap.createScaledBitmap(
+                original,
+                (original.width * scale).toInt().coerceAtLeast(1),
+                (original.height * scale).toInt().coerceAtLeast(1),
+                true,
+            ).also { original.recycle() }
+        } else {
+            original
+        }
+        return try {
+            ByteArrayOutputStream().use { output ->
+                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, output)) {
+                    throw IllegalStateException("无法编码远程屏幕画面")
+                }
+                output.toByteArray()
+            }
+        } finally {
+            bitmap.recycle()
         }
     }
 

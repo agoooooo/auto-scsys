@@ -54,13 +54,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.Image
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import android.graphics.BitmapFactory
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
@@ -230,6 +236,11 @@ private data class ControllerScreenState(
     val runHistoryLoaded: Boolean = false,
     val runHistoryLoading: Boolean = false,
     val runHistoryError: String? = null,
+    val remoteAssistSession: ControllerRemoteAssistSession? = null,
+    val remoteAssistLoading: Boolean = false,
+    val remoteAssistFrame: ByteArray? = null,
+    val remoteAssistTicket: String? = null,
+    val remoteAssistError: String? = null,
     val loading: Boolean = false,
     val dispatchUncertain: Boolean = false,
     val error: String? = null,
@@ -266,11 +277,109 @@ class MainActivity : ComponentActivity() {
     private lateinit var uiStateStore: ControllerUiStateStore
     private var state by mutableStateOf(ControllerScreenState())
     private var monitorJob: Job? = null
+    private var remoteAssistJob: Job? = null
     private var batchMonitorJob: Job? = null
     private var recoveryStatusJob: Job? = null
     private var deviceRefreshInFlight = false
     private var sessionCheckInFlight = false
     private var appUpdateCheckInFlight = false
+
+    private fun startRemoteAssist(device: ControllerDevice) {
+        val login = state.session ?: return
+        if (state.remoteAssistLoading || state.remoteAssistSession?.status in setOf("pending", "active")) return
+        remoteAssistJob?.cancel()
+        state = state.copy(
+            remoteAssistLoading = true,
+            error = null,
+            remoteAssistError = null,
+            remoteAssistFrame = null,
+            remoteAssistTicket = null,
+        )
+        remoteAssistJob = lifecycleScope.launch {
+            try {
+                val created = withContext(Dispatchers.IO) {
+                    controllerApi(login).createRemoteAssistSession(login.token, device.id)
+                }
+                state = state.copy(remoteAssistSession = created, remoteAssistLoading = false)
+                monitorRemoteAssist(login, created.id)
+            } catch (error: Exception) {
+                state = state.copy(
+                    remoteAssistLoading = false,
+                    error = error.message ?: "发起远程协助失败",
+                    remoteAssistError = error.message ?: "发起远程协助失败",
+                )
+            }
+        }
+    }
+
+    private suspend fun monitorRemoteAssist(login: ControllerSession, sessionId: String) {
+        val api = controllerApi(login)
+        var ticket: String? = null
+        var sequence = 0L
+        while (true) {
+            val remote = withContext(Dispatchers.IO) { api.remoteAssistSession(login.token, sessionId) }
+            if (state.remoteAssistSession?.id != sessionId) return
+            state = state.copy(remoteAssistSession = remote)
+            if (remote.status == "active") {
+                if (ticket == null) {
+                    ticket = withContext(Dispatchers.IO) { api.remoteAssistTicket(login.token, sessionId) }
+                    state = state.copy(remoteAssistTicket = ticket)
+                }
+                val frame = withContext(Dispatchers.IO) {
+                    api.remoteAssistFrame(sessionId, ticket, sequence)
+                }
+                if (frame != null && state.remoteAssistSession?.id == sessionId) {
+                    sequence = frame.second
+                    state = state.copy(remoteAssistFrame = frame.first, remoteAssistError = null)
+                }
+            } else if (remote.status !in setOf("pending")) {
+                return
+            }
+            delay(350)
+        }
+    }
+
+    private fun endRemoteAssist() {
+        val login = state.session ?: return
+        val remote = state.remoteAssistSession ?: return
+        if (state.remoteAssistLoading || remote.status !in setOf("pending", "active")) return
+        state = state.copy(remoteAssistLoading = true, remoteAssistError = null)
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    controllerApi(login).endRemoteAssistSession(login.token, remote.id)
+                }
+                remoteAssistJob?.cancel()
+                state = state.copy(
+                    remoteAssistSession = remote.copy(status = "ended"),
+                    remoteAssistLoading = false,
+                    remoteAssistTicket = null,
+                    remoteAssistFrame = null,
+                )
+            } catch (error: Exception) {
+                state = state.copy(
+                    remoteAssistLoading = false,
+                    remoteAssistError = error.message ?: "结束远程协助失败",
+                )
+            }
+        }
+    }
+
+    private fun sendRemoteAssistInput(input: ControllerRemoteAssistInput) {
+        val remote = state.remoteAssistSession ?: return
+        val ticket = state.remoteAssistTicket ?: return
+        if (remote.status != "active") return
+        val login = state.session ?: return
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    controllerApi(login).sendRemoteAssistInput(remote.id, ticket, input)
+                }
+            } catch (error: Exception) {
+                state = state.copy(remoteAssistError = error.message ?: "远程操作发送失败")
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -356,6 +465,9 @@ class MainActivity : ComponentActivity() {
                         onStopBatchRun = ::stopBatchRun,
                         onLogout = ::logout,
                         onCheckAppUpdate = ::checkForAppUpdate,
+                        onStartRemoteAssist = ::startRemoteAssist,
+                        onEndRemoteAssist = ::endRemoteAssist,
+                        onRemoteAssistInput = ::sendRemoteAssistInput,
                     )
                 }
             }
@@ -1091,13 +1203,26 @@ class MainActivity : ComponentActivity() {
         val session = state.session ?: return
         monitorJob?.cancel()
         batchMonitorJob?.cancel()
+        remoteAssistJob?.cancel()
+        val remoteAssistId = state.remoteAssistSession
+            ?.takeIf { it.status in setOf("pending", "active") }
+            ?.id
         state = state.copy(loading = true, error = null)
         lifecycleScope.launch {
             var logoutError: String? = null
+            if (remoteAssistId != null) {
+                try {
+                    withContext(Dispatchers.IO) {
+                        controllerApi(session).endRemoteAssistSession(session.token, remoteAssistId)
+                    }
+                } catch (error: Exception) {
+                    logoutError = error.message ?: "结束远程协助失败"
+                }
+            }
             try {
                 withContext(Dispatchers.IO) { controllerApi(session).logout(session.token) }
             } catch (error: Exception) {
-                logoutError = error.message ?: "服务端退出失败"
+                logoutError = logoutError ?: error.message ?: "服务端退出失败"
             } finally {
                 sessionStore.clear()
                 clearUiState()
@@ -1162,6 +1287,9 @@ private fun ControllerScreen(
     onStopBatchRun: (String) -> Unit,
     onLogout: () -> Unit,
     onCheckAppUpdate: () -> Unit,
+    onStartRemoteAssist: (ControllerDevice) -> Unit,
+    onEndRemoteAssist: () -> Unit,
+    onRemoteAssistInput: (ControllerRemoteAssistInput) -> Unit,
 ) {
     var showHelp by remember { mutableStateOf(false) }
     var selectedRunHistory by remember { mutableStateOf<ControllerRunHistory?>(null) }
@@ -1621,6 +1749,7 @@ private fun ControllerScreen(
                             group.devices.forEach { device ->
                                 val selected = device.id in state.selectedDeviceIds
                                 val online = device.status == "online"
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Card(
                                     onClick = { onToggleDeviceSelection(device.id) },
                                     enabled = !state.loading && online,
@@ -1689,6 +1818,17 @@ private fun ControllerScreen(
                                                 onCheckedChange = { onToggleDeviceSelection(device.id) },
                                                 enabled = !state.loading && online,
                                             )
+                                        }
+                                    }
+                                }
+                                    if (online) {
+                                        OutlinedButton(
+                                            onClick = { onStartRemoteAssist(device) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            enabled = !state.loading && !state.remoteAssistLoading &&
+                                                state.remoteAssistSession?.status !in setOf("pending", "active"),
+                                        ) {
+                                            Text(if (state.remoteAssistLoading) "正在发起协助…" else "远程协助")
                                         }
                                     }
                                 }
@@ -2078,6 +2218,94 @@ private fun ControllerScreen(
             },
             confirmButton = {
                 TextButton(onClick = { selectedRunHistory = null }) { Text("关闭") }
+            },
+        )
+    }
+    state.remoteAssistSession?.takeIf { it.status in setOf("pending", "active") }?.let { remote ->
+        AlertDialog(
+            onDismissRequest = onEndRemoteAssist,
+            title = { Text("远程协助 · ${remote.deviceName}") },
+            text = {
+                Column(
+                    modifier = Modifier.height(440.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (remote.status == "pending") {
+                        Text("等待设备用户在受控端明确同意。未经设备用户确认，不会开启屏幕共享。")
+                        CircularProgressIndicator()
+                    } else {
+                        Text("协助中 · 仅当前限时会话，设备通知栏可随时结束")
+                        val frame = state.remoteAssistFrame
+                        if (frame != null) {
+                            val bitmap = remember(frame) {
+                                BitmapFactory.decodeByteArray(frame, 0, frame.size)?.asImageBitmap()
+                            }
+                            if (bitmap != null) {
+                                Image(
+                                    bitmap = bitmap,
+                                    contentDescription = "受控设备实时屏幕",
+                                    modifier = Modifier.fillMaxWidth().height(300.dp)
+                                        .pointerInput(remote.id, state.remoteAssistTicket) {
+                                            awaitEachGesture {
+                                                val down = awaitFirstDown(requireUnconsumed = false)
+                                                var end = down.position
+                                                var pressed = true
+                                                while (pressed) {
+                                                    val event = awaitPointerEvent()
+                                                    val change = event.changes.firstOrNull { it.id == down.id }
+                                                    if (change == null || !change.pressed) {
+                                                        if (change != null) end = change.position
+                                                        pressed = false
+                                                    } else {
+                                                        end = change.position
+                                                    }
+                                                }
+                                                val fitScale = minOf(
+                                                    size.width.toFloat() / bitmap.width,
+                                                    size.height.toFloat() / bitmap.height,
+                                                )
+                                                val fittedWidth = bitmap.width * fitScale
+                                                val fittedHeight = bitmap.height * fitScale
+                                                onRemoteAssistInput(
+                                                    controllerRemoteAssistGesture(
+                                                        down.position.x,
+                                                        down.position.y,
+                                                        end.x,
+                                                        end.y,
+                                                        size.width.toFloat(),
+                                                        size.height.toFloat(),
+                                                        fittedWidth,
+                                                        fittedHeight,
+                                                        (size.width - fittedWidth) / 2f,
+                                                        (size.height - fittedHeight) / 2f,
+                                                    ),
+                                                )
+                                            }
+                                        },
+                                )
+                            } else {
+                                Text("无法解码设备画面")
+                            }
+                        } else {
+                            Text("等待设备画面…")
+                            CircularProgressIndicator()
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { onRemoteAssistInput(ControllerRemoteAssistInput("back")) }) {
+                                Text("返回")
+                            }
+                            OutlinedButton(onClick = { onRemoteAssistInput(ControllerRemoteAssistInput("home")) }) {
+                                Text("主页")
+                            }
+                        }
+                    }
+                    state.remoteAssistError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onEndRemoteAssist, enabled = !state.remoteAssistLoading) {
+                    Text(if (state.remoteAssistLoading) "正在结束…" else "结束协助")
+                }
             },
         )
     }

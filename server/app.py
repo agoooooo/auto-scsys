@@ -11,6 +11,7 @@ import secrets
 import sqlite3
 import smtplib
 import ssl
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager, contextmanager
@@ -43,6 +44,12 @@ PASSWORD_RESET_CODE_TTL_SECONDS = 10 * 60
 PASSWORD_RESET_MAX_ATTEMPTS = 5
 PASSWORD_RESET_WINDOW_SECONDS = 15 * 60
 REMOTE_REQUEST_TTL_SECONDS = 15 * 60
+REMOTE_SESSION_MIN_SECONDS = 60
+REMOTE_SESSION_MAX_SECONDS = 10 * 60
+REMOTE_SESSION_TICKET_TTL_SECONDS = 60
+REMOTE_SESSION_FRAME_MAX_BYTES = 1024 * 1024
+REMOTE_SESSION_FRAME_STALE_SECONDS = 2
+REMOTE_SESSION_INPUT_QUEUE_SIZE = 32
 PREAUTHORIZATION_TTL_SECONDS = 30 * 24 * 60 * 60
 DEVICE_OFFLINE_AFTER_SECONDS = 2 * 60
 MAX_SCRIPT_BYTES = 2 * 1024 * 1024
@@ -305,6 +312,19 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
                 stop_requested_at TEXT,
                 idempotency_key TEXT
             );
+            CREATE TABLE IF NOT EXISTS remote_sessions (
+                id TEXT PRIMARY KEY,
+                device_id TEXT NOT NULL REFERENCES devices(id),
+                initiated_by TEXT NOT NULL REFERENCES users(id),
+                status TEXT NOT NULL CHECK(status IN ('pending', 'active', 'rejected', 'ended', 'expired')),
+                created_at TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                device_ticket_hash TEXT,
+                controller_ticket_hash TEXT,
+                ended_by TEXT REFERENCES users(id)
+            );
             CREATE TABLE IF NOT EXISTS run_authorizations (
                 id TEXT PRIMARY KEY,
                 task_id TEXT NOT NULL REFERENCES tasks(id),
@@ -380,6 +400,10 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
             CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id            );
             CREATE INDEX IF NOT EXISTS idx_runs_device ON runs(device_id, started_at);
             CREATE INDEX IF NOT EXISTS idx_remote_device ON remote_runs(device_id, status, expires_at);
+            CREATE INDEX IF NOT EXISTS idx_remote_sessions_device
+                ON remote_sessions(device_id, status, expires_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_sessions_one_active_per_device
+                ON remote_sessions(device_id) WHERE status IN ('pending', 'active');
             """
         )
         if is_postgres:
@@ -675,6 +699,24 @@ class RemoteRunInput(BaseModel):
     device_id: str
 
 
+class RemoteSessionInput(BaseModel):
+    device_id: str
+    duration_seconds: int = Field(default=300, ge=REMOTE_SESSION_MIN_SECONDS, le=REMOTE_SESSION_MAX_SECONDS)
+
+
+class RemoteSessionDecision(BaseModel):
+    decision: Literal["accept", "reject"]
+
+
+class RemoteSessionInputEvent(BaseModel):
+    type: Literal["tap", "swipe", "back", "home"]
+    x: float | None = Field(default=None, ge=0, le=1)
+    y: float | None = Field(default=None, ge=0, le=1)
+    end_x: float | None = Field(default=None, ge=0, le=1)
+    end_y: float | None = Field(default=None, ge=0, le=1)
+    duration_ms: int = Field(default=300, ge=100, le=2000)
+
+
 class LocalRunInput(BaseModel):
     task_id: str
     version: str
@@ -801,6 +843,8 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
     app.state.token_secret = secret
     app.state.environment = environment
     app.state.smtp_settings = smtp_settings
+    app.state.remote_session_channels = {}
+    app.state.remote_session_channels_lock = threading.Lock()
     configured_origins = [
         origin.strip()
         for origin in os.environ.get("FLOWPILOT_CORS_ORIGINS", "").split(",")
@@ -834,6 +878,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             *configured_origins,
         ])),
         allow_credentials=False,
+        expose_headers=["X-Frame-Sequence"],
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     )
@@ -895,6 +940,17 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             "UPDATE task_publications SET status='revoked' WHERE device_id=? AND status!='revoked'",
             (device_id,),
         )
+        db.execute(
+            """UPDATE remote_sessions SET status='ended',finished_at=?,device_ticket_hash=NULL,
+                      controller_ticket_hash=NULL
+               WHERE device_id=? AND status IN ('pending','active')""",
+            (now, device_id),
+        )
+        with app.state.remote_session_channels_lock:
+            for session_id, channel in list(app.state.remote_session_channels.items()):
+                session = db.execute("SELECT device_id FROM remote_sessions WHERE id=?", (session_id,)).fetchone()
+                if session and session["device_id"] == device_id:
+                    app.state.remote_session_channels.pop(session_id, None)
 
     def _device_for_user(db: sqlite3.Connection, device_id: str, user: dict) -> sqlite3.Row:
         device = db.execute(
@@ -911,6 +967,116 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         if device["status"] == "disabled":
             raise HTTPException(status_code=409, detail="设备已停用")
         return device
+
+    def _clear_remote_session_channel(session_id: str) -> None:
+        with app.state.remote_session_channels_lock:
+            app.state.remote_session_channels.pop(session_id, None)
+
+    def _remote_session_for_user(db: sqlite3.Connection, session_id: str, user: dict) -> sqlite3.Row:
+        session = db.execute(
+            """SELECT s.*,d.user_id AS device_owner_id,d.status AS device_status
+               FROM remote_sessions s JOIN devices d ON d.id=s.device_id WHERE s.id=?""",
+            (session_id,),
+        ).fetchone()
+        if not session or (
+            user["role"] != "admin"
+            and session["initiated_by"] != user["id"]
+            and session["device_owner_id"] != user["id"]
+        ):
+            raise HTTPException(status_code=404, detail="远程协助会话不存在")
+        if session["status"] in {"pending", "active"} and session["expires_at"] <= int(time.time()):
+            db.execute(
+                """UPDATE remote_sessions SET status='expired',finished_at=?,device_ticket_hash=NULL,
+                          controller_ticket_hash=NULL WHERE id=? AND status IN ('pending','active')""",
+                (utc_now(), session_id),
+            )
+            audit(db, session["initiated_by"], "remote_session.expired", "remote_session", session_id)
+            _clear_remote_session_channel(session_id)
+            session = db.execute(
+                """SELECT s.*,d.user_id AS device_owner_id,d.status AS device_status
+                   FROM remote_sessions s JOIN devices d ON d.id=s.device_id WHERE s.id=?""",
+                (session_id,),
+            ).fetchone()
+        return session
+
+    def _active_remote_session(db: sqlite3.Connection, session_id: str) -> sqlite3.Row:
+        session = db.execute(
+            "SELECT * FROM remote_sessions WHERE id=?",
+            (session_id,),
+        ).fetchone()
+        if not session:
+            raise HTTPException(status_code=404, detail="远程协助会话不存在")
+        if session["status"] != "active":
+            raise HTTPException(status_code=409, detail="远程协助会话未处于活动状态")
+        if session["expires_at"] <= int(time.time()):
+            db.execute(
+                """UPDATE remote_sessions SET status='expired',finished_at=?,device_ticket_hash=NULL,
+                          controller_ticket_hash=NULL WHERE id=? AND status='active'""",
+                (utc_now(), session_id),
+            )
+            audit(db, session["initiated_by"], "remote_session.expired", "remote_session", session_id)
+            _clear_remote_session_channel(session_id)
+            raise HTTPException(status_code=410, detail="远程协助会话已超时")
+        if session["device_ticket_hash"] is None:
+            raise HTTPException(status_code=409, detail="远程协助设备凭据已撤销")
+        device = db.execute(
+            """SELECT d.status,u.status AS account_status FROM devices d
+               JOIN users u ON u.id=d.user_id WHERE d.id=?""",
+            (session["device_id"],),
+        ).fetchone()
+        if not device or device["status"] == "disabled" or device["account_status"] != "active":
+            db.execute(
+                """UPDATE remote_sessions SET status='ended',finished_at=?,device_ticket_hash=NULL,
+                          controller_ticket_hash=NULL WHERE id=? AND status='active'""",
+                (utc_now(), session_id),
+            )
+            _clear_remote_session_channel(session_id)
+            raise HTTPException(status_code=410, detail="设备或设备所属账号已停用")
+        return session
+
+    def _check_remote_session_ticket(
+        session: sqlite3.Row,
+        authorization: str | None,
+        side: Literal["device", "controller"],
+    ) -> None:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="需要远程协助会话凭据")
+        token_hash = hashlib.sha256(authorization[7:].encode()).hexdigest()
+        stored_hash = session[f"{side}_ticket_hash"]
+        if not stored_hash or not hmac.compare_digest(token_hash, stored_hash):
+            raise HTTPException(status_code=401, detail="远程协助会话凭据无效")
+
+    def _remote_session_dict(db: sqlite3.Connection, session: sqlite3.Row) -> dict:
+        device = db.execute("SELECT name,model FROM devices WHERE id=?", (session["device_id"],)).fetchone()
+        requester = db.execute("SELECT name FROM users WHERE id=?", (session["initiated_by"],)).fetchone()
+        return {
+            "id": session["id"],
+            "device_id": session["device_id"],
+            "device_name": device["name"] if device else "",
+            "device_model": device["model"] if device else "",
+            "requested_by": session["initiated_by"],
+            "requested_by_name": requester["name"] if requester else "",
+            "status": session["status"],
+            "created_at": session["created_at"],
+            "expires_at": session["expires_at"],
+            "started_at": session["started_at"],
+            "finished_at": session["finished_at"],
+        }
+
+    def _expire_device_remote_sessions(db: sqlite3.Connection, device_id: str, now: int) -> None:
+        expired = db.execute(
+            """SELECT id,initiated_by FROM remote_sessions
+               WHERE device_id=? AND status IN ('pending','active') AND expires_at<=?""",
+            (device_id, now),
+        ).fetchall()
+        for session in expired:
+            db.execute(
+                """UPDATE remote_sessions SET status='expired',finished_at=?,device_ticket_hash=NULL,
+                          controller_ticket_hash=NULL WHERE id=? AND status IN ('pending','active')""",
+                (utc_now(), session["id"]),
+            )
+            audit(db, session["initiated_by"], "remote_session.expired", "remote_session", session["id"])
+            _clear_remote_session_channel(session["id"])
 
     def _task_for_user(db: sqlite3.Connection, task_id: str, user: dict, require_published: bool = True) -> sqlite3.Row:
         task = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
@@ -984,13 +1150,25 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
                 (int(time.time()) + REMOTE_REQUEST_TTL_SECONDS, request["id"]),
             )
 
-    def _ensure_device_idle(db: sqlite3.Connection, device_id: str) -> None:
+    def _ensure_device_idle(
+        db: sqlite3.Connection,
+        device_id: str,
+        exclude_remote_session_id: str | None = None,
+    ) -> None:
         active_run = db.execute(
             "SELECT 1 FROM runs WHERE device_id=? AND status='running' LIMIT 1",
             (device_id,),
         ).fetchone()
         if active_run:
             raise HTTPException(status_code=409, detail="设备当前有任务运行")
+        query = "SELECT 1 FROM remote_sessions WHERE device_id=? AND status IN ('pending','active') AND expires_at>?"
+        parameters: tuple = (device_id, int(time.time()))
+        if exclude_remote_session_id is not None:
+            query += " AND id!=?"
+            parameters += (exclude_remote_session_id,)
+        active_session = db.execute(query + " LIMIT 1", parameters).fetchone()
+        if active_session:
+            raise HTTPException(status_code=409, detail="设备正在进行远程协助")
 
     def _start_run(db: sqlite3.Connection, request: sqlite3.Row) -> str:
         run_id = str(uuid.uuid4())
@@ -2368,6 +2546,12 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         device = _device_for_user(db, body.device_id, user)
         _refresh_device_statuses(db, device["id"])
         device = _device_for_user(db, body.device_id, user)
+        if db.execute(
+            """SELECT 1 FROM remote_sessions WHERE device_id=? AND status IN ('pending','active')
+               AND expires_at>? LIMIT 1""",
+            (device["id"], int(time.time())),
+        ).fetchone():
+            raise HTTPException(status_code=409, detail="设备正在进行远程协助")
         if idempotency_key is not None:
             existing = db.execute(
                 """SELECT * FROM remote_runs
@@ -2461,6 +2645,300 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             raise HTTPException(status_code=409, detail="设备当前有任务运行") from error
         audit(db, user["id"], "run.local_started", "run", run_id)
         return {"id": run_id, "task_id": task["id"], "version": body.version, "device_id": device_id, "status": "running"}
+
+    @app.post("/remote-sessions", status_code=201)
+    def create_remote_session(
+        body: RemoteSessionInput,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        device = _device_for_user(db, body.device_id, user)
+        db.lock_device(device["id"])
+        device = _device_for_user(db, body.device_id, user)
+        _refresh_device_statuses(db, device["id"])
+        device = _device_for_user(db, body.device_id, user)
+        if device["status"] != "online":
+            raise HTTPException(status_code=409, detail="只能向在线设备发起远程协助")
+        now = int(time.time())
+        _expire_device_remote_sessions(db, device["id"], now)
+        _ensure_device_idle(db, device["id"])
+        pending_run = db.execute(
+            """SELECT 1 FROM remote_runs WHERE device_id=? AND status IN ('pending','queued','running')
+                   AND expires_at>?
+               UNION ALL SELECT 1 FROM runs WHERE device_id=? AND status='running' LIMIT 1""",
+            (device["id"], now, device["id"]),
+        ).fetchone()
+        if pending_run:
+            raise HTTPException(status_code=409, detail="设备当前有待处理或正在运行的任务")
+        session_id = str(uuid.uuid4())
+        created_at = utc_now()
+        try:
+            db.execute(
+                """INSERT INTO remote_sessions(id,device_id,initiated_by,status,created_at,expires_at)
+                   VALUES(?,?,?,'pending',?,?)""",
+                (session_id, device["id"], user["id"], created_at, now + body.duration_seconds),
+            )
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(status_code=409, detail="设备已有远程协助会话") from error
+        audit(db, user["id"], "remote_session.requested", "remote_session", session_id)
+        session = db.execute("SELECT * FROM remote_sessions WHERE id=?", (session_id,)).fetchone()
+        return _remote_session_dict(db, session)
+
+    @app.get("/devices/{device_id}/remote-sessions")
+    def device_remote_sessions(
+        device_id: str,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        device = _device_for_user(db, device_id, user)
+        if user["role"] != "user" or device["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="只有设备所属用户可以处理远程协助请求")
+        _touch_device(db, device_id)
+        now = int(time.time())
+        _expire_device_remote_sessions(db, device_id, now)
+        sessions = db.execute(
+            """SELECT * FROM remote_sessions WHERE device_id=? AND status IN ('pending','active')
+               ORDER BY created_at""",
+            (device_id,),
+        ).fetchall()
+        return [_remote_session_dict(db, session) for session in sessions]
+
+    @app.post("/remote-sessions/{session_id}/decision")
+    def decide_remote_session(
+        session_id: str,
+        body: RemoteSessionDecision,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        session = _remote_session_for_user(db, session_id, user)
+        if user["role"] != "user" or session["device_owner_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="只有设备所属用户可以同意或拒绝远程协助")
+        if session["status"] != "pending":
+            raise HTTPException(status_code=409, detail="远程协助请求已处理")
+        if body.decision == "reject":
+            db.execute(
+                """UPDATE remote_sessions SET status='rejected',finished_at=?,ended_by=?
+                   WHERE id=? AND status='pending'""",
+                (utc_now(), user["id"], session_id),
+            )
+            audit(db, user["id"], "remote_session.rejected", "remote_session", session_id)
+            _clear_remote_session_channel(session_id)
+            return {"id": session_id, "status": "rejected"}
+
+        db.lock_device(session["device_id"])
+        _ensure_device_idle(db, session["device_id"], session_id)
+        device_ticket = secrets.token_urlsafe(32)
+        started_at = utc_now()
+        result = db.execute(
+            """UPDATE remote_sessions SET status='active',started_at=?,device_ticket_hash=?
+               WHERE id=? AND status='pending' AND expires_at>?""",
+            (started_at, hashlib.sha256(device_ticket.encode()).hexdigest(), session_id, int(time.time())),
+        )
+        if result.rowcount != 1:
+            raise HTTPException(status_code=410, detail="远程协助请求已过期或已处理")
+        audit(db, user["id"], "remote_session.accepted", "remote_session", session_id)
+        with app.state.remote_session_channels_lock:
+            app.state.remote_session_channels[session_id] = {
+                "frame": None,
+                "frame_seq": 0,
+                "frame_at": 0.0,
+                "inputs": [],
+                "input_seq": 0,
+                "input_times": [],
+                "controls_audited": False,
+            }
+        session = db.execute("SELECT * FROM remote_sessions WHERE id=?", (session_id,)).fetchone()
+        return {
+            **_remote_session_dict(db, session),
+            "device_ticket": device_ticket,
+        }
+
+    @app.get("/remote-sessions/{session_id}")
+    def get_remote_session(
+        session_id: str,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        session = _remote_session_for_user(db, session_id, user)
+        return _remote_session_dict(db, session)
+
+    @app.post("/remote-sessions/{session_id}/controller-ticket")
+    def create_remote_controller_ticket(
+        session_id: str,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        session = _remote_session_for_user(db, session_id, user)
+        if session["initiated_by"] != user["id"] and user["role"] != "admin":
+            raise HTTPException(status_code=403, detail="只有会话发起者或管理员可以连接控制通道")
+        session = _active_remote_session(db, session_id)
+        ticket = secrets.token_urlsafe(32)
+        db.execute(
+            "UPDATE remote_sessions SET controller_ticket_hash=? WHERE id=?",
+            (hashlib.sha256(ticket.encode()).hexdigest(), session_id),
+        )
+        return {"ticket": ticket, "expires_at": session["expires_at"]}
+
+    @app.post("/remote-sessions/{session_id}/device-ticket")
+    def create_remote_device_ticket(
+        session_id: str,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        session = _remote_session_for_user(db, session_id, user)
+        if user["role"] != "user" or session["device_owner_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="只有设备所属用户可以连接设备通道")
+        session = _active_remote_session(db, session_id)
+        ticket = secrets.token_urlsafe(32)
+        db.execute(
+            "UPDATE remote_sessions SET device_ticket_hash=? WHERE id=?",
+            (hashlib.sha256(ticket.encode()).hexdigest(), session_id),
+        )
+        return {"ticket": ticket, "expires_at": session["expires_at"]}
+
+    @app.post("/remote-sessions/{session_id}/frame")
+    async def publish_remote_session_frame(
+        session_id: str,
+        request: Request,
+        authorization: str | None = Header(default=None),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        session = _active_remote_session(db, session_id)
+        _check_remote_session_ticket(session, authorization, "device")
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if content_type != "image/jpeg":
+            raise HTTPException(status_code=415, detail="远程画面必须使用 JPEG 格式")
+        if request.headers.get("content-length", "").isdigit() and int(request.headers["content-length"]) > REMOTE_SESSION_FRAME_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="远程画面超过 1 MiB 限制")
+        frame = bytearray()
+        async for chunk in request.stream():
+            if len(frame) + len(chunk) > REMOTE_SESSION_FRAME_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="远程画面超过 1 MiB 限制")
+            frame.extend(chunk)
+        if not frame:
+            raise HTTPException(status_code=413, detail="远程画面不能为空")
+        frame = bytes(frame)
+        with app.state.remote_session_channels_lock:
+            channel = app.state.remote_session_channels.setdefault(
+                session_id,
+                {"frame": None, "frame_seq": 0, "frame_at": 0.0, "inputs": [], "input_seq": 0,
+                 "input_times": [], "controls_audited": False},
+            )
+            channel["frame_seq"] += 1
+            channel["frame"] = frame
+            channel["frame_at"] = time.monotonic()
+            sequence = channel["frame_seq"]
+        return Response(status_code=204, headers={"X-Frame-Sequence": str(sequence), "Cache-Control": "no-store"})
+
+    @app.get("/remote-sessions/{session_id}/frame")
+    def read_remote_session_frame(
+        session_id: str,
+        after_seq: int = Query(default=0, ge=0),
+        authorization: str | None = Header(default=None),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        session = _active_remote_session(db, session_id)
+        _check_remote_session_ticket(session, authorization, "controller")
+        with app.state.remote_session_channels_lock:
+            channel = app.state.remote_session_channels.get(session_id)
+            if (
+                not channel or channel["frame"] is None or channel["frame_seq"] <= after_seq
+                or time.monotonic() - channel["frame_at"] > REMOTE_SESSION_FRAME_STALE_SECONDS
+            ):
+                return Response(status_code=204, headers={"Cache-Control": "no-store"})
+            frame = channel["frame"]
+            sequence = channel["frame_seq"]
+        return Response(
+            content=frame,
+            media_type="image/jpeg",
+            headers={"X-Frame-Sequence": str(sequence), "Cache-Control": "no-store"},
+        )
+
+    @app.post("/remote-sessions/{session_id}/input")
+    def send_remote_session_input(
+        session_id: str,
+        body: RemoteSessionInputEvent,
+        authorization: str | None = Header(default=None),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        session = _active_remote_session(db, session_id)
+        _check_remote_session_ticket(session, authorization, "controller")
+        if body.type == "tap" and (body.x is None or body.y is None or body.end_x is not None or body.end_y is not None):
+            raise HTTPException(status_code=422, detail="点击操作需要且只能提供 x、y")
+        if body.type == "swipe" and any(value is None for value in (body.x, body.y, body.end_x, body.end_y)):
+            raise HTTPException(status_code=422, detail="滑动操作需要起点和终点坐标")
+        if body.type in {"back", "home"} and any(value is not None for value in (body.x, body.y, body.end_x, body.end_y)):
+            raise HTTPException(status_code=422, detail="返回或主页操作不能包含坐标")
+        now = time.monotonic()
+        with app.state.remote_session_channels_lock:
+            channel = app.state.remote_session_channels.setdefault(
+                session_id,
+                {"frame": None, "frame_seq": 0, "frame_at": 0.0, "inputs": [], "input_seq": 0,
+                 "input_times": [], "controls_audited": False},
+            )
+            recent = [created for created in channel["input_times"] if now - created < 1]
+            if len(recent) >= 20:
+                raise HTTPException(status_code=429, detail="远程操作过于频繁，请稍后重试")
+            recent.append(now)
+            channel["input_times"] = recent
+            channel["input_seq"] += 1
+            event = {"seq": channel["input_seq"], **body.model_dump()}
+            channel["inputs"].append(event)
+            channel["inputs"] = channel["inputs"][-REMOTE_SESSION_INPUT_QUEUE_SIZE:]
+            should_audit = not channel["controls_audited"]
+            channel["controls_audited"] = True
+            sequence = channel["input_seq"]
+        if should_audit:
+            audit(db, session["initiated_by"], "remote_session.controls_used", "remote_session", session_id)
+        return {"seq": sequence}
+
+    @app.get("/remote-sessions/{session_id}/input")
+    def read_remote_session_input(
+        session_id: str,
+        after_seq: int = Query(default=0, ge=0),
+        authorization: str | None = Header(default=None),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        session = _active_remote_session(db, session_id)
+        _check_remote_session_ticket(session, authorization, "device")
+        with app.state.remote_session_channels_lock:
+            channel = app.state.remote_session_channels.get(session_id)
+            events = [] if not channel else [
+                event for event in channel["inputs"] if event["seq"] > after_seq
+            ]
+        return {"events": events}
+
+    def _end_remote_session(db: sqlite3.Connection, session: sqlite3.Row, actor_id: str | None, status: str = "ended") -> dict:
+        if session["status"] in {"pending", "active"}:
+            db.execute(
+                """UPDATE remote_sessions SET status=?,finished_at=?,ended_by=?,device_ticket_hash=NULL,
+                          controller_ticket_hash=NULL WHERE id=? AND status IN ('pending','active')""",
+                (status, utc_now(), actor_id, session["id"]),
+            )
+            if actor_id:
+                audit(db, actor_id, f"remote_session.{status}", "remote_session", session["id"])
+            _clear_remote_session_channel(session["id"])
+        return {"id": session["id"], "status": status}
+
+    @app.post("/remote-sessions/{session_id}/end")
+    def end_remote_session(
+        session_id: str,
+        user: dict = Depends(current_user),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        session = _remote_session_for_user(db, session_id, user)
+        return _end_remote_session(db, session, user["id"])
+
+    @app.post("/remote-sessions/{session_id}/device-end")
+    def device_end_remote_session(
+        session_id: str,
+        authorization: str | None = Header(default=None),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        session = _active_remote_session(db, session_id)
+        _check_remote_session_ticket(session, authorization, "device")
+        device = db.execute("SELECT user_id FROM devices WHERE id=?", (session["device_id"],)).fetchone()
+        return _end_remote_session(db, session, device["user_id"] if device else None)
 
     @app.get("/devices/{device_id}/remote-runs")
     def pending_remote_runs(device_id: str, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(connection)):

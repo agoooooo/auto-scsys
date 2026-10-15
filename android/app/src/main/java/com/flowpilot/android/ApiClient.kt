@@ -48,6 +48,32 @@ internal data class RemoteRunStatus(
     val stopRequested: Boolean,
 )
 
+internal data class RemoteAssistSession(
+    val id: String,
+    val deviceId: String,
+    val deviceName: String,
+    val deviceModel: String,
+    val requestedBy: String,
+    val requestedByName: String,
+    val status: String,
+    val expiresAt: Long,
+)
+
+internal data class RemoteAssistAccess(
+    val session: RemoteAssistSession,
+    val deviceTicket: String,
+)
+
+internal data class RemoteAssistInput(
+    val seq: Long,
+    val type: String,
+    val x: Float? = null,
+    val y: Float? = null,
+    val endX: Float? = null,
+    val endY: Float? = null,
+    val durationMs: Long = 300,
+)
+
 internal data class DownloadedScript(
     val filename: String,
     val source: String,
@@ -365,6 +391,106 @@ internal class ApiClient(
             )
         }
 
+    fun pendingRemoteAssistSessions(token: String, deviceId: String): List<RemoteAssistSession> =
+        requestArray("/devices/${encodePathSegment(deviceId)}/remote-sessions", token).map(::remoteAssistSession)
+
+    fun decideRemoteAssistSession(token: String, sessionId: String, accept: Boolean): RemoteAssistAccess? {
+        val response = JSONObject(request(
+            "/remote-sessions/${encodePathSegment(sessionId)}/decision",
+            method = "POST",
+            token = token,
+            payload = JSONObject().put("decision", if (accept) "accept" else "reject"),
+        ))
+        if (!accept) return null
+        val ticket = response.optString("device_ticket")
+        if (ticket.isBlank()) throw IOException("远程协助响应缺少设备通道凭据")
+        return RemoteAssistAccess(remoteAssistSession(response), ticket)
+    }
+
+    fun publishRemoteAssistFrame(sessionId: String, ticket: String, jpeg: ByteArray) {
+        val connection = URL("$baseUrl/remote-sessions/${encodePathSegment(sessionId)}/frame")
+            .openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 5_000
+            connection.readTimeout = 5_000
+            connection.doOutput = true
+            connection.setRequestProperty("Authorization", "Bearer $ticket")
+            connection.setRequestProperty("Content-Type", "image/jpeg")
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setFixedLengthStreamingMode(jpeg.size)
+            connection.outputStream.use { it.write(jpeg) }
+            val status = connection.responseCode
+            if (status != 204) {
+                val body = readLimited(
+                    if (status in 200..299) connection.inputStream else connection.errorStream,
+                    MAX_RESPONSE_BYTES,
+                )
+                val detail = runCatching {
+                    JSONObject(body.toString(Charsets.UTF_8)).optString("detail")
+                }.getOrNull()
+                throw ApiException(detail?.takeIf(String::isNotBlank) ?: "远程画面发送失败（HTTP $status）", status)
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    fun remoteAssistInputs(sessionId: String, ticket: String, afterSequence: Long): List<RemoteAssistInput> {
+        val connection = URL(
+            "$baseUrl/remote-sessions/${encodePathSegment(sessionId)}/input?after_seq=$afterSequence",
+        ).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 5_000
+            connection.readTimeout = 5_000
+            connection.setRequestProperty("Authorization", "Bearer $ticket")
+            val status = connection.responseCode
+            val body = readLimited(
+                if (status in 200..299) connection.inputStream else connection.errorStream,
+                MAX_RESPONSE_BYTES,
+            )
+            if (status !in 200..299) {
+                val detail = runCatching {
+                    JSONObject(body.toString(Charsets.UTF_8)).optString("detail")
+                }.getOrNull()
+                throw ApiException(detail?.takeIf(String::isNotBlank) ?: "远程操作读取失败（HTTP $status）", status)
+            }
+            val events = JSONObject(body.toString(Charsets.UTF_8)).optJSONArray("events")
+                ?: throw IOException("服务器返回的远程操作列表无效")
+            return (0 until events.length()).map { index ->
+                val event = events.optJSONObject(index) ?: throw IOException("远程操作格式无效")
+                RemoteAssistInput(
+                    seq = event.optLong("seq"),
+                    type = event.optString("type"),
+                    x = event.optDouble("x").takeIf { event.has("x") && !event.isNull("x") }?.toFloat(),
+                    y = event.optDouble("y").takeIf { event.has("y") && !event.isNull("y") }?.toFloat(),
+                    endX = event.optDouble("end_x").takeIf { event.has("end_x") && !event.isNull("end_x") }?.toFloat(),
+                    endY = event.optDouble("end_y").takeIf { event.has("end_y") && !event.isNull("end_y") }?.toFloat(),
+                    durationMs = event.optLong("duration_ms", 300),
+                )
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    fun endRemoteAssistSessionWithTicket(sessionId: String, ticket: String) {
+        request(
+            "/remote-sessions/${encodePathSegment(sessionId)}/device-end",
+            method = "POST",
+            token = ticket,
+        )
+    }
+
+    fun endRemoteAssistSession(token: String, sessionId: String) {
+        request(
+            "/remote-sessions/${encodePathSegment(sessionId)}/end",
+            method = "POST",
+            token = token,
+        )
+    }
+
     fun approveRemoteRun(
         token: String,
         requestId: String,
@@ -467,6 +593,17 @@ internal class ApiClient(
 
     private fun requestArray(path: String, token: String): List<JSONObject> =
         JSONArray(request(path, token = token)).objects()
+
+    private fun remoteAssistSession(item: JSONObject) = RemoteAssistSession(
+        id = item.optString("id"),
+        deviceId = item.optString("device_id"),
+        deviceName = item.optString("device_name"),
+        deviceModel = item.optString("device_model"),
+        requestedBy = item.optString("requested_by"),
+        requestedByName = item.optString("requested_by_name"),
+        status = item.optString("status"),
+        expiresAt = item.optLong("expires_at"),
+    )
 
     private data class ApiResponse(
         val status: Int,

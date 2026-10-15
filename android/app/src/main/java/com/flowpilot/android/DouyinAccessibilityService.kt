@@ -1,9 +1,11 @@
 package com.flowpilot.android
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Path
 import android.os.Handler
 import android.provider.Settings
 import android.text.TextUtils
@@ -19,6 +21,11 @@ internal fun accessibilityTextMatches(query: String, candidate: String, exactOnl
     } else {
         candidate.contains(query, ignoreCase = true)
     }
+
+internal fun normalizedScreenCoordinate(value: Float, extent: Int): Float {
+    require(value.isFinite() && value in 0f..1f && extent > 0)
+    return value * (extent - 1).coerceAtLeast(0)
+}
 
 @Suppress("DEPRECATION")
 internal class DouyinAccessibilityService : AccessibilityService() {
@@ -116,6 +123,37 @@ internal class DouyinAccessibilityService : AccessibilityService() {
         val query = target.trim()
         require(query.isNotEmpty()) { "点击目标不能为空" }
         clickTextOnCurrentWindow(query, exactOnly = true)
+    }
+
+    fun dispatchRemoteInput(input: RemoteAssistInput): Boolean = onServiceThread {
+        when (input.type) {
+            "back" -> performGlobalAction(GLOBAL_ACTION_BACK)
+            "home" -> performGlobalAction(GLOBAL_ACTION_HOME)
+            "tap", "swipe" -> {
+                val x = input.x ?: throw IllegalArgumentException("远程触控缺少起始横坐标")
+                val y = input.y ?: throw IllegalArgumentException("远程触控缺少起始纵坐标")
+                val display = resources.displayMetrics
+                val startX = normalizedScreenCoordinate(x, display.widthPixels)
+                val startY = normalizedScreenCoordinate(y, display.heightPixels)
+                val path = Path().apply {
+                    moveTo(startX, startY)
+                    if (input.type == "swipe") {
+                        val endX = input.endX ?: throw IllegalArgumentException("远程滑动缺少终点横坐标")
+                        val endY = input.endY ?: throw IllegalArgumentException("远程滑动缺少终点纵坐标")
+                        lineTo(
+                            normalizedScreenCoordinate(endX, display.widthPixels),
+                            normalizedScreenCoordinate(endY, display.heightPixels),
+                        )
+                    }
+                }
+                val duration = input.durationMs.coerceIn(100, 2_000)
+                val gesture = GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0, duration))
+                    .build()
+                dispatchGesture(gesture, null, null)
+            }
+            else -> false
+        }
     }
 
     private fun clickTextOnCurrentWindow(query: String, exactOnly: Boolean): Boolean {
