@@ -67,13 +67,13 @@ internal class SessionStore(context: Context) {
         preferences.edit().remove(deviceKey(userId)).apply()
     }
 
-    fun isRemoteAssistConsentEnabled(userId: String, deviceId: String): Boolean =
-        preferences.getBoolean(remoteAssistConsentKey(userId, deviceId), false)
+    fun isRemoteAssistConsentEnabled(userId: String): Boolean =
+        preferences.getBoolean(remoteAssistConsentKey(userId), true)
 
-    fun setRemoteAssistConsentEnabled(userId: String, deviceId: String, enabled: Boolean) {
+    fun setRemoteAssistConsentEnabled(userId: String, enabled: Boolean) {
         val editor = preferences.edit()
-        if (enabled) editor.putBoolean(remoteAssistConsentKey(userId, deviceId), true)
-        else editor.remove(remoteAssistConsentKey(userId, deviceId))
+        if (enabled) editor.remove(remoteAssistConsentKey(userId))
+        else editor.putBoolean(remoteAssistConsentKey(userId), false)
         editor.apply()
     }
 
@@ -119,8 +119,7 @@ internal class SessionStore(context: Context) {
     }
 
     private fun deviceKey(userId: String) = "device_id_$userId"
-    private fun remoteAssistConsentKey(userId: String, deviceId: String) =
-        "remote_assist_consent_${userId}_$deviceId"
+    private fun remoteAssistConsentKey(userId: String) = "remote_assist_consent_$userId"
 
     private companion object {
         const val KEY_API_URL = "api_url"

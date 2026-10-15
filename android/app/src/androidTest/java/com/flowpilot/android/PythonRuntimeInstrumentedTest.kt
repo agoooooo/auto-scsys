@@ -105,21 +105,19 @@ class PythonRuntimeInstrumentedTest {
     }
 
     @Test
-    fun remoteAssistConsentIsRememberedPerUserAndDeviceAndCanBeRevoked() {
+    fun remoteAssistConsentDefaultsToAccountEnabledAndCanBeRevoked() {
         val store = SessionStore(InstrumentationRegistry.getInstrumentation().targetContext)
         val userId = "consent-test-user"
-        val deviceId = "consent-test-device"
 
-        assertFalse(store.isRemoteAssistConsentEnabled(userId, deviceId))
-        store.setRemoteAssistConsentEnabled(userId, deviceId, true)
+        assertTrue(store.isRemoteAssistConsentEnabled(userId))
+        store.setRemoteAssistConsentEnabled(userId, false)
         try {
-            assertTrue(store.isRemoteAssistConsentEnabled(userId, deviceId))
-            assertFalse(store.isRemoteAssistConsentEnabled(userId, "another-device"))
-            assertFalse(store.isRemoteAssistConsentEnabled("another-user", deviceId))
+            assertFalse(store.isRemoteAssistConsentEnabled(userId))
+            assertTrue(store.isRemoteAssistConsentEnabled("another-user"))
         } finally {
-            store.setRemoteAssistConsentEnabled(userId, deviceId, false)
+            store.setRemoteAssistConsentEnabled(userId, true)
         }
-        assertFalse(store.isRemoteAssistConsentEnabled(userId, deviceId))
+        assertTrue(store.isRemoteAssistConsentEnabled(userId))
     }
 
     @Test

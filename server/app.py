@@ -1161,6 +1161,13 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
         ).fetchone()
         if active_run:
             raise HTTPException(status_code=409, detail="设备当前有任务运行")
+        _ensure_no_active_remote_session(db, device_id, exclude_remote_session_id)
+
+    def _ensure_no_active_remote_session(
+        db: sqlite3.Connection,
+        device_id: str,
+        exclude_remote_session_id: str | None = None,
+    ) -> None:
         query = "SELECT 1 FROM remote_sessions WHERE device_id=? AND status IN ('pending','active') AND expires_at>?"
         parameters: tuple = (device_id, int(time.time()))
         if exclude_remote_session_id is not None:
@@ -2661,15 +2668,14 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             raise HTTPException(status_code=409, detail="只能向在线设备发起远程协助")
         now = int(time.time())
         _expire_device_remote_sessions(db, device["id"], now)
-        _ensure_device_idle(db, device["id"])
+        _ensure_no_active_remote_session(db, device["id"])
         pending_run = db.execute(
-            """SELECT 1 FROM remote_runs WHERE device_id=? AND status IN ('pending','queued','running')
-                   AND expires_at>?
-               UNION ALL SELECT 1 FROM runs WHERE device_id=? AND status='running' LIMIT 1""",
-            (device["id"], now, device["id"]),
+            """SELECT 1 FROM remote_runs WHERE device_id=? AND status='pending'
+                   AND expires_at>? LIMIT 1""",
+            (device["id"], now),
         ).fetchone()
         if pending_run:
-            raise HTTPException(status_code=409, detail="设备当前有待处理或正在运行的任务")
+            raise HTTPException(status_code=409, detail="设备当前有待处理的远程任务")
         session_id = str(uuid.uuid4())
         created_at = utc_now()
         try:
@@ -2726,7 +2732,7 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             return {"id": session_id, "status": "rejected"}
 
         db.lock_device(session["device_id"])
-        _ensure_device_idle(db, session["device_id"], session_id)
+        _ensure_no_active_remote_session(db, session["device_id"], session_id)
         device_ticket = secrets.token_urlsafe(32)
         started_at = utc_now()
         result = db.execute(

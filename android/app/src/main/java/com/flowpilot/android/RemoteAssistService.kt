@@ -26,7 +26,7 @@ import kotlinx.coroutines.withContext
 internal class RemoteAssistService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var sessionJob: Job? = null
-    private var captureSession: ScreenCaptureSession? = null
+    private var captureLease: CaptureSessionLease<ScreenCaptureSession>? = null
     private var sessionId: String? = null
     private var deviceTicket: String? = null
     private var apiBaseUrl: String? = null
@@ -39,16 +39,16 @@ internal class RemoteAssistService : Service() {
             endSession(startId, "设备用户结束远程协助")
             return START_NOT_STICKY
         }
-        if (sessionJob?.isActive == true) return START_NOT_STICKY
-
         val activeSessionId = intent?.getStringExtra(EXTRA_SESSION_ID)
         val ticket = intent?.getStringExtra(EXTRA_DEVICE_TICKET)
         val baseUrl = intent?.getStringExtra(EXTRA_API_BASE_URL)
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
         val resultData = intent?.let { parcelableExtra<Intent>(it, EXTRA_RESULT_DATA) }
         val requester = intent?.getStringExtra(EXTRA_REQUESTER_NAME).orEmpty()
+        val sharedCapture = takePendingSharedCaptureSession()
+        if (sessionJob?.isActive == true) return START_NOT_STICKY
         if (activeSessionId.isNullOrBlank() || ticket.isNullOrBlank() || baseUrl.isNullOrBlank() ||
-            resultCode == 0 || resultData == null
+            (sharedCapture == null && (resultCode == 0 || resultData == null))
         ) {
             stopSelf(startId)
             return START_NOT_STICKY
@@ -61,10 +61,14 @@ internal class RemoteAssistService : Service() {
         startForegroundSession(requester)
         sessionJob = serviceScope.launch {
             try {
-                val capture = ScreenCaptureSession(this@RemoteAssistService, resultCode, resultData) {
+                val capture = sharedCapture ?: ScreenCaptureSession(
+                    this@RemoteAssistService,
+                    resultCode,
+                    requireNotNull(resultData),
+                ) {
                     if (!ending) endSession(startId, "Android 屏幕共享授权已结束")
                 }
-                captureSession = capture
+                captureLease = CaptureSessionLease(capture, ownsSession = sharedCapture == null)
                 runSession(activeSessionId, ticket, capture)
             } catch (exception: CancellationException) {
                 throw exception
@@ -78,8 +82,8 @@ internal class RemoteAssistService : Service() {
 
     override fun onDestroy() {
         ending = true
-        captureSession?.close()
-        captureSession = null
+        captureLease?.close()
+        captureLease = null
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -191,8 +195,8 @@ internal class RemoteAssistService : Service() {
         ending = true
         updateNotification("正在结束协助：$reason")
         sessionJob?.cancel()
-        captureSession?.close()
-        captureSession = null
+        captureLease?.close()
+        captureLease = null
         val activeSessionId = sessionId
         val ticket = deviceTicket
         val baseUrl = apiBaseUrl
@@ -235,15 +239,19 @@ internal class RemoteAssistService : Service() {
         private const val FRAME_INTERVAL_MILLIS = 700L
         private const val RETRY_INTERVAL_MILLIS = 1_000L
         private const val MAX_TRANSIENT_FAILURES = 5
+        @Volatile private var pendingSharedCaptureSession: ScreenCaptureSession? = null
 
+        @Synchronized
         fun start(
             context: Context,
             session: RemoteAssistSession,
             ticket: String,
             apiBaseUrl: String,
-            resultCode: Int,
-            resultData: Intent,
+            resultCode: Int?,
+            resultData: Intent?,
+            sharedCaptureSession: ScreenCaptureSession?,
         ) {
+            pendingSharedCaptureSession = sharedCaptureSession
             context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
                 .putString(KEY_REQUESTER, session.requestedByName)
                 .apply()
@@ -252,9 +260,18 @@ internal class RemoteAssistService : Service() {
                 .putExtra(EXTRA_DEVICE_TICKET, ticket)
                 .putExtra(EXTRA_API_BASE_URL, apiBaseUrl)
                 .putExtra(EXTRA_REQUESTER_NAME, session.requestedByName)
-                .putExtra(EXTRA_RESULT_CODE, resultCode)
-                .putExtra(EXTRA_RESULT_DATA, resultData)
+            if (resultCode != null && resultData != null) {
+                intent.putExtra(EXTRA_RESULT_CODE, resultCode)
+                    .putExtra(EXTRA_RESULT_DATA, resultData)
+            }
             ContextCompat.startForegroundService(context, intent)
+        }
+
+        @Synchronized
+        private fun takePendingSharedCaptureSession(): ScreenCaptureSession? {
+            val session = pendingSharedCaptureSession
+            pendingSharedCaptureSession = null
+            return session
         }
 
         fun stop(context: Context) {

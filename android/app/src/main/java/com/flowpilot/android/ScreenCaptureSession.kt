@@ -37,6 +37,7 @@ internal class ScreenCaptureSession(
     private val request = AtomicReference<CaptureRequest?>()
     private val projectionStopped = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
+    private val captureLock = CaptureFrameMutex()
     private val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
     private val projection: MediaProjection
     private val imageReader: ImageReader
@@ -113,7 +114,8 @@ internal class ScreenCaptureSession(
         }
     }
 
-    private fun captureFrame(): Bitmap {
+    private fun captureFrame(): Bitmap = captureLock.withCapture {
+        check(!closed.get()) { "屏幕捕获会话已结束" }
         check(!projectionStopped.get()) { "Android 屏幕捕获授权已停止" }
         val capture = CaptureRequest()
         check(request.compareAndSet(null, capture)) { "屏幕捕获正在进行中" }
@@ -122,7 +124,7 @@ internal class ScreenCaptureSession(
                 throw IllegalStateException("读取屏幕超时，请确认系统屏幕共享仍在运行")
             }
             capture.error.get()?.let { throw it }
-            return capture.bitmap.get()
+            capture.bitmap.get()
                 ?: throw IllegalStateException("无法取得屏幕图像")
         } finally {
             request.compareAndSet(capture, null)
@@ -163,15 +165,17 @@ internal class ScreenCaptureSession(
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        request.getAndSet(null)?.let { pending ->
-            pending.error.set(IllegalStateException("屏幕捕获会话已结束"))
-            pending.latch.countDown()
+        captureLock.withCapture {
+            request.getAndSet(null)?.let { pending ->
+                pending.error.set(IllegalStateException("屏幕捕获会话已结束"))
+                pending.latch.countDown()
+            }
+            virtualDisplay.release()
+            imageReader.close()
+            projection.stop()
+            recognizer.close()
+            thread.quitSafely()
         }
-        virtualDisplay.release()
-        imageReader.close()
-        projection.stop()
-        recognizer.close()
-        thread.quitSafely()
     }
 
     private class CaptureRequest {
@@ -183,5 +187,29 @@ internal class ScreenCaptureSession(
     private companion object {
         const val FRAME_TIMEOUT_SECONDS = 5L
         const val OCR_TIMEOUT_SECONDS = 15L
+    }
+}
+
+internal class CaptureSessionLease<T : Closeable>(
+    val session: T,
+    private val ownsSession: Boolean,
+) : Closeable {
+    private val closed = AtomicBoolean(false)
+
+    override fun close() {
+        if (ownsSession && closed.compareAndSet(false, true)) session.close()
+    }
+}
+
+internal class CaptureFrameMutex {
+    private val lock = java.util.concurrent.locks.ReentrantLock()
+
+    fun <T> withCapture(block: () -> T): T {
+        lock.lock()
+        try {
+            return block()
+        } finally {
+            lock.unlock()
+        }
     }
 }

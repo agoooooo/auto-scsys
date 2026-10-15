@@ -2231,7 +2231,7 @@ private fun ControllerScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     if (remote.status == "pending") {
-                        Text("等待设备用户在受控端明确同意。未经设备用户确认，不会开启屏幕共享。")
+                        Text("等待受控端自动接入或完成 Android 系统授权；已有屏幕捕获会话时会复用。")
                         CircularProgressIndicator()
                     } else {
                         Text("协助中 · 仅当前限时会话，设备通知栏可随时结束")

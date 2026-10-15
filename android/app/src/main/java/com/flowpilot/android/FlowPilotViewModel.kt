@@ -24,7 +24,7 @@ internal data class AppUiState(
     val tasks: List<AvailableTask> = emptyList(),
     val remoteRuns: List<RemoteRun> = emptyList(),
     val remoteAssistSessions: List<RemoteAssistSession> = emptyList(),
-    val remoteAssistConsentEnabled: Boolean = false,
+    val remoteAssistConsentEnabled: Boolean = true,
     val runHistory: List<RunRecord> = emptyList(),
     val runHistoryLoading: Boolean = false,
     val runHistoryError: String? = null,
@@ -313,8 +313,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
     fun setRemoteAssistConsentEnabled(enabled: Boolean) {
         val current = _state.value
         val user = current.user ?: return
-        val device = current.device ?: return
-        sessionStore.setRemoteAssistConsentEnabled(user.id, device.id, enabled)
+        sessionStore.setRemoteAssistConsentEnabled(user.id, enabled)
         _state.value = current.copy(remoteAssistConsentEnabled = enabled)
     }
 
@@ -342,7 +341,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                     tasks = emptyList(),
                     remoteRuns = emptyList(),
                     remoteAssistSessions = emptyList(),
-                    remoteAssistConsentEnabled = false,
+                    remoteAssistConsentEnabled = sessionStore.isRemoteAssistConsentEnabled(user.id),
                     remoteRunsLoading = false,
                     remoteMonitoring = false,
                     loading = false,
@@ -554,7 +553,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         } ?: return
         _state.value = _state.value.copy(
             device = device,
-            remoteAssistConsentEnabled = sessionStore.isRemoteAssistConsentEnabled(user.id, device.id),
+            remoteAssistConsentEnabled = sessionStore.isRemoteAssistConsentEnabled(user.id),
         )
         val taskSync = withContext(Dispatchers.IO) { client.syncTasks(token, device.id) }
         _state.value = _state.value.copy(

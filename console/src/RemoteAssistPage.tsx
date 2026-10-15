@@ -36,9 +36,9 @@ type Props = { session: Session };
 type PointerStart = { x: number; y: number; at: number; pointerId: number };
 
 const sessionStatus: Record<RemoteAssistSession["status"], { label: string; color: string }> = {
-  pending: { label: "等待设备用户确认", color: "gold" },
+  pending: { label: "等待设备端接入", color: "gold" },
   active: { label: "协助进行中", color: "green" },
-  rejected: { label: "设备用户已拒绝", color: "default" },
+  rejected: { label: "设备端已拒绝", color: "default" },
   ended: { label: "会话已结束", color: "default" },
   expired: { label: "会话已超时", color: "default" },
 };
@@ -170,7 +170,7 @@ export function RemoteAssistPage({ session }: Props) {
     try {
       const created = await createRemoteAssistSession(session, selectedDeviceId, durationSeconds);
       setActiveSession(created);
-      notice.success("请求已发送，请等待设备用户确认并授权屏幕共享");
+      notice.success("请求已发送，等待设备端接入");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "无法发起远程协助");
     } finally {
@@ -244,7 +244,7 @@ export function RemoteAssistPage({ session }: Props) {
         <div>
           <Typography.Title level={2}>远程协助</Typography.Title>
           <Typography.Paragraph type="secondary">
-            经设备用户明确同意后，临时查看屏幕并进行基础触控操作
+            同一账号默认自动接入，临时查看屏幕并进行基础触控操作
           </Typography.Paragraph>
         </div>
         <Tag color="blue">最长 10 分钟 · 不录制画面</Tag>
@@ -252,8 +252,8 @@ export function RemoteAssistPage({ session }: Props) {
       <Alert
         type="warning"
         showIcon
-        message="设备用户必须同意并通过 Android 屏幕共享授权"
-        description="设备端会持续显示协助者和结束入口。会话结束或超时后立即撤销通道凭据；画面只在服务内存中短暂中转，不写入数据库或录像。请勿在会话期间查看与协助无关的敏感信息。"
+        message="设备端自动接入；没有可复用的屏幕捕获时仍须遵循 Android 系统授权"
+        description="已有任务或 OCR 待命的屏幕捕获会话时会复用，任务和待命不会停止；Android 系统权限不能绕过。设备端持续显示协助者和结束入口。会话结束或超时后立即撤销通道凭据；画面只在服务内存中短暂中转，不写入数据库或录像。远程操作可能与运行中的脚本交错，请勿查看与协助无关的敏感信息。"
       />
       {error && <Alert type="error" showIcon message="远程协助状态" description={error} />}
       {!hasLiveSession ? (
@@ -291,7 +291,7 @@ export function RemoteAssistPage({ session }: Props) {
               loading={starting}
               onClick={() => void startSession()}
             >
-              请求设备用户确认
+              开始远程协助
             </Button>
           </Space>
         </Card>
@@ -308,7 +308,7 @@ export function RemoteAssistPage({ session }: Props) {
             <Descriptions.Item label="会话 ID"><Typography.Text code copyable>{activeSession.id}</Typography.Text></Descriptions.Item>
           </Descriptions>
           {activeSession.status === "pending" ? (
-            <div className="inline-spinner"><Spin tip="等待设备用户确认并完成 Android 屏幕共享授权…" /></div>
+            <div className="inline-spinner"><Spin tip="等待设备端接入或完成 Android 系统授权…" /></div>
           ) : activeSession.status === "active" ? (
             <div>
               <Space wrap style={{ marginBlock: 12 }}>

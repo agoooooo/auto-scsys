@@ -139,7 +139,7 @@ class MainActivity : ComponentActivity() {
         }
         else if (granted && shouldStartMonitoring) startRemoteMonitoring()
         else if (granted && shouldStartOcrStandby) requestOcrStandbyCapturePermission()
-        else if (granted && shouldStartRemoteAssist) requestRemoteAssistCapturePermission()
+        else if (granted && shouldStartRemoteAssist) startRemoteAssistWithAvailableCaptureOrRequestSystemPermission()
         else if (!granted && shouldStartRemoteAssist) {
             pendingRemoteAssist?.let(::rejectRemoteAssist)
             pendingRemoteAssist = null
@@ -174,35 +174,18 @@ class MainActivity : ComponentActivity() {
         }
         val assistRequest = pendingRemoteAssist
         if (assistRequest != null) {
-            pendingRemoteAssist = null
             if (result.resultCode != Activity.RESULT_OK || result.data == null) {
+                pendingRemoteAssist = null
                 rejectRemoteAssist(assistRequest)
                 flowPilotViewModel.showError("未授予屏幕捕获权限，远程协助请求已拒绝")
                 return@registerForActivityResult
             }
-            lifecycleScope.launch {
-                var acceptedSessionId: String? = null
-                try {
-                    val access = flowPilotViewModel.decideRemoteAssistSession(assistRequest.id, accept = true)
-                        ?: throw IllegalStateException("设备未能同意远程协助")
-                    acceptedSessionId = access.session.id
-                    RemoteAssistService.start(
-                        context = this@MainActivity,
-                        session = access.session,
-                        ticket = access.deviceTicket,
-                        apiBaseUrl = flowPilotViewModel.state.value.apiBaseUrl,
-                        resultCode = result.resultCode,
-                        resultData = result.data!!,
-                    )
-                    flowPilotViewModel.refreshRemoteAssistSessions()
-                } catch (exception: Exception) {
-                    if (acceptedSessionId != null) {
-                        runCatching { flowPilotViewModel.endRemoteAssistSession(acceptedSessionId) }
-                    } else {
-                        rejectRemoteAssist(assistRequest)
-                    }
-                    flowPilotViewModel.showError("无法开始远程协助：${exception.message ?: "未知错误"}")
-                }
+            val sharedCapture = OcrStandbyService.captureSession()
+                ?: TaskExecutionService.captureSession()
+            if (sharedCapture != null) {
+                startRemoteAssist(assistRequest, sharedCaptureSession = sharedCapture)
+            } else {
+                startRemoteAssist(assistRequest, result.resultCode, result.data)
             }
             return@registerForActivityResult
         }
@@ -294,10 +277,6 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
-        if (RunStatusStore(this).snapshot().status in setOf("running", "awaiting_permission") || ocrStandbyActive.value) {
-            flowPilotViewModel.showError("请先停止当前任务或持续 OCR 待命，再开始远程协助")
-            return
-        }
         remoteAssistAuthorizationRequestedFor = session.id
         pendingRemoteAssist = session
         if (Build.VERSION.SDK_INT >= 33 && !notificationPermissionGranted.value) {
@@ -305,7 +284,7 @@ class MainActivity : ComponentActivity() {
             requestNotificationPermission()
             return
         }
-        requestRemoteAssistCapturePermission()
+        startRemoteAssistWithAvailableCaptureOrRequestSystemPermission()
     }
 
     private fun requestRemoteAssistCapturePermission() {
@@ -318,7 +297,53 @@ class MainActivity : ComponentActivity() {
         screenCapturePermission.launch(manager.createScreenCaptureIntent())
     }
 
+    private fun startRemoteAssistWithAvailableCaptureOrRequestSystemPermission() {
+        val session = pendingRemoteAssist ?: return
+        val activeCapture = OcrStandbyService.captureSession()
+            ?: TaskExecutionService.captureSession()
+        if (activeCapture != null) {
+            startRemoteAssist(session, sharedCaptureSession = activeCapture)
+        } else {
+            requestRemoteAssistCapturePermission()
+        }
+    }
+
+    private fun startRemoteAssist(
+        session: RemoteAssistSession,
+        resultCode: Int? = null,
+        resultData: Intent? = null,
+        sharedCaptureSession: ScreenCaptureSession? = null,
+    ) {
+        pendingRemoteAssist = null
+        lifecycleScope.launch {
+            var acceptedSessionId: String? = null
+            try {
+                val access = flowPilotViewModel.decideRemoteAssistSession(session.id, accept = true)
+                    ?: throw IllegalStateException("设备未能同意远程协助")
+                acceptedSessionId = access.session.id
+                RemoteAssistService.start(
+                    context = this@MainActivity,
+                    session = access.session,
+                    ticket = access.deviceTicket,
+                    apiBaseUrl = flowPilotViewModel.state.value.apiBaseUrl,
+                    resultCode = resultCode,
+                    resultData = resultData,
+                    sharedCaptureSession = sharedCaptureSession,
+                )
+                flowPilotViewModel.refreshRemoteAssistSessions()
+            } catch (exception: Exception) {
+                if (acceptedSessionId != null) {
+                    runCatching { flowPilotViewModel.endRemoteAssistSession(acceptedSessionId) }
+                } else {
+                    rejectRemoteAssist(session)
+                }
+                flowPilotViewModel.showError("无法开始远程协助：${exception.message ?: "未知错误"}")
+            }
+        }
+    }
+
     private fun rejectRemoteAssist(session: RemoteAssistSession) {
+        if (pendingRemoteAssist?.id == session.id) pendingRemoteAssist = null
         lifecycleScope.launch {
             try {
                 flowPilotViewModel.decideRemoteAssistSession(session.id, accept = false)
@@ -858,12 +883,10 @@ private fun FlowPilotScreen(
         pendingRemoteAssist?.id,
         state.remoteAssistConsentEnabled,
         accessibilityEnabled,
-        notificationPermissionGranted,
-        ocrStandbyActive,
-        state.runStatus?.status,
     ) {
-        if (state.remoteAssistConsentEnabled) {
-            pendingRemoteAssist?.let(onAcceptRemoteAssist)
+        pendingRemoteAssist?.let { session ->
+            if (state.remoteAssistConsentEnabled) onAcceptRemoteAssist(session)
+            else onRejectRemoteAssist(session)
         }
     }
     val canLogout = canLogoutDuringRun(state.runStatus?.status)
@@ -1346,12 +1369,12 @@ private fun FlowPilotScreen(
                                 modifier = Modifier.weight(1f).padding(end = 12.dp),
                                 verticalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
-                                Text("远程协助预授权", style = MaterialTheme.typography.bodyMedium)
+                                Text("允许此账号远程协助", style = MaterialTheme.typography.bodyMedium)
                                 Text(
                                     if (state.remoteAssistConsentEnabled) {
-                                        "收到请求后直接进入 Android 系统授权；每次屏幕共享仍须确认"
+                                        "同一账号的请求将自动接入；共享画面仍受 Android 系统授权约束"
                                     } else {
-                                        "开启后不再逐次应用内确认；Android 仍逐次要求屏幕捕获授权"
+                                        "此账号的远程协助请求将自动拒绝"
                                     },
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.bodySmall,
@@ -1392,15 +1415,6 @@ private fun FlowPilotScreen(
                         }
                         state.remoteAssistError?.let { error ->
                             Text(error, color = MaterialTheme.colorScheme.error)
-                        }
-                        pendingRemoteAssist?.takeIf { state.remoteAssistConsentEnabled }?.let { session ->
-                            Text(
-                                "远程协助请求待授权 · ${session.requestedByName}",
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            TextButton(onClick = { onAcceptRemoteAssist(session) }) {
-                                Text("继续 Android 系统授权")
-                            }
                         }
                         activeRemoteAssist?.let { session ->
                             HorizontalDivider()
@@ -1885,40 +1899,6 @@ private fun FlowPilotScreen(
             dismissButton = {
                 TextButton(onClick = { confirmDeviceUnbind = false }) {
                     Text("取消")
-                }
-            },
-        )
-    }
-
-    pendingRemoteAssist?.takeIf { !state.remoteAssistConsentEnabled }?.let { session ->
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text("远程协助请求") },
-            text = {
-                Column(
-                    modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text("${session.requestedByName} 请求连接此设备。")
-                    Text("允许后，此设备将记住你的远程协助授权；之后收到请求时不再逐次询问。")
-                    Text("同意后，屏幕画面会实时传输；对方可点击、滑动或使用返回/主页操作。")
-                    Text("此会话最长 10 分钟，不保存录像。你可以随时使用通知中的“立即结束”或返回此页面终止会话。")
-                    Text("每次会话仍须通过 Android 系统屏幕捕获授权；拒绝系统授权不会建立会话。你也可在设备页关闭此记忆授权。")
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onSetRemoteAssistConsent(true)
-                        onAcceptRemoteAssist(session)
-                    },
-                ) {
-                    Text("允许并记住")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { onRejectRemoteAssist(session) }) {
-                    Text("拒绝此请求")
                 }
             },
         )

@@ -157,7 +157,7 @@ def test_session_requires_device_consent_and_uses_scoped_ephemeral_tickets(clien
     ).status_code == 409
 
 
-def test_sessions_are_authorized_time_limited_and_exclusive_with_task_runs(client):
+def test_sessions_are_authorized_time_limited_and_block_new_task_starts(client):
     owner = login(client)
     other_user = login(client, "zhou.ke@example.com")
     admin = login(client, "admin@example.com", "admin-demo")
@@ -212,6 +212,37 @@ def test_sessions_are_authorized_time_limited_and_exclusive_with_task_runs(clien
     expired = client.get(f"/remote-sessions/{expires['id']}", headers=auth(owner))
     assert expired.status_code == 200
     assert expired.json()["status"] == "expired"
+
+
+def test_remote_assistance_can_start_without_stopping_an_active_task(client):
+    owner = login(client)
+    run = client.post(
+        "/devices/d-001/runs",
+        headers=auth(owner),
+        json={"task_id": "t-001", "version": "v1.7.0"},
+    )
+    assert run.status_code == 201
+    run_id = run.json()["id"]
+
+    session = open_session(client, owner)
+    assert session.status_code == 201
+    accepted = accept_session(client, owner, session.json()["id"])
+    assert accepted.status_code == 200
+    assert accepted.json()["status"] == "active"
+
+    with sqlite3.connect(client.app.state.db_path) as db:
+        assert db.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone() == ("running",)
+
+    assert client.post(
+        "/devices/d-001/runs",
+        headers=auth(owner),
+        json={"task_id": "t-001", "version": "v1.7.0"},
+    ).status_code == 409
+    assert client.post(
+        "/remote-runs",
+        headers=auth(owner),
+        json={"task_id": "t-001", "device_id": "d-001"},
+    ).status_code == 409
 
 
 def test_device_revocation_ends_active_remote_session_and_audits_consent(client):

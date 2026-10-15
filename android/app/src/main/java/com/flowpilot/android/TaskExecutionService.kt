@@ -91,7 +91,7 @@ internal class TaskExecutionService : Service() {
         var status = "failure"
         var summary = "任务未能完成"
         var capture: ScreenCaptureSession? = null
-        var ownsCaptureSession = false
+        var captureLease: CaptureSessionLease<ScreenCaptureSession>? = null
         var api: ApiClient? = null
         var activeSession: StoredSession? = null
         var heartbeatJob: Job? = null
@@ -178,13 +178,16 @@ internal class TaskExecutionService : Service() {
             val declaredCapabilities = intent.getStringArrayExtra(EXTRA_TASK_CAPABILITIES)?.toList().orEmpty()
             if (requiresScreenCapture(declaredCapabilities)) {
                 val standbyCapture = OcrStandbyService.captureSession()
+                var ownsSession = false
                 if (standbyCapture != null) {
                     capture = standbyCapture
                 } else {
                     capture = resultData?.let { ScreenCaptureSession(this, resultCode, it) }
                         ?: throw IllegalStateException("OCR 待命会话已结束，请重新授权屏幕捕获")
-                    ownsCaptureSession = true
+                    ownsSession = true
                 }
+                captureLease = CaptureSessionLease(requireNotNull(capture), ownsSession)
+                publishCaptureSession(capture)
             }
             if (capture != null && !DouyinAccessibilityService.isEnabled(this)) {
                 throw IllegalStateException("请先在系统设置中启用 FlowPilot 自动化操作服务")
@@ -225,8 +228,9 @@ internal class TaskExecutionService : Service() {
         } finally {
             heartbeatJob?.cancelAndJoin()
             stopPollJob?.cancelAndJoin()
+            clearCaptureSession(capture)
             try {
-                if (ownsCaptureSession) capture?.close()
+                captureLease?.close()
             } catch (exception: Exception) {
                 if (status == "success") {
                     status = "failure"
@@ -405,6 +409,7 @@ internal class TaskExecutionService : Service() {
         const val EXTRA_CAPTURE_RESULT_DATA = "capture_result_data"
         const val CHANNEL_ID = "flowpilot_task_execution"
         const val NOTIFICATION_ID = 32
+        @Volatile private var activeCapture: ScreenCaptureSession? = null
         private const val STOP_PENDING_INTENT = 320
         private const val MAX_LOG_ENTRY_CHARS = 500
         private const val SERVICE_START_GRACE_PERIOD_MILLIS = 1_000L
@@ -412,6 +417,16 @@ internal class TaskExecutionService : Service() {
         private const val REMOTE_STOP_POLL_INTERVAL_MILLIS = 5_000L
         private const val TOKEN_REFRESH_LEAD_SECONDS = 5 * 60L
         private const val SCRIPT_CACHE_DIRECTORY = "verified_scripts"
+
+        fun captureSession(): ScreenCaptureSession? = activeCapture
+
+        private fun publishCaptureSession(capture: ScreenCaptureSession?) {
+            activeCapture = capture
+        }
+
+        private fun clearCaptureSession(capture: ScreenCaptureSession?) {
+            if (activeCapture === capture) activeCapture = null
+        }
 
         fun start(
             context: Context,
