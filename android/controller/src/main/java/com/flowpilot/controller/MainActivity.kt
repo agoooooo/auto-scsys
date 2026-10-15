@@ -1749,7 +1749,6 @@ private fun ControllerScreen(
                             group.devices.forEach { device ->
                                 val selected = device.id in state.selectedDeviceIds
                                 val online = device.status == "online"
-                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Card(
                                     onClick = { onToggleDeviceSelection(device.id) },
                                     enabled = !state.loading && online,
@@ -1773,62 +1772,57 @@ private fun ControllerScreen(
                                         else MaterialTheme.colorScheme.outline,
                                     ),
                                 ) {
-                                    Row(
+                                    Column(
                                         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically,
+                                        verticalArrangement = Arrangement.spacedBy(10.dp),
                                     ) {
-                                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically,
+                                        Row(
+                                            Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Column(
+                                                Modifier.weight(1f),
+                                                verticalArrangement = Arrangement.spacedBy(3.dp),
                                             ) {
+                                                Text(device.name, style = MaterialTheme.typography.titleSmall)
+                                                if (shouldShowControllerDeviceModel(device.name, device.model)) {
+                                                    Text(
+                                                        device.model,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
                                                 Text(
-                                                    device.name,
-                                                    modifier = Modifier.weight(1f),
-                                                    style = MaterialTheme.typography.titleSmall,
-                                                )
-                                                Spacer(Modifier.size(8.dp))
-                                                ControllerDeviceStatusBadge(device.status)
-                                            }
-                                            if (shouldShowControllerDeviceModel(device.name, device.model)) {
-                                                Text(
-                                                    device.model,
-                                                    style = MaterialTheme.typography.bodySmall,
+                                                    "设备 ID · ${device.id.take(8)}",
+                                                    style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 )
                                             }
-                                            Text(
-                                                "设备 ID · ${device.id.take(8)}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            )
-                                        }
-                                        if (canUnbindControllerDevice(device.status)) {
-                                            OutlinedButton(
-                                                onClick = { deviceToUnbind = device },
-                                                enabled = !state.loading,
-                                            ) {
-                                                Text("解绑")
+                                            if (canUnbindControllerDevice(device.status)) {
+                                                OutlinedButton(
+                                                    onClick = { deviceToUnbind = device },
+                                                    enabled = !state.loading,
+                                                ) {
+                                                    Text("解绑")
+                                                }
+                                            } else {
+                                                Checkbox(
+                                                    checked = selected,
+                                                    onCheckedChange = { onToggleDeviceSelection(device.id) },
+                                                    enabled = !state.loading && online,
+                                                )
                                             }
-                                        } else {
-                                            Checkbox(
-                                                checked = selected,
-                                                onCheckedChange = { onToggleDeviceSelection(device.id) },
-                                                enabled = !state.loading && online,
-                                            )
                                         }
-                                    }
-                                }
-                                    if (online) {
-                                        OutlinedButton(
-                                            onClick = { onStartRemoteAssist(device) },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            enabled = !state.loading && !state.remoteAssistLoading &&
-                                                state.remoteAssistSession?.status !in setOf("pending", "active"),
-                                        ) {
-                                            Text(if (state.remoteAssistLoading) "正在发起协助…" else "远程协助")
+                                        if (canStartControllerRemoteAssist(device.status)) {
+                                            OutlinedButton(
+                                                onClick = { onStartRemoteAssist(device) },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                enabled = !state.loading && !state.remoteAssistLoading &&
+                                                    state.remoteAssistSession?.status !in setOf("pending", "active"),
+                                            ) {
+                                                Text(if (state.remoteAssistLoading) "正在发起协助…" else "远程协助")
+                                            }
                                         }
                                     }
                                 }

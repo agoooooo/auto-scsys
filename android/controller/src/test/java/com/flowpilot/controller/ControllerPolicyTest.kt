@@ -19,6 +19,13 @@ class ControllerPolicyTest {
     }
 
     @Test
+    fun remoteAssistCardActionIsAvailableOnlyForOnlineDevices() {
+        assertTrue(canStartControllerRemoteAssist("online"))
+        assertFalse(canStartControllerRemoteAssist("offline"))
+        assertFalse(canStartControllerRemoteAssist("disabled"))
+    }
+
+    @Test
     fun onlyPendingAndRunningRequestsAreActive() {
         assertTrue(isControllerRunActive("queued"))
         assertTrue(isControllerRunActive("pending"))

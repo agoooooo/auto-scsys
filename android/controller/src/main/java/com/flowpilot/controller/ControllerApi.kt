@@ -620,6 +620,9 @@ internal fun buildControllerDispatchTargets(
 internal fun canDispatchControllerTask(deviceStatus: String, taskStatus: String, version: String): Boolean =
     deviceStatus == "online" && taskStatus == "published" && version.isNotBlank()
 
+internal fun canStartControllerRemoteAssist(deviceStatus: String): Boolean =
+    deviceStatus == "online"
+
 internal fun isControllerRunActive(status: String): Boolean =
     status == "queued" || status == "pending" || status == "running"
 

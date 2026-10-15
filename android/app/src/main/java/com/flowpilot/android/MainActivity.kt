@@ -1341,6 +1341,11 @@ private fun FlowPilotScreen(
                             },
                             style = MaterialTheme.typography.bodyMedium,
                         )
+                        Text(
+                            "设备 ID · ${device.id}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         HorizontalDivider()
                         DevicePermissionRow(
                             title = "无障碍操作",
