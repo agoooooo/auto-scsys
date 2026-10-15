@@ -293,6 +293,7 @@ class MainActivity : ComponentActivity() {
         val api = controllerApi(login)
         remoteAssistApi = api
         state = state.copy(
+            remoteAssistSession = null,
             remoteAssistLoading = true,
             error = null,
             remoteAssistError = null,
@@ -353,7 +354,8 @@ class MainActivity : ComponentActivity() {
         val login = state.session ?: return
         val remote = state.remoteAssistSession ?: return
         if (state.remoteAssistLoading || remote.status !in setOf("pending", "active")) return
-        val api = remoteAssistApi ?: controllerApi(login).also { remoteAssistApi = it }
+        val api = controllerApi(login)
+        remoteAssistApi = api
         remoteAssistJob?.cancel()
         state = state.copy(remoteAssistLoading = true, remoteAssistError = null)
         lifecycleScope.launch {
@@ -361,6 +363,7 @@ class MainActivity : ComponentActivity() {
                 withContext(Dispatchers.IO) {
                     api.endRemoteAssistSession(login.token, remote.id)
                 }
+                if (state.remoteAssistSession?.id != remote.id) return@launch
                 remoteAssistApi = null
                 state = state.copy(
                     remoteAssistSession = remote.copy(status = "ended"),
@@ -371,19 +374,21 @@ class MainActivity : ComponentActivity() {
                 )
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                state = state.copy(
-                    remoteAssistLoading = false,
-                    remoteAssistError = error.message ?: "结束远程协助失败",
-                )
-                remoteAssistJob = lifecycleScope.launch {
-                    try {
-                        monitorRemoteAssist(login, remote.id, api)
-                    } catch (monitorError: Exception) {
-                        if (monitorError is CancellationException) throw monitorError
-                        if (state.remoteAssistSession?.id == remote.id) {
-                            state = state.copy(
-                                remoteAssistError = monitorError.message ?: "远程协助状态同步失败",
-                            )
+                if (state.remoteAssistSession?.id == remote.id) {
+                    state = state.copy(
+                        remoteAssistLoading = false,
+                        remoteAssistError = error.message ?: "结束远程协助失败",
+                    )
+                    remoteAssistJob = lifecycleScope.launch {
+                        try {
+                            monitorRemoteAssist(login, remote.id, api)
+                        } catch (monitorError: Exception) {
+                            if (monitorError is CancellationException) throw monitorError
+                            if (state.remoteAssistSession?.id == remote.id) {
+                                state = state.copy(
+                                    remoteAssistError = monitorError.message ?: "远程协助状态同步失败",
+                                )
+                            }
                         }
                     }
                 }
