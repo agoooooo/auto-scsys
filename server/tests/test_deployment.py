@@ -17,6 +17,8 @@ def test_production_compose_configuration_is_valid():
         {
             "FLOWPILOT_API_DOMAIN": "api.example.test",
             "FLOWPILOT_WEB_DOMAIN": "console.example.test",
+            "FLOWPILOT_SITE_DOMAIN": "www.example.test",
+            "FLOWPILOT_SITE_CONSOLE_URL": "https://console.example.test",
             "FLOWPILOT_S3_DOMAIN": "objects.example.test",
             "FLOWPILOT_POSTGRES_DB": "flowpilot",
             "FLOWPILOT_POSTGRES_USER": "flowpilot",
@@ -66,7 +68,8 @@ def test_private_staging_compose_is_valid_and_binds_ports_to_loopback_by_default
     assert result.returncode == 0, result.stderr
     configuration = json.loads(result.stdout)
     assert "proxy" not in configuration["services"]
-    for service_name in ("api", "web", "object-store"):
+    for service_name in ("api", "web", "public-site", "object-store"):
         ports = configuration["services"][service_name]["ports"]
         assert ports[0]["host_ip"] == "127.0.0.1"
+    assert configuration["services"]["public-site"]["ports"][0]["published"] == "18002"
     assert configuration["services"]["object-store"]["image"] == "rustfs/rustfs:1.0.1"

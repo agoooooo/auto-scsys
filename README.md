@@ -22,6 +22,8 @@ The first run creates `.venv`, installs server dependencies, and installs the lo
 
 The launcher prints the detected LAN URLs. Open the console URL from another device on the same trusted network; Vite proxies its same-origin `/api` requests to FastAPI. Local test account identifiers are documented in [`server/README.md`](server/README.md); passwords are not stored in the repository. Press `Ctrl-C` to stop both servers. The SQLite database is stored at `server/flowpilot.sqlite3` and persists between starts. To use a different database path or a stable token secret, set `FLOWPILOT_DB_PATH` or `FLOWPILOT_TOKEN_SECRET` before running `make dev`; the token secret must be at least 32 bytes.
 
+The public product website is a separate static app in [`website/`](website/). Preview it locally with `python3 -m http.server 8080 --directory website` and open <http://127.0.0.1:8080/>. The console CTA stays disabled in this static preview unless the site runtime is configured with a real console URL. In private staging, the site is available at `http://127.0.0.1:18002/`; public production hosting uses the separate `FLOWPILOT_SITE_DOMAIN` hostname. Configure `FLOWPILOT_SITE_CONSOLE_URL` with the actual console origin before deployment.
+
 If `make setup` reports missing `venv`/`pip` support on Ubuntu, install the OS package first (for example, `sudo apt install python3.12-venv`).
 
 Set `FLOWPILOT_API_HOST`, `FLOWPILOT_WEB_HOST`, `FLOWPILOT_API_PORT`, or `FLOWPILOT_WEB_PORT` to override bind addresses and ports. If you change the API port, update the service address in the login form as well (it defaults to port 8001). The launcher detects private IPv4 addresses assigned to non-virtual network interfaces and allows each exact demo origin automatically. `FLOWPILOT_CORS_ORIGINS` accepts a comma-separated list of exact browser origins for custom hostnames or ports; when set, it replaces the automatically generated origins.
@@ -36,7 +38,7 @@ Production rollout is phased: validate PostgreSQL, object storage, and applicati
 make test
 ```
 
-This runs FastAPI and legacy-prototype regression tests, React console type checking/unit tests, and a production Vite build without contacting Android devices. For API setup, endpoints, and current limitations, see [`server/README.md`](server/README.md).
+This runs FastAPI and legacy-prototype regression tests, static official-website checks, React console type checking/unit tests, and a production Vite build without contacting Android devices. For API setup, endpoints, and current limitations, see [`server/README.md`](server/README.md).
 
 GitHub Actions runs these tests and both Android apps' JVM unit tests/Debug builds on pushes and pull requests. Instrumentation tests still require a connected Android device and are run separately using the instructions in [`android/README.md`](android/README.md).
 

@@ -108,6 +108,17 @@ services:
       - "${FLOWPILOT_STAGING_BIND_ADDRESS:-127.0.0.1}:${FLOWPILOT_STAGING_WEB_PORT:-18000}:80"
     networks: [staging]
 
+  public-site:
+    build:
+      context: .
+      dockerfile: website/Dockerfile
+    restart: unless-stopped
+    environment:
+      FLOWPILOT_SITE_CONSOLE_URL: ${FLOWPILOT_STAGING_CONSOLE_URL:-http://127.0.0.1:18000}
+    ports:
+      - "${FLOWPILOT_STAGING_BIND_ADDRESS:-127.0.0.1}:${FLOWPILOT_STAGING_SITE_PORT:-18002}:80"
+    networks: [staging]
+
 volumes:
   postgres_data:
   object_data_0:

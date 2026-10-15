@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f4f7f5">
+    <meta
+      name="description"
+      content="FlowPilot 帮你管理 Android 设备与自动化任务，让脚本在受控设备本地执行，运行状态清晰可查。"
+    >
+    <title>FlowPilot — 让手机自动化，清晰可控</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/site-config.js"></script>
+    <script src="/site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主要内容</a>
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="brand" href="#top" aria-label="FlowPilot 首页">
+          <span class="brand-mark" aria-hidden="true">F</span>
+          <span>FlowPilot</span>
+        </a>
+        <nav class="desktop-nav" aria-label="主导航">
+          <a href="#features">产品能力</a>
+          <a href="#how-it-works">使用流程</a>
+          <a href="#apps">双端 App</a>
+          <a href="#faq">常见问题</a>
+        </nav>
+        <a class="button button-small button-primary header-cta" data-console-link aria-disabled="true">
+          控制台入口配置中
+        </a>
+        <details class="mobile-nav">
+          <summary aria-label="打开导航菜单"><span aria-hidden="true"></span></summary>
+          <nav aria-label="移动端导航">
+            <a href="#features">产品能力</a>
+            <a href="#how-it-works">使用流程</a>
+            <a href="#apps">双端 App</a>
+            <a href="#faq">常见问题</a>
+            <a data-console-link aria-disabled="true">控制台入口配置中</a>
+          </nav>
+        </details>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero section" id="top">
+        <div class="container hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow"><span class="eyebrow-dot"></span> ANDROID 自动化工具</p>
+            <h1>把重复的手机操作，<br><span>变成可管理的自动化任务。</span></h1>
+            <p class="hero-description">
+              在 Web 或控制端管理设备与脚本，由受控端在 Android 设备本地执行。任务进度与运行结果，清晰可查。
+            </p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="#how-it-works">
+                了解使用流程 <span aria-hidden="true">→</span>
+              </a>
+              <a class="button button-secondary" data-console-link aria-disabled="true">
+                控制台入口配置中
+              </a>
+            </div>
+            <ul class="hero-facts" aria-label="产品特点">
+              <li><span aria-hidden="true">✓</span> 双端 App 分工</li>
+              <li><span aria-hidden="true">✓</span> 设备本地执行</li>
+              <li><span aria-hidden="true">✓</span> 运行状态可查</li>
+            </ul>
+          </div>
+
+          <div class="hero-visual" role="img" aria-label="控制端下发任务、受控端执行并回传状态的界面示意">
+            <div class="visual-glow"></div>
+            <div class="orbit orbit-one"></div>
+            <div class="orbit orbit-two"></div>
+            <div class="flow-label flow-label-top"><span class="status-dot"></span> 任务状态 · 已完成</div>
+            <div class="device device-controller">
+              <div class="device-camera"></div>
+              <div class="device-screen">
+                <div class="screen-brand"><span class="mini-mark">F</span> FlowPilot</div>
+                <div class="screen-title">设备</div>
+                <div class="screen-card">
+                  <span class="device-avatar">P</span>
+                  <span><b>Pixel 8</b><small>在线 · 刚刚活跃</small></span>
+                  <i class="online-dot"></i>
+                </div>
+                <div class="screen-title screen-title-small">最近任务</div>
+                <div class="task-row"><span class="task-icon">↗</span><span><b>订单状态检查</b><small>运行成功</small></span><span class="task-check">✓</span></div>
+                <div class="screen-button">运行任务</div>
+              </div>
+            </div>
+            <div class="device device-controlled">
+              <div class="device-camera"></div>
+              <div class="device-screen controlled-screen">
+                <div class="screen-brand"><span class="mini-mark">F</span> FlowPilot</div>
+                <div class="run-pill"><span class="online-dot"></span> 正在运行</div>
+                <div class="phone-illustration">
+                  <div class="phone-topline"></div>
+                  <div class="phone-app app-a">短视频</div>
+                  <div class="phone-app app-b">消息</div>
+                  <div class="phone-app app-c">相册</div>
+                  <div class="phone-app app-d">设置</div>
+                  <div class="phone-navline"></div>
+                </div>
+                <div class="screen-caption">任务在设备本地执行</div>
+              </div>
+            </div>
+            <div class="flow-label flow-label-bottom"><span class="flow-arrow" aria-hidden="true">↗</span> 运行状态回传</div>
+            <div class="visual-caption">产品界面示意</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="features section" id="features">
+        <div class="container">
+          <div class="section-heading">
+            <p class="eyebrow">为日常自动化而设计</p>
+            <h2>设备、任务、执行状态，<br class="mobile-break">一目了然。</h2>
+            <p>从任务准备到设备执行，让每一步都更容易管理和理解。</p>
+          </div>
+          <div class="feature-grid">
+            <article class="feature-card">
+              <div class="feature-icon icon-devices" aria-hidden="true"><span></span><span></span></div>
+              <h3>设备与任务集中管理</h3>
+              <p>通过 Web 控制台或控制端 App 查看设备、管理脚本，并向有权限的在线设备发起任务。</p>
+            </article>
+            <article class="feature-card">
+              <div class="feature-icon icon-local" aria-hidden="true"><span>↘</span></div>
+              <h3>在 Android 设备本地执行</h3>
+              <p>控制端负责下发，受控端负责执行。脚本在受控设备上运行，而不是在 Web 页面中运行。</p>
+            </article>
+            <article class="feature-card">
+              <div class="feature-icon icon-status" aria-hidden="true"><span>✓</span></div>
+              <h3>运行状态与历史可追踪</h3>
+              <p>查看任务排队、运行和结束状态，并按记录回看版本、设备与结果摘要。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="workflow section" id="how-it-works">
+        <div class="container workflow-layout">
+          <div class="section-heading workflow-heading">
+            <p class="eyebrow">简单三步，完成任务闭环</p>
+            <h2>从脚本到设备执行，<br>流程清楚可见。</h2>
+            <p>控制入口、执行设备和任务状态各司其职。</p>
+            <div class="permission-note">
+              <span class="permission-icon" aria-hidden="true">i</span>
+              <p>屏幕捕获、无障碍等系统能力，需由设备用户按 Android 系统流程授权。</p>
+            </div>
+          </div>
+          <ol class="steps">
+            <li>
+              <span class="step-number">01</span>
+              <div><h3>编写并发布脚本</h3><p>在控制台创建任务、编写脚本并发布版本。</p></div>
+              <span class="step-symbol" aria-hidden="true">⌘</span>
+            </li>
+            <li>
+              <span class="step-number">02</span>
+              <div><h3>选择设备并发起任务</h3><p>从 Web 或控制端选择有权限操作的在线设备。</p></div>
+              <span class="step-symbol" aria-hidden="true">↗</span>
+            </li>
+            <li>
+              <span class="step-number">03</span>
+              <div><h3>设备执行并回传状态</h3><p>受控端在本地运行任务，状态和结果回到控制入口。</p></div>
+              <span class="step-symbol" aria-hidden="true">✓</span>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="apps section" id="apps">
+        <div class="container">
+          <div class="section-heading">
+            <p class="eyebrow">两个 App，各司其职</p>
+            <h2>控制与执行分开，<br class="mobile-break">协作更清楚。</h2>
+          </div>
+          <div class="app-grid">
+            <article class="app-card controller-card">
+              <div class="app-card-top">
+                <div class="app-icon app-icon-controller" aria-hidden="true"><span>F</span><i></i></div>
+                <span class="app-platform">Android · 控制端</span>
+              </div>
+              <h3>FlowPilot 控制端</h3>
+              <p>登录账号，管理已绑定设备与已发布脚本，发起任务并查看执行状态。</p>
+              <span class="app-status">正式下载渠道准备中</span>
+            </article>
+            <article class="app-card controlled-card">
+              <div class="app-card-top">
+                <div class="app-icon app-icon-controlled" aria-hidden="true"><span>F</span><i></i></div>
+                <span class="app-platform">Android · 受控端</span>
+              </div>
+              <h3>FlowPilot 受控端</h3>
+              <p>绑定 Android 设备，接收任务并在本机运行，展示运行状态和结果。</p>
+              <span class="app-status">正式下载渠道准备中</span>
+            </article>
+          </div>
+          <p class="app-note">当前不提供 APK 直链。请以正式发布渠道和应用签名信息为准。</p>
+        </div>
+      </section>
+
+      <section class="faq section" id="faq">
+        <div class="container faq-layout">
+          <div class="section-heading">
+            <p class="eyebrow">常见问题</p>
+            <h2>开始之前，<br>你可能想了解。</h2>
+          </div>
+          <div class="faq-list">
+            <details>
+              <summary>脚本在哪里运行？</summary>
+              <p>已发布任务由受控端 Android App 在受控设备本地执行。Web 控制台和服务端负责管理、授权、分发与状态记录，不执行用户脚本。</p>
+            </details>
+            <details>
+              <summary>使用时需要授予 Android 权限吗？</summary>
+              <p>取决于任务需要的系统能力。屏幕捕获、无障碍等权限由设备用户通过 Android 系统界面明确授权；未授权时，相应能力不可用。</p>
+            </details>
+            <details>
+              <summary>FlowPilot 可以静默控制手机吗？</summary>
+              <p>不会绕过 Android 系统权限，也不支持静默授予屏幕捕获或无障碍权限。任务运行状态会在设备端按 Android 要求保持可见。</p>
+            </details>
+            <details>
+              <summary>如何开始使用？</summary>
+              <p>先登录 FlowPilot 控制台，注册或使用已有账号；绑定受控设备并准备已发布任务后，即可从有权限的控制入口发起任务。App 下载渠道开放后会在此页公布。</p>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <section class="closing section">
+        <div class="container closing-inner">
+          <div>
+            <p class="eyebrow">从清晰的任务流程开始</p>
+            <h2>准备好管理你的设备与任务了吗？</h2>
+            <p>登录控制台，开始使用 FlowPilot。</p>
+          </div>
+          <a class="button button-light" data-console-link aria-disabled="true">
+            控制台入口配置中 <span aria-hidden="true">→</span>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-main">
+        <a class="brand footer-brand" href="#top">
+          <span class="brand-mark" aria-hidden="true">F</span>
+          <span>FlowPilot</span>
+        </a>
+        <p>让手机自动化，清晰可控。</p>
+        <div class="footer-links" aria-label="法律与联系信息">
+          <span>隐私政策准备中</span>
+          <span>服务条款准备中</span>
+          <span>联系信息准备中</span>
+        </div>
+      </div>
+      <div class="container footer-bottom">
+        <span>© <span id="copyright-year">2026</span> FlowPilot</span>
+        <span>Android 自动化工具</span>
+      </div>
+    </footer>
+  </body>
+</html>

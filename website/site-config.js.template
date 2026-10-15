@@ -1,0 +1,1 @@
+window.flowpilotSiteConfig = { consoleUrl: "__CONSOLE_URL__" };

@@ -52,7 +52,7 @@ docker compose --env-file .env.staging -p flowpilot-staging -f compose.staging.y
 curl --fail http://127.0.0.1:18001/health/ready
 ```
 
-The production console build is served at `http://127.0.0.1:18000/`; `/api/*` is proxied to the private staging API at port `18001`. The browser login only accepts a server-verified administrator account. On a fresh database, initialize a dedicated staging administrator once:
+The production console build is served at `http://127.0.0.1:18000/`; `/api/*` is proxied to the private staging API at port `18001`. The public product website is separately served at `http://127.0.0.1:18002/` and links to the staging console origin. The browser login only accepts a server-verified administrator account. On a fresh database, initialize a dedicated staging administrator once:
 
 ```bash
 docker compose --env-file .env.staging -p flowpilot-staging -f compose.staging.yaml exec api python -m server.bootstrap_admin
@@ -81,7 +81,7 @@ The PostgreSQL and MinIO volumes persist independently; Compose does not publish
 docker compose exec api python -m server.bootstrap_admin
 ```
 
-Configure the Android app with `https://<FLOWPILOT_API_DOMAIN>`. The web console is at `https://<FLOWPILOT_WEB_DOMAIN>` and uses its same-origin `/api` proxy by default; the API domain remains available as a direct login URL. Presigned URLs use `https://<FLOWPILOT_S3_DOMAIN>`. Check `docker compose ps` and `https://<FLOWPILOT_API_DOMAIN>/health/ready` after deployment. `docker compose down` preserves named volumes; do not use `down -v` unless intentionally destroying the database, scripts, and TLS state.
+Configure the Android app with `https://<FLOWPILOT_API_DOMAIN>`. The public website is at `https://<FLOWPILOT_SITE_DOMAIN>` and links to the separately hosted console at `https://<FLOWPILOT_WEB_DOMAIN>`. The web console uses its same-origin `/api` proxy by default; the API domain remains available as a direct login URL. Presigned URLs use `https://<FLOWPILOT_S3_DOMAIN>`. Configure both `FLOWPILOT_SITE_DOMAIN` and `FLOWPILOT_SITE_CONSOLE_URL` in the production environment. Check `docker compose ps` and `https://<FLOWPILOT_API_DOMAIN>/health/ready` after deployment. `docker compose down` preserves named volumes; do not use `down -v` unless intentionally destroying the database, scripts, and TLS state.
 
 ## Production-mode startup guard
 

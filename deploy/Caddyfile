@@ -12,6 +12,10 @@
     }
 }
 
+{$FLOWPILOT_SITE_DOMAIN} {
+    reverse_proxy public-site:80
+}
+
 {$FLOWPILOT_S3_DOMAIN} {
     reverse_proxy minio:9000 {
         header_up Host {http.request.host}

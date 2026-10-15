@@ -20,6 +20,7 @@ dev: setup console-install
 test: setup console-install
 	@$(VENV_PYTHON) -m pytest server/tests -q
 	@node --test demo/*.test.mjs
+	@node --test website/*.test.mjs
 	@npm --prefix console run typecheck
 	@npm --prefix console test
 	@npm --prefix console run build
