@@ -51,6 +51,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -118,6 +119,7 @@ class MainActivity : ComponentActivity() {
     private var startDefaultOcrAfterBatterySettings = false
     private var pendingOcrStandbyStart = false
     private var pendingRemoteAssist: RemoteAssistSession? = null
+    private var remoteAssistAuthorizationRequestedFor: String? = null
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -286,6 +288,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestRemoteAssist(session: RemoteAssistSession) {
+        if (remoteAssistAuthorizationRequestedFor == session.id) return
         if (!accessibilityEnabled.value) {
             flowPilotViewModel.showError("远程协助需要先在系统设置中启用 FlowPilot 无障碍操作服务")
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -295,6 +298,7 @@ class MainActivity : ComponentActivity() {
             flowPilotViewModel.showError("请先停止当前任务或持续 OCR 待命，再开始远程协助")
             return
         }
+        remoteAssistAuthorizationRequestedFor = session.id
         pendingRemoteAssist = session
         if (Build.VERSION.SDK_INT >= 33 && !notificationPermissionGranted.value) {
             startRemoteAssistAfterNotificationGrant = true
@@ -402,6 +406,7 @@ class MainActivity : ComponentActivity() {
                         onAcceptRemoteAssist = ::requestRemoteAssist,
                         onRejectRemoteAssist = ::rejectRemoteAssist,
                         onEndRemoteAssist = ::endRemoteAssist,
+                        onSetRemoteAssistConsent = flowPilotViewModel::setRemoteAssistConsentEnabled,
                     )
                 }
             }
@@ -841,6 +846,7 @@ private fun FlowPilotScreen(
     onAcceptRemoteAssist: (RemoteAssistSession) -> Unit,
     onRejectRemoteAssist: (RemoteAssistSession) -> Unit,
     onEndRemoteAssist: (String) -> Unit,
+    onSetRemoteAssistConsent: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -848,6 +854,18 @@ private fun FlowPilotScreen(
     val device = state.device
     val pendingRemoteAssist = state.remoteAssistSessions.firstOrNull { it.status == "pending" }
     val activeRemoteAssist = state.remoteAssistSessions.firstOrNull { it.status == "active" }
+    LaunchedEffect(
+        pendingRemoteAssist?.id,
+        state.remoteAssistConsentEnabled,
+        accessibilityEnabled,
+        notificationPermissionGranted,
+        ocrStandbyActive,
+        state.runStatus?.status,
+    ) {
+        if (state.remoteAssistConsentEnabled) {
+            pendingRemoteAssist?.let(onAcceptRemoteAssist)
+        }
+    }
     val canLogout = canLogoutDuringRun(state.runStatus?.status)
     var apiBaseUrl by rememberSaveable { mutableStateOf(state.apiBaseUrl) }
     var registering by rememberSaveable { mutableStateOf(false) }
@@ -1320,6 +1338,32 @@ private fun FlowPilotScreen(
                         )
                         HorizontalDivider()
                         Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f).padding(end = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text("远程协助预授权", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    if (state.remoteAssistConsentEnabled) {
+                                        "收到请求后直接进入 Android 系统授权；每次屏幕共享仍须确认"
+                                    } else {
+                                        "开启后不再逐次应用内确认；Android 仍逐次要求屏幕捕获授权"
+                                    },
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            Switch(
+                                checked = state.remoteAssistConsentEnabled,
+                                onCheckedChange = onSetRemoteAssistConsent,
+                            )
+                        }
+                        HorizontalDivider()
+                        Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
@@ -1348,6 +1392,15 @@ private fun FlowPilotScreen(
                         }
                         state.remoteAssistError?.let { error ->
                             Text(error, color = MaterialTheme.colorScheme.error)
+                        }
+                        pendingRemoteAssist?.takeIf { state.remoteAssistConsentEnabled }?.let { session ->
+                            Text(
+                                "远程协助请求待授权 · ${session.requestedByName}",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            TextButton(onClick = { onAcceptRemoteAssist(session) }) {
+                                Text("继续 Android 系统授权")
+                            }
                         }
                         activeRemoteAssist?.let { session ->
                             HorizontalDivider()
@@ -1837,7 +1890,7 @@ private fun FlowPilotScreen(
         )
     }
 
-    pendingRemoteAssist?.let { session ->
+    pendingRemoteAssist?.takeIf { !state.remoteAssistConsentEnabled }?.let { session ->
         AlertDialog(
             onDismissRequest = {},
             title = { Text("远程协助请求") },
@@ -1847,19 +1900,25 @@ private fun FlowPilotScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text("${session.requestedByName} 请求连接此设备。")
+                    Text("允许后，此设备将记住你的远程协助授权；之后收到请求时不再逐次询问。")
                     Text("同意后，屏幕画面会实时传输；对方可点击、滑动或使用返回/主页操作。")
                     Text("此会话最长 10 分钟，不保存录像。你可以随时使用通知中的“立即结束”或返回此页面终止会话。")
-                    Text("Android 会另行显示屏幕共享授权；拒绝系统授权不会建立会话。")
+                    Text("每次会话仍须通过 Android 系统屏幕捕获授权；拒绝系统授权不会建立会话。你也可在设备页关闭此记忆授权。")
                 }
             },
             confirmButton = {
-                TextButton(onClick = { onAcceptRemoteAssist(session) }) {
-                    Text("查看系统授权")
+                TextButton(
+                    onClick = {
+                        onSetRemoteAssistConsent(true)
+                        onAcceptRemoteAssist(session)
+                    },
+                ) {
+                    Text("允许并记住")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { onRejectRemoteAssist(session) }) {
-                    Text("拒绝")
+                    Text("拒绝此请求")
                 }
             },
         )

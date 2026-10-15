@@ -67,6 +67,16 @@ internal class SessionStore(context: Context) {
         preferences.edit().remove(deviceKey(userId)).apply()
     }
 
+    fun isRemoteAssistConsentEnabled(userId: String, deviceId: String): Boolean =
+        preferences.getBoolean(remoteAssistConsentKey(userId, deviceId), false)
+
+    fun setRemoteAssistConsentEnabled(userId: String, deviceId: String, enabled: Boolean) {
+        val editor = preferences.edit()
+        if (enabled) editor.putBoolean(remoteAssistConsentKey(userId, deviceId), true)
+        else editor.remove(remoteAssistConsentKey(userId, deviceId))
+        editor.apply()
+    }
+
     fun updateToken(token: String, expiresAt: Long) {
         preferences.edit()
             .putString(KEY_TOKEN, token)
@@ -109,6 +119,9 @@ internal class SessionStore(context: Context) {
     }
 
     private fun deviceKey(userId: String) = "device_id_$userId"
+    private fun remoteAssistConsentKey(userId: String, deviceId: String) =
+        "remote_assist_consent_${userId}_$deviceId"
+
     private companion object {
         const val KEY_API_URL = "api_url"
         const val KEY_TOKEN = "access_token"

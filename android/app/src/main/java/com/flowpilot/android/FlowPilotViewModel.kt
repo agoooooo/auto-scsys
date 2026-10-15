@@ -24,6 +24,7 @@ internal data class AppUiState(
     val tasks: List<AvailableTask> = emptyList(),
     val remoteRuns: List<RemoteRun> = emptyList(),
     val remoteAssistSessions: List<RemoteAssistSession> = emptyList(),
+    val remoteAssistConsentEnabled: Boolean = false,
     val runHistory: List<RunRecord> = emptyList(),
     val runHistoryLoading: Boolean = false,
     val runHistoryError: String? = null,
@@ -309,6 +310,14 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         apiClient(session.apiBaseUrl).endRemoteAssistSession(session.token, sessionId)
     }
 
+    fun setRemoteAssistConsentEnabled(enabled: Boolean) {
+        val current = _state.value
+        val user = current.user ?: return
+        val device = current.device ?: return
+        sessionStore.setRemoteAssistConsentEnabled(user.id, device.id, enabled)
+        _state.value = current.copy(remoteAssistConsentEnabled = enabled)
+    }
+
     fun unbindDevice() {
         val current = _state.value
         val user = current.user ?: return
@@ -333,6 +342,7 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
                     tasks = emptyList(),
                     remoteRuns = emptyList(),
                     remoteAssistSessions = emptyList(),
+                    remoteAssistConsentEnabled = false,
                     remoteRunsLoading = false,
                     remoteMonitoring = false,
                     loading = false,
@@ -542,7 +552,10 @@ internal class FlowPilotViewModel(application: Application) : AndroidViewModel(a
         val device = withContext(Dispatchers.IO) {
             client.listDevices(token).firstOrNull { it.id == savedId && it.status != "disabled" }
         } ?: return
-        _state.value = _state.value.copy(device = device)
+        _state.value = _state.value.copy(
+            device = device,
+            remoteAssistConsentEnabled = sessionStore.isRemoteAssistConsentEnabled(user.id, device.id),
+        )
         val taskSync = withContext(Dispatchers.IO) { client.syncTasks(token, device.id) }
         _state.value = _state.value.copy(
             tasks = taskSync,
