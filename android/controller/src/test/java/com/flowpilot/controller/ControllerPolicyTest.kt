@@ -7,6 +7,7 @@ import org.junit.Test
 import androidx.compose.ui.graphics.Color
 import java.net.ServerSocket
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 class ControllerPolicyTest {
@@ -79,6 +80,42 @@ class ControllerPolicyTest {
 
             assertTrue(result.exceptionOrNull() is ControllerApiException)
             assertEquals(1, callbackCount.get())
+            assertFalse(responder.isAlive)
+        }
+    }
+
+    @Test
+    fun endingRemoteAssistUsesAuthenticatedEndEndpoint() {
+        val requestLine = AtomicReference<String>()
+        val authorization = AtomicReference<String>()
+        ServerSocket(0).use { server ->
+            val responder = thread {
+                server.accept().use { socket ->
+                    val reader = socket.getInputStream().bufferedReader()
+                    requestLine.set(reader.readLine())
+                    while (true) {
+                        val header = reader.readLine() ?: break
+                        if (header.isEmpty()) break
+                        if (header.startsWith("Authorization:", ignoreCase = true)) {
+                            authorization.set(header.substringAfter(':').trim())
+                        }
+                    }
+                    val body = """{"id":"session-123","status":"ended"}""".toByteArray()
+                    socket.getOutputStream().write(
+                        ("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
+                            "Content-Length: ${body.size}\r\nConnection: close\r\n\r\n").toByteArray() + body,
+                    )
+                }
+            }
+
+            ControllerApi(
+                "http://127.0.0.1:${server.localPort}",
+                initialAccessToken = "controller-token",
+            ).endRemoteAssistSession("controller-token", "session-123")
+            responder.join(5_000)
+
+            assertEquals("POST /remote-sessions/session-123/end HTTP/1.1", requestLine.get())
+            assertEquals("Bearer controller-token", authorization.get())
             assertFalse(responder.isAlive)
         }
     }

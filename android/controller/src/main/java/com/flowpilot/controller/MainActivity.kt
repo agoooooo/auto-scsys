@@ -212,6 +212,7 @@ private data class ControllerScreenState(
     val name: String = "",
     val email: String = "",
     val password: String = "",
+    val rememberPassword: Boolean = true,
     val isRegistering: Boolean = false,
     val recoveryEnabled: Boolean = false,
     val isRecoveringPassword: Boolean = false,
@@ -278,6 +279,7 @@ class MainActivity : ComponentActivity() {
     private var state by mutableStateOf(ControllerScreenState())
     private var monitorJob: Job? = null
     private var remoteAssistJob: Job? = null
+    private var remoteAssistApi: ControllerApi? = null
     private var batchMonitorJob: Job? = null
     private var recoveryStatusJob: Job? = null
     private var deviceRefreshInFlight = false
@@ -288,6 +290,8 @@ class MainActivity : ComponentActivity() {
         val login = state.session ?: return
         if (state.remoteAssistLoading || state.remoteAssistSession?.status in setOf("pending", "active")) return
         remoteAssistJob?.cancel()
+        val api = controllerApi(login)
+        remoteAssistApi = api
         state = state.copy(
             remoteAssistLoading = true,
             error = null,
@@ -298,11 +302,13 @@ class MainActivity : ComponentActivity() {
         remoteAssistJob = lifecycleScope.launch {
             try {
                 val created = withContext(Dispatchers.IO) {
-                    controllerApi(login).createRemoteAssistSession(login.token, device.id)
+                    api.createRemoteAssistSession(login.token, device.id)
                 }
                 state = state.copy(remoteAssistSession = created, remoteAssistLoading = false)
-                monitorRemoteAssist(login, created.id)
+                monitorRemoteAssist(login, created.id, api)
             } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                remoteAssistApi = null
                 state = state.copy(
                     remoteAssistLoading = false,
                     error = error.message ?: "发起远程协助失败",
@@ -312,8 +318,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun monitorRemoteAssist(login: ControllerSession, sessionId: String) {
-        val api = controllerApi(login)
+    private suspend fun monitorRemoteAssist(
+        login: ControllerSession,
+        sessionId: String,
+        api: ControllerApi,
+    ) {
         var ticket: String? = null
         var sequence = 0L
         while (true) {
@@ -333,6 +342,7 @@ class MainActivity : ComponentActivity() {
                     state = state.copy(remoteAssistFrame = frame.first, remoteAssistError = null)
                 }
             } else if (remote.status !in setOf("pending")) {
+                if (state.remoteAssistSession?.id == sessionId) remoteAssistApi = null
                 return
             }
             delay(350)
@@ -343,24 +353,40 @@ class MainActivity : ComponentActivity() {
         val login = state.session ?: return
         val remote = state.remoteAssistSession ?: return
         if (state.remoteAssistLoading || remote.status !in setOf("pending", "active")) return
+        val api = remoteAssistApi ?: controllerApi(login).also { remoteAssistApi = it }
+        remoteAssistJob?.cancel()
         state = state.copy(remoteAssistLoading = true, remoteAssistError = null)
         lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    controllerApi(login).endRemoteAssistSession(login.token, remote.id)
+                    api.endRemoteAssistSession(login.token, remote.id)
                 }
-                remoteAssistJob?.cancel()
+                remoteAssistApi = null
                 state = state.copy(
                     remoteAssistSession = remote.copy(status = "ended"),
                     remoteAssistLoading = false,
                     remoteAssistTicket = null,
                     remoteAssistFrame = null,
+                    remoteAssistError = null,
                 )
             } catch (error: Exception) {
+                if (error is CancellationException) throw error
                 state = state.copy(
                     remoteAssistLoading = false,
                     remoteAssistError = error.message ?: "结束远程协助失败",
                 )
+                remoteAssistJob = lifecycleScope.launch {
+                    try {
+                        monitorRemoteAssist(login, remote.id, api)
+                    } catch (monitorError: Exception) {
+                        if (monitorError is CancellationException) throw monitorError
+                        if (state.remoteAssistSession?.id == remote.id) {
+                            state = state.copy(
+                                remoteAssistError = monitorError.message ?: "远程协助状态同步失败",
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -373,7 +399,8 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    controllerApi(login).sendRemoteAssistInput(remote.id, ticket, input)
+                    (remoteAssistApi ?: controllerApi(login))
+                        .sendRemoteAssistInput(remote.id, ticket, input)
                 }
             } catch (error: Exception) {
                 state = state.copy(remoteAssistError = error.message ?: "远程操作发送失败")
@@ -386,7 +413,12 @@ class MainActivity : ComponentActivity() {
         sessionStore = ControllerSessionStore(this)
         uiStateStore = ControllerUiStateStore(this)
         val restoredUiState = uiStateStore.read()
+        val rememberedLogin = sessionStore.readRememberedLogin()
         state = state.copy(
+            apiUrl = rememberedLogin?.apiUrl ?: state.apiUrl,
+            email = rememberedLogin?.email.orEmpty(),
+            password = rememberedLogin?.password.orEmpty(),
+            rememberPassword = sessionStore.isRememberPasswordEnabled(),
             uiState = restoredUiState,
             selectedDeviceId = restoredUiState.selectedDeviceId,
             selectedDeviceIds = restoredUiState.selectedDeviceIds,
@@ -416,6 +448,10 @@ class MainActivity : ComponentActivity() {
                         onNameChange = { state = state.copy(name = it) },
                         onEmailChange = { state = state.copy(email = it) },
                         onPasswordChange = { state = state.copy(password = it) },
+                        onRememberPasswordChange = { remember ->
+                            state = state.copy(rememberPassword = remember)
+                            sessionStore.setRememberPasswordEnabled(remember)
+                        },
                         onRecoveryCodeChange = { state = state.copy(recoveryCode = it) },
                         onRecoveryNewPasswordChange = { state = state.copy(recoveryNewPassword = it) },
                         onProfileNameChange = { state = state.copy(profileName = it) },
@@ -487,6 +523,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun returnToLoginAfterSessionExpiry(message: String) {
+        val rememberedLogin = sessionStore.readRememberedLogin()
+        remoteAssistApi = null
+        state = state.copy(
+            apiUrl = rememberedLogin?.apiUrl ?: state.apiUrl,
+            email = rememberedLogin?.email ?: state.email,
+            password = rememberedLogin?.password.orEmpty(),
+            rememberPassword = sessionStore.isRememberPasswordEnabled(),
+            session = null,
+            loading = false,
+            error = message,
+            message = null,
+        )
+    }
+
     private fun requestRecoveryCode() {
         if (state.loading) return
         val snapshot = state
@@ -522,13 +573,20 @@ class MainActivity : ComponentActivity() {
                     ControllerApi(normalizeControllerApiUrl(snapshot.apiUrl))
                         .resetPassword(snapshot.email.trim(), snapshot.recoveryCode.trim(), snapshot.recoveryNewPassword)
                 }
+                if (snapshot.rememberPassword) {
+                    sessionStore.saveRememberedLogin(
+                        normalizeControllerApiUrl(snapshot.apiUrl),
+                        snapshot.email.trim(),
+                        snapshot.recoveryNewPassword,
+                    )
+                }
                 state = state.copy(
                     loading = false,
                     isRecoveringPassword = false,
                     recoveryCodeSent = false,
                     recoveryCode = "",
                     recoveryNewPassword = "",
-                    password = "",
+                    password = if (snapshot.rememberPassword) snapshot.recoveryNewPassword else "",
                     message = "密码已重置，请使用新密码登录",
                 )
             } catch (error: Exception) {
@@ -564,6 +622,11 @@ class MainActivity : ComponentActivity() {
                     if (login.user.role != "user") throw IllegalStateException("控制端仅支持普通用户账号")
                     val session = ControllerSession(apiUrl, login.token, login.user.email, login.user.name)
                     sessionStore.save(session)
+                    if (snapshot.rememberPassword) {
+                        sessionStore.saveRememberedLogin(apiUrl, login.user.email, snapshot.password)
+                    } else {
+                        sessionStore.clearRememberedLogin()
+                    }
                     state = state.copy(
                         apiUrl = apiUrl,
                         password = "",
@@ -613,6 +676,13 @@ class MainActivity : ComponentActivity() {
                 email = profile.email,
             )
             sessionStore.save(updatedSession)
+            sessionStore.readRememberedLogin()?.let { rememberedLogin ->
+                sessionStore.saveRememberedLogin(
+                    session.apiUrl,
+                    profile.email,
+                    rememberedLogin.password,
+                )
+            }
             state = state.copy(
                 session = updatedSession,
                 profileName = profile.name,
@@ -643,7 +713,7 @@ class MainActivity : ComponentActivity() {
             if (error is ControllerApiException && error.statusCode == 401) {
                 sessionStore.clear()
                 clearUiState()
-                state = state.copy(session = null, loading = false, error = "登录已过期，请重新登录")
+                returnToLoginAfterSessionExpiry("登录已过期，请重新登录")
             } else {
                 state = state.copy(loading = false, error = error.message ?: "加载设备和任务失败")
             }
@@ -826,12 +896,7 @@ class MainActivity : ComponentActivity() {
                     batchMonitorJob?.cancel()
                     sessionStore.clear()
                     clearUiState()
-                    state = state.copy(
-                        session = null,
-                        loading = false,
-                        error = "登录已过期，请重新登录",
-                        message = null,
-                    )
+                    returnToLoginAfterSessionExpiry("登录已过期，请重新登录")
                 }
             },
         )
@@ -863,6 +928,13 @@ class MainActivity : ComponentActivity() {
                     name = user.name,
                 )
                 sessionStore.save(updatedSession)
+                sessionStore.readRememberedLogin()?.let { rememberedLogin ->
+                    sessionStore.saveRememberedLogin(
+                        session.apiUrl,
+                        user.email,
+                        rememberedLogin.password,
+                    )
+                }
                 state = state.copy(
                     session = updatedSession,
                     profileName = user.name,
@@ -902,6 +974,9 @@ class MainActivity : ComponentActivity() {
                     newPassword = "",
                     message = "密码已更新，其他登录会话已退出",
                 )
+                if (state.rememberPassword) {
+                    sessionStore.saveRememberedLogin(session.apiUrl, session.email, newPassword)
+                }
             } catch (error: Exception) {
                 state = state.copy(loading = false, error = error.message ?: "修改密码失败")
             }
@@ -960,7 +1035,7 @@ class MainActivity : ComponentActivity() {
                 if (error is ControllerApiException && error.statusCode == 401) {
                     sessionStore.clear()
                     clearUiState()
-                    state = state.copy(session = null, loading = false, error = "登录已过期，请重新登录")
+                    returnToLoginAfterSessionExpiry("登录已过期，请重新登录")
                 } else {
                     state = state.copy(loading = false, error = error.message ?: "设备解绑失败")
                 }
@@ -1204,6 +1279,7 @@ class MainActivity : ComponentActivity() {
         monitorJob?.cancel()
         batchMonitorJob?.cancel()
         remoteAssistJob?.cancel()
+        val remoteAssistApiForLogout = remoteAssistApi ?: controllerApi(session)
         val remoteAssistId = state.remoteAssistSession
             ?.takeIf { it.status in setOf("pending", "active") }
             ?.id
@@ -1213,7 +1289,7 @@ class MainActivity : ComponentActivity() {
             if (remoteAssistId != null) {
                 try {
                     withContext(Dispatchers.IO) {
-                        controllerApi(session).endRemoteAssistSession(session.token, remoteAssistId)
+                        remoteAssistApiForLogout.endRemoteAssistSession(session.token, remoteAssistId)
                     }
                 } catch (error: Exception) {
                     logoutError = error.message ?: "结束远程协助失败"
@@ -1225,10 +1301,14 @@ class MainActivity : ComponentActivity() {
                 logoutError = logoutError ?: error.message ?: "服务端退出失败"
             } finally {
                 sessionStore.clear()
+                remoteAssistApi = null
                 clearUiState()
+                val rememberedLogin = sessionStore.readRememberedLogin()
                 state = ControllerScreenState(
-                    apiUrl = session.apiUrl,
-                    email = session.email,
+                    apiUrl = rememberedLogin?.apiUrl ?: session.apiUrl,
+                    email = rememberedLogin?.email ?: session.email,
+                    password = rememberedLogin?.password.orEmpty(),
+                    rememberPassword = sessionStore.isRememberPasswordEnabled(),
                     error = logoutError,
                     message = if (logoutError == null) "已退出登录" else null,
                 )
@@ -1257,6 +1337,7 @@ private fun ControllerScreen(
     onNameChange: (String) -> Unit,
     onEmailChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
+    onRememberPasswordChange: (Boolean) -> Unit,
     onRecoveryCodeChange: (String) -> Unit,
     onRecoveryNewPasswordChange: (String) -> Unit,
     onProfileNameChange: (String) -> Unit,
@@ -1522,7 +1603,22 @@ private fun ControllerScreen(
                     visualTransformation = PasswordVisualTransformation(),
                     singleLine = true,
                 )
-                if (state.isRegistering) Text("注册仅创建普通用户；密码至少 6 位。")
+                if (!state.isRegistering) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            onRememberPasswordChange(!state.rememberPassword)
+                        },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = state.rememberPassword,
+                            onCheckedChange = onRememberPasswordChange,
+                        )
+                        Text("记住账号和密码")
+                    }
+                } else {
+                    Text("注册仅创建普通用户；密码至少 6 位。")
+                }
                 Button(onClick = onLoginOrRegister, enabled = !state.loading, modifier = Modifier.fillMaxWidth()) {
                     Text(if (state.isRegistering) "注册" else "登录")
                 }
