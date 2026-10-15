@@ -49,6 +49,25 @@ def test_s3_storage_put_get_and_delete_use_private_object_keys(monkeypatch):
         stubber.assert_no_pending_responses()
 
 
+def test_s3_storage_preserves_android_apk_content_type(monkeypatch):
+    storage = _s3_storage(monkeypatch)
+    key = "apps/controlled/2.apk"
+    content = b"binary APK"
+    with Stubber(storage.client) as stubber:
+        stubber.add_response(
+            "put_object",
+            {"ETag": '"apk-etag"'},
+            {
+                "Bucket": "flowpilot-test",
+                "Key": key,
+                "Body": content,
+                "ContentType": "application/vnd.android.package-archive",
+            },
+        )
+        storage.put(key, content, content_type="application/vnd.android.package-archive")
+        stubber.assert_no_pending_responses()
+
+
 def test_s3_storage_initializes_bucket_only_when_missing(monkeypatch):
     storage = _s3_storage(monkeypatch)
     with Stubber(storage.client) as stubber:

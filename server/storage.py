@@ -6,7 +6,7 @@ from typing import Protocol
 
 
 class ScriptStorage(Protocol):
-    def put(self, key: str, content: bytes) -> None: ...
+    def put(self, key: str, content: bytes, *, content_type: str = "text/x-python") -> None: ...
 
     def get(self, key: str) -> bytes: ...
 
@@ -53,8 +53,8 @@ class S3ScriptStorage:
             **client_options,
         )
 
-    def put(self, key: str, content: bytes) -> None:
-        self.client.put_object(Bucket=self.bucket, Key=key, Body=content, ContentType="text/x-python")
+    def put(self, key: str, content: bytes, *, content_type: str = "text/x-python") -> None:
+        self.client.put_object(Bucket=self.bucket, Key=key, Body=content, ContentType=content_type)
 
     def get(self, key: str) -> bytes:
         response = self.client.get_object(Bucket=self.bucket, Key=key)

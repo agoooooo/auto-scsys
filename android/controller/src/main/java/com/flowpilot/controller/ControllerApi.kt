@@ -1,6 +1,8 @@
 package com.flowpilot.controller
 
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
@@ -13,6 +15,15 @@ import org.json.JSONObject
 
 internal data class ControllerUser(val id: String, val name: String, val email: String, val role: String)
 internal data class ControllerLogin(val token: String, val expiresIn: Long, val user: ControllerUser)
+internal data class ControllerAppUpdate(
+    val appId: String,
+    val packageName: String,
+    val versionCode: Long,
+    val versionName: String,
+    val notes: String,
+    val sha256: String,
+    val downloadUrl: String,
+)
 internal data class ControllerDevice(val id: String, val name: String, val model: String, val status: String)
 internal data class ControllerTask(
     val id: String,
@@ -119,6 +130,79 @@ internal class ControllerApi(
 
     fun logout(token: String) {
         request("/auth/logout", "POST", token)
+    }
+
+    fun checkAppUpdate(appId: String, currentVersionCode: Long): ControllerAppUpdate? {
+        val response = JSONObject(request("/app-updates/${encode(appId)}?current_version_code=$currentVersionCode"))
+        if (!response.optBoolean("available")) return null
+        val release = ControllerAppUpdate(
+            appId = response.optString("app_id"),
+            packageName = response.optString("package_name"),
+            versionCode = response.optLong("version_code"),
+            versionName = response.optString("version_name"),
+            notes = response.optString("notes"),
+            sha256 = response.optString("sha256"),
+            downloadUrl = response.optString("download_url"),
+        )
+        if (release.appId != appId || release.versionCode <= currentVersionCode ||
+            release.versionName.isBlank() || release.sha256.isBlank() ||
+            !release.downloadUrl.startsWith("/app-updates/$appId/")
+        ) {
+            throw IOException("服务器返回的 App 更新信息无效")
+        }
+        return release
+    }
+
+    fun downloadAppUpdate(release: ControllerAppUpdate, target: File) {
+        val connection = URL("$baseUrl${release.downloadUrl}").openConnection() as HttpURLConnection
+        val partialFile = File(target.parentFile, "${target.name}.part")
+        try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 60_000
+            connection.setRequestProperty("Accept", "application/vnd.android.package-archive")
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                val error = readLimited(connection.errorStream, 64 * 1024)
+                val detail = runCatching { JSONObject(error.toString(Charsets.UTF_8)).optString("detail") }.getOrNull()
+                throw ControllerApiException(detail?.takeIf(String::isNotBlank) ?: "App 下载失败（HTTP $status）", status)
+            }
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            var downloadedBytes = 0L
+            connection.inputStream.use { input ->
+                FileOutputStream(partialFile).use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        downloadedBytes += count
+                        if (downloadedBytes > MAX_APP_APK_BYTES) {
+                            throw IOException("App 安装包超过 100 MiB 限制")
+                        }
+                        digest.update(buffer, 0, count)
+                        output.write(buffer, 0, count)
+                    }
+                }
+            }
+            val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
+            val responseHash = connection.getHeaderField("X-Content-SHA256")
+            if (downloadedBytes == 0L ||
+                (responseHash != null && !responseHash.equals(release.sha256, ignoreCase = true)) ||
+                !java.security.MessageDigest.isEqual(
+                    actualHash.toByteArray(Charsets.US_ASCII),
+                    release.sha256.lowercase().toByteArray(Charsets.US_ASCII),
+                )
+            ) {
+                throw IOException("App 安装包完整性校验失败，已拒绝安装")
+            }
+            if (target.exists() && !target.delete()) throw IOException("无法替换本地 App 安装包")
+            if (!partialFile.renameTo(target)) throw IOException("无法保存本地 App 安装包")
+        } catch (exception: Exception) {
+            partialFile.delete()
+            throw exception
+        } finally {
+            connection.disconnect()
+        }
     }
 
     fun profile(token: String): ControllerUser {
@@ -311,7 +395,7 @@ internal class ControllerApi(
         }
     }
 
-    private fun readLimited(stream: java.io.InputStream?): ByteArray {
+    private fun readLimited(stream: java.io.InputStream?, maxBytes: Int = MAX_RESPONSE_BYTES): ByteArray {
         if (stream == null) return byteArrayOf()
         stream.use { input ->
             val output = ByteArrayOutputStream()
@@ -319,7 +403,7 @@ internal class ControllerApi(
             while (true) {
                 val count = input.read(buffer)
                 if (count < 0) break
-                if (output.size() + count > MAX_RESPONSE_BYTES) throw IOException("服务器响应超过允许大小")
+                if (output.size() + count > maxBytes) throw IOException("服务器响应超过允许大小")
                 output.write(buffer, 0, count)
             }
             return output.toByteArray()
@@ -331,6 +415,7 @@ internal class ControllerApi(
 
     private companion object {
         const val MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+        const val MAX_APP_APK_BYTES = 100 * 1024 * 1024
     }
 }
 

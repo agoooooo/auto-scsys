@@ -24,6 +24,8 @@ The build output is `dist/`. `console/Dockerfile` builds the locked frontend and
 
 The browser accepts server-authenticated administrator accounts only. The remember-me choice selects browser local storage; otherwise the bearer session stays in session storage. Do not use the console on a shared device with remember-me enabled.
 
+Administrators can publish the current controlled-device and controller APKs from **App 自动更新**. Uploads require a higher `versionCode`, a matching `versionName`, and an APK signed with the app's existing release key. The API exposes the latest signed binary to client update checks; Android verifies its SHA-256, package id, and version before handing installation to the system package installer. Installation is never silent.
+
 The Monaco editor loads source only through the authenticated task-access API. It creates new immutable script versions; publishing calculates SHA-256 in the browser and the API verifies the object size and digest before completing an S3 upload. User scripts are never executed by the browser, API, or console host. Device execution still follows server authorization and Android system permissions.
 
 Unpublished editor drafts are currently kept only in the current browser tab's `sessionStorage`. They are not server-backed or encrypted and are cleared by the browser when the tab session ends. Avoid putting secrets in script source; server-side durable drafts and cross-browser E2E coverage remain follow-up work.

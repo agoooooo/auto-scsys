@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -89,6 +90,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 internal enum class DeviceAppDestination(val label: String) {
     DEVICE("设备"),
@@ -106,6 +108,7 @@ internal enum class DeviceAppAccountPage(val title: String) {
 class MainActivity : ComponentActivity() {
     private val flowPilotViewModel: FlowPilotViewModel by viewModels()
     private val notificationPermissionGranted = mutableStateOf(false)
+    private var appUpdateCheckInFlight = false
     private var startMonitoringAfterNotificationGrant = false
     private var startOcrStandbyAfterNotificationGrant = false
     private var startDefaultOcrAfterNotificationGrant = false
@@ -296,6 +299,7 @@ class MainActivity : ComponentActivity() {
                             flowPilotViewModel.logout()
                         },
                         onStopTask = { TaskExecutionService.stop(this) },
+                        onCheckAppUpdate = ::checkForAppUpdate,
                     )
                 }
             }
@@ -323,6 +327,60 @@ class MainActivity : ComponentActivity() {
         flowPilotViewModel.refreshRunHistory()
         flowPilotViewModel.refreshTasks(showLoading = false)
         flowPilotViewModel.refreshRemoteRuns()
+        checkForAppUpdate()
+    }
+
+    private fun checkForAppUpdate() {
+        if (flowPilotViewModel.state.value.user == null || appUpdateCheckInFlight || isFinishing || isDestroyed) return
+        appUpdateCheckInFlight = true
+        lifecycleScope.launch {
+            try {
+                val api = ApiClient(normalizeApiBaseUrl(flowPilotViewModel.state.value.apiBaseUrl))
+                val release = withContext(Dispatchers.IO) {
+                    api.checkAppUpdate("controlled", BuildConfig.VERSION_CODE.toLong())
+                } ?: return@launch
+                if (release.packageName != BuildConfig.APPLICATION_ID ||
+                    !isNewerAppRelease(BuildConfig.VERSION_CODE.toLong(), release.versionCode)
+                ) {
+                    throw IllegalStateException("服务器发布的受控端 App 信息无效")
+                }
+
+                val preferences = getSharedPreferences(APP_UPDATE_PREFERENCES, MODE_PRIVATE)
+                val settingsPending = preferences.getLong(KEY_SETTINGS_VERSION, -1L) == release.versionCode
+                if (settingsPending && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                    !packageManager.canRequestPackageInstalls()
+                ) return@launch
+                if (!settingsPending && isAppUpdatePromptDeferred(
+                        preferences.getLong(KEY_PROMPT_VERSION, -1L),
+                        preferences.getLong(KEY_PROMPT_TIME, 0L),
+                        release.versionCode,
+                        System.currentTimeMillis(),
+                    )
+                ) return@launch
+
+                val updateDirectory = File(cacheDir, "updates").apply { mkdirs() }
+                val apk = File(updateDirectory, "controlled-${release.versionCode}.apk")
+                val cached = withContext(Dispatchers.IO) { isCachedAppUpdateValid(apk, release.sha256) }
+                if (!cached) {
+                    withContext(Dispatchers.IO) { api.downloadAppUpdate(release, apk) }
+                }
+                withContext(Dispatchers.IO) {
+                    validateAppUpdateApk(
+                        apk,
+                        BuildConfig.APPLICATION_ID,
+                        release.versionCode,
+                        release.versionName,
+                        packageManager,
+                    )
+                }
+                launchAppUpdateInstall(this@MainActivity, apk, release.versionCode)
+            } catch (exception: Exception) {
+                if (exception is CancellationException) throw exception
+                Toast.makeText(this@MainActivity, "App 更新检查失败：${exception.message ?: "网络错误"}", Toast.LENGTH_LONG).show()
+            } finally {
+                appUpdateCheckInFlight = false
+            }
+        }
     }
 
     override fun onStart() {
@@ -675,6 +733,7 @@ private fun FlowPilotScreen(
     onRememberLoginInfoChanged: (Boolean) -> Unit,
     onLogout: () -> Unit,
     onStopTask: () -> Unit,
+    onCheckAppUpdate: () -> Unit,
 ) {
     val context = LocalContext.current
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -732,6 +791,7 @@ private fun FlowPilotScreen(
         }
     }
     LaunchedEffect(apiBaseUrl, user?.id) {
+        if (user != null) onCheckAppUpdate()
         recoveryAvailable = false
         if (user != null) return@LaunchedEffect
         delay(400)

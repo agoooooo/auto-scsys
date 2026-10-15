@@ -46,7 +46,14 @@ REMOTE_REQUEST_TTL_SECONDS = 15 * 60
 PREAUTHORIZATION_TTL_SECONDS = 30 * 24 * 60 * 60
 DEVICE_OFFLINE_AFTER_SECONDS = 2 * 60
 MAX_SCRIPT_BYTES = 2 * 1024 * 1024
+MAX_APP_APK_BYTES = 100 * 1024 * 1024
 VERSION_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
+APP_VERSION_NAME_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
+APP_PACKAGES = {
+    "controlled": ("com.flowpilot.android", "FlowPilot 受控端"),
+    "controller": ("com.flowpilot.controller", "FlowPilot 控制端"),
+}
+APK_CONTENT_TYPE = "application/vnd.android.package-archive"
 DEMO_OCR_SCRIPT_PATH = Path(__file__).with_name("demo_scripts") / "order_status_ocr.py"
 DEMO_DOUYIN_LOGIN_SCRIPT_PATH = Path(__file__).with_name("demo_scripts") / "douyin_login_assist.py"
 
@@ -327,6 +334,18 @@ def _initialize_database(db_path: str | Path, seed_demo: bool = True) -> None:
                 resource_type TEXT NOT NULL,
                 resource_id TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS app_releases (
+                app_id TEXT PRIMARY KEY,
+                package_name TEXT NOT NULL,
+                version_code INTEGER NOT NULL CHECK(version_code > 0),
+                version_name TEXT NOT NULL,
+                notes TEXT NOT NULL,
+                content BLOB,
+                storage_key TEXT,
+                content_size INTEGER NOT NULL CHECK(content_size > 0),
+                sha256 TEXT NOT NULL,
+                published_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS auth_login_attempts (
                 attempt_key TEXT PRIMARY KEY,
@@ -2716,6 +2735,154 @@ def create_app(db_path: str | Path | None = None, token_secret: bytes | None = N
             """SELECT a.id,a.actor_id,u.name AS actor,a.action,a.resource_type,a.resource_id,a.created_at
                FROM audit_events a JOIN users u ON u.id=a.actor_id ORDER BY a.created_at DESC LIMIT 500"""
         )]
+
+    @app.get("/admin/app-releases")
+    def list_app_releases(user: dict = Depends(require_admin), db: sqlite3.Connection = Depends(connection)):
+        rows = {
+            row["app_id"]: dict(row)
+            for row in db.execute(
+                """SELECT app_id,package_name,version_code,version_name,notes,content_size,sha256,published_at
+                   FROM app_releases"""
+            )
+        }
+        return [
+            {
+                "app_id": app_id,
+                "package_name": package_name,
+                "app_name": app_name,
+                **rows.get(app_id, {}),
+            }
+            for app_id, (package_name, app_name) in APP_PACKAGES.items()
+        ]
+
+    @app.post("/admin/app-releases", status_code=201)
+    async def publish_app_release(
+        app_id: str = Form(...),
+        version_name: str = Form(...),
+        version_code: int = Form(...),
+        notes: str = Form(""),
+        apk: UploadFile = File(...),
+        user: dict = Depends(require_admin),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        app_package = APP_PACKAGES.get(app_id)
+        if not app_package:
+            raise HTTPException(status_code=422, detail="不支持的 App 类型")
+        if not APP_VERSION_NAME_PATTERN.fullmatch(version_name):
+            raise HTTPException(status_code=422, detail="版本名称格式应为 1.2.3")
+        if version_code < 1:
+            raise HTTPException(status_code=422, detail="versionCode 必须大于 0")
+        filename = Path((apk.filename or "").replace("\\", "/")).name
+        if not filename.lower().endswith(".apk"):
+            raise HTTPException(status_code=422, detail="仅支持 APK 文件")
+        if len(filename) > 180 or any(ord(character) < 32 or ord(character) == 127 for character in filename):
+            raise HTTPException(status_code=422, detail="APK 文件名无效")
+        content = await apk.read(MAX_APP_APK_BYTES + 1)
+        if not content or len(content) > MAX_APP_APK_BYTES:
+            raise HTTPException(status_code=413, detail="APK 必须非空且不超过 100 MiB")
+        current = db.execute(
+            "SELECT version_code FROM app_releases WHERE app_id=?",
+            (app_id,),
+        ).fetchone()
+        if current and version_code <= current["version_code"]:
+            raise HTTPException(status_code=409, detail="新版本的 versionCode 必须高于当前发布版本")
+
+        digest = hashlib.sha256(content).hexdigest()
+        storage: ScriptStorage | None = app.state.script_storage
+        storage_key = f"apps/{app_id}/{version_code}.apk" if storage else None
+        stored_content = b"" if storage else content
+        published_at = utc_now()
+        release_result = db.execute(
+            """INSERT INTO app_releases(
+                   app_id,package_name,version_code,version_name,notes,content,storage_key,
+                   content_size,sha256,published_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(app_id) DO UPDATE SET
+                   package_name=excluded.package_name,version_code=excluded.version_code,
+                   version_name=excluded.version_name,notes=excluded.notes,content=excluded.content,
+                   storage_key=excluded.storage_key,content_size=excluded.content_size,
+                   sha256=excluded.sha256,published_at=excluded.published_at
+               WHERE app_releases.version_code < excluded.version_code""",
+            (
+                app_id, app_package[0], version_code, version_name, notes[:500], stored_content,
+                storage_key, len(content), digest, published_at,
+            ),
+        )
+        if release_result.rowcount == 0:
+            raise HTTPException(status_code=409, detail="新版本的 versionCode 必须高于当前发布版本")
+        if storage and storage_key:
+            storage.put(storage_key, content, content_type=APK_CONTENT_TYPE)
+        audit(db, user["id"], "app_release.published", "app_release", app_id)
+        return {
+            "app_id": app_id,
+            "package_name": app_package[0],
+            "app_name": app_package[1],
+            "version_code": version_code,
+            "version_name": version_name,
+            "notes": notes[:500],
+            "content_size": len(content),
+            "sha256": digest,
+            "published_at": published_at,
+        }
+
+    @app.get("/app-updates/{app_id}")
+    def check_app_update(
+        app_id: str,
+        current_version_code: int = Query(ge=0),
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        app_package = APP_PACKAGES.get(app_id)
+        if not app_package:
+            raise HTTPException(status_code=404, detail="App 不存在")
+        release = db.execute("SELECT * FROM app_releases WHERE app_id=?", (app_id,)).fetchone()
+        if not release:
+            return {"available": False}
+        if release["version_code"] <= current_version_code:
+            return {"available": False}
+        return {
+            "available": True,
+            "app_id": app_id,
+            "package_name": release["package_name"],
+            "version_code": release["version_code"],
+            "version_name": release["version_name"],
+            "notes": release["notes"],
+            "content_size": release["content_size"],
+            "sha256": release["sha256"],
+            "download_url": f"/app-updates/{app_id}/{release['version_code']}/download",
+        }
+
+    @app.get("/app-updates/{app_id}/{version_code}/download")
+    def download_app_release(
+        app_id: str,
+        version_code: int,
+        db: sqlite3.Connection = Depends(connection),
+    ):
+        release = db.execute(
+            "SELECT * FROM app_releases WHERE app_id=? AND version_code=?",
+            (app_id, version_code),
+        ).fetchone()
+        if not release:
+            raise HTTPException(status_code=404, detail="App 版本不存在")
+        content = (
+            app.state.script_storage.get(release["storage_key"])
+            if release["storage_key"] and app.state.script_storage
+            else bytes(release["content"] or b"")
+        )
+        if len(content) != release["content_size"] or not hmac.compare_digest(
+            hashlib.sha256(content).hexdigest(),
+            release["sha256"],
+        ):
+            LOGGER.error("App release integrity check failed: app_id=%s version_code=%s", app_id, version_code)
+            raise HTTPException(status_code=503, detail="App 安装包完整性校验失败")
+        return Response(
+            content=content,
+            media_type=APK_CONTENT_TYPE,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-SHA256": release["sha256"],
+                "Content-Disposition": _content_disposition(f"{app_id}-{release['version_name']}.apk"),
+            },
+        )
 
     return app
 

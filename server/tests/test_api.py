@@ -647,6 +647,95 @@ def test_admin_audit_contains_key_actions_without_sensitive_account_data(client)
     assert all("password" not in key for item in events for key in item)
 
 
+def test_admin_can_publish_signed_app_releases_and_devices_can_download_newer_versions(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    assert client.get("/admin/app-releases", headers=auth(user)).status_code == 403
+    assert client.get("/admin/app-releases", headers=auth(admin)).status_code == 200
+    assert client.get("/app-updates/controlled?current_version_code=1").json() == {"available": False}
+
+    apk = b"test signed APK bytes"
+    published = client.post(
+        "/admin/app-releases",
+        headers=auth(admin),
+        data={
+            "app_id": "controlled",
+            "version_name": "0.1.1",
+            "version_code": "2",
+            "notes": "修复更新流程",
+        },
+        files={"apk": ("flowpilot-controlled.apk", apk, "application/vnd.android.package-archive")},
+    )
+    assert published.status_code == 201
+    assert published.json()["package_name"] == "com.flowpilot.android"
+    assert published.json()["sha256"] == hashlib.sha256(apk).hexdigest()
+
+    update = client.get("/app-updates/controlled?current_version_code=1")
+    assert update.status_code == 200
+    assert update.json()["available"] is True
+    assert update.json()["version_code"] == 2
+    assert update.json()["download_url"] == "/app-updates/controlled/2/download"
+    assert client.get("/app-updates/controlled?current_version_code=2").json() == {"available": False}
+    downloaded = client.get(update.json()["download_url"])
+    assert downloaded.content == apk
+    assert downloaded.headers["x-content-sha256"] == hashlib.sha256(apk).hexdigest()
+    assert downloaded.headers["content-type"] == "application/vnd.android.package-archive"
+
+    controller_release = client.post(
+        "/admin/app-releases",
+        headers=auth(admin),
+        data={"app_id": "controller", "version_name": "0.1.1", "version_code": "2"},
+        files={"apk": ("flowpilot-controller.apk", b"controller APK", "application/vnd.android.package-archive")},
+    )
+    assert controller_release.status_code == 201
+    assert controller_release.json()["package_name"] == "com.flowpilot.controller"
+    assert client.get("/app-updates/controller?current_version_code=1").json()["available"] is True
+
+    audit = client.get("/admin/audit", headers=auth(admin)).json()
+    assert any(event["action"] == "app_release.published" for event in audit)
+    assert client.post(
+        "/admin/app-releases",
+        headers=auth(admin),
+        data={"app_id": "controlled", "version_name": "0.1.2", "version_code": "2"},
+        files={"apk": ("update.apk", b"duplicate", "application/vnd.android.package-archive")},
+    ).status_code == 409
+    with sqlite3.connect(client.app.state.db_path) as database:
+        database.execute("UPDATE app_releases SET content=? WHERE app_id='controlled'", (b"tampered",))
+    assert client.get(update.json()["download_url"]).status_code == 503
+
+
+def test_app_release_upload_validates_role_metadata_and_file(client):
+    admin = login(client, "admin@example.com", "admin-demo")
+    user = login(client)
+    form = {"app_id": "controller", "version_name": "0.1.1", "version_code": "2"}
+    assert client.post(
+        "/admin/app-releases",
+        headers=auth(user),
+        data=form,
+        files={"apk": ("controller.apk", b"apk", "application/vnd.android.package-archive")},
+    ).status_code == 403
+    assert client.post(
+        "/admin/app-releases",
+        headers=auth(admin),
+        data={**form, "app_id": "other"},
+        files={"apk": ("controller.apk", b"apk", "application/vnd.android.package-archive")},
+    ).status_code == 422
+    assert client.post(
+        "/admin/app-releases",
+        headers=auth(admin),
+        data={**form, "version_name": "invalid"},
+        files={"apk": ("controller.apk", b"apk", "application/vnd.android.package-archive")},
+    ).status_code == 422
+    assert client.post(
+        "/admin/app-releases",
+        headers=auth(admin),
+        data=form,
+        files={"apk": ("controller.zip", b"not apk", "application/zip")},
+    ).status_code == 422
+    assert client.get("/app-updates/unknown?current_version_code=0").status_code == 404
+    assert client.get("/app-updates/controller").status_code == 422
+
+
 def test_configured_cors_origin_is_allowed_but_unconfigured_origin_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setenv("FLOWPILOT_CORS_ORIGINS", "http://192.168.0.101:8000, http://devbox.local:8000")
     app = create_app(tmp_path / "cors.sqlite3", b"cors-secret-must-be-at-least-32-bytes")

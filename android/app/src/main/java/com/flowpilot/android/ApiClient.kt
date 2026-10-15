@@ -2,6 +2,8 @@ package com.flowpilot.android
 
 import java.io.IOException
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -51,6 +53,16 @@ internal data class DownloadedScript(
     val source: String,
     val sha256: String,
     val isCached: Boolean = false,
+)
+
+internal data class AppUpdateRelease(
+    val appId: String,
+    val packageName: String,
+    val versionCode: Long,
+    val versionName: String,
+    val notes: String,
+    val sha256: String,
+    val downloadUrl: String,
 )
 
 internal data class AvailableTask(
@@ -137,6 +149,79 @@ internal class ApiClient(
         val refreshed = response.optString("access_token")
         if (refreshed.isBlank()) throw IOException("续期响应缺少访问令牌")
         return refreshed to response.optLong("expires_in")
+    }
+
+    fun checkAppUpdate(appId: String, currentVersionCode: Long): AppUpdateRelease? {
+        val response = JSONObject(request("/app-updates/${encodePathSegment(appId)}?current_version_code=$currentVersionCode"))
+        if (!response.optBoolean("available")) return null
+        val release = AppUpdateRelease(
+            appId = response.optString("app_id"),
+            packageName = response.optString("package_name"),
+            versionCode = response.optLong("version_code"),
+            versionName = response.optString("version_name"),
+            notes = response.optString("notes"),
+            sha256 = response.optString("sha256"),
+            downloadUrl = response.optString("download_url"),
+        )
+        if (release.appId != appId || release.versionCode <= currentVersionCode ||
+            release.versionName.isBlank() || release.sha256.isBlank() ||
+            !release.downloadUrl.startsWith("/app-updates/$appId/")
+        ) {
+            throw IOException("服务器返回的 App 更新信息无效")
+        }
+        return release
+    }
+
+    fun downloadAppUpdate(release: AppUpdateRelease, target: File) {
+        val connection = URL("$baseUrl${release.downloadUrl}").openConnection() as HttpURLConnection
+        val partialFile = File(target.parentFile, "${target.name}.part")
+        try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 60_000
+            connection.setRequestProperty("Accept", "application/vnd.android.package-archive")
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                val error = readLimited(connection.errorStream, 64 * 1024)
+                val detail = runCatching { JSONObject(error.toString(Charsets.UTF_8)).optString("detail") }.getOrNull()
+                throw ApiException(detail?.takeIf(String::isNotBlank) ?: "App 下载失败（HTTP $status）", status)
+            }
+            val digest = MessageDigest.getInstance("SHA-256")
+            var downloadedBytes = 0L
+            connection.inputStream.use { input ->
+                FileOutputStream(partialFile).use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        downloadedBytes += count
+                        if (downloadedBytes > MAX_APP_APK_BYTES) {
+                            throw IOException("App 安装包超过 100 MiB 限制")
+                        }
+                        digest.update(buffer, 0, count)
+                        output.write(buffer, 0, count)
+                    }
+                }
+            }
+            val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
+            val responseHash = connection.getHeaderField("X-Content-SHA256")
+            if (downloadedBytes == 0L ||
+                (responseHash != null && !responseHash.equals(release.sha256, ignoreCase = true)) ||
+                !MessageDigest.isEqual(
+                    actualHash.toByteArray(Charsets.US_ASCII),
+                    release.sha256.lowercase().toByteArray(Charsets.US_ASCII),
+                )
+            ) {
+                throw IOException("App 安装包完整性校验失败，已拒绝安装")
+            }
+            if (target.exists() && !target.delete()) throw IOException("无法替换本地 App 安装包")
+            if (!partialFile.renameTo(target)) throw IOException("无法保存本地 App 安装包")
+        } catch (exception: Exception) {
+            partialFile.delete()
+            throw exception
+        } finally {
+            connection.disconnect()
+        }
     }
 
     fun logout(token: String) {
@@ -414,6 +499,7 @@ internal class ApiClient(
 
     private companion object {
         const val MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+        const val MAX_APP_APK_BYTES = 100 * 1024 * 1024
     }
 }
 

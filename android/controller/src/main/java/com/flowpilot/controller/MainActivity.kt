@@ -2,6 +2,7 @@ package com.flowpilot.controller
 
 import android.os.Bundle
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -67,6 +68,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -74,6 +76,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
+import java.io.File
 
 internal val ControllerColorScheme = lightColorScheme(
     primary = Color(0xFF07C160),
@@ -267,6 +270,7 @@ class MainActivity : ComponentActivity() {
     private var recoveryStatusJob: Job? = null
     private var deviceRefreshInFlight = false
     private var sessionCheckInFlight = false
+    private var appUpdateCheckInFlight = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -351,6 +355,7 @@ class MainActivity : ComponentActivity() {
                         onCancelBatchRun = ::cancelBatchRun,
                         onStopBatchRun = ::stopBatchRun,
                         onLogout = ::logout,
+                        onCheckAppUpdate = ::checkForAppUpdate,
                     )
                 }
             }
@@ -537,6 +542,67 @@ class MainActivity : ComponentActivity() {
         val session = state.session ?: return
         state = state.copy(loading = true)
         lifecycleScope.launch { loadDashboard(session) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        checkForAppUpdate()
+    }
+
+    private fun checkForAppUpdate() {
+        if (state.session == null || appUpdateCheckInFlight || isFinishing || isDestroyed) return
+        appUpdateCheckInFlight = true
+        lifecycleScope.launch {
+            try {
+                val api = ControllerApi(normalizeControllerApiUrl(state.apiUrl))
+                val release = withContext(Dispatchers.IO) {
+                    api.checkAppUpdate("controller", BuildConfig.VERSION_CODE.toLong())
+                } ?: return@launch
+                if (release.packageName != BuildConfig.APPLICATION_ID ||
+                    !isNewerControllerAppRelease(BuildConfig.VERSION_CODE.toLong(), release.versionCode)
+                ) {
+                    throw IllegalStateException("服务器发布的控制端 App 信息无效")
+                }
+
+                val preferences = getSharedPreferences(CONTROLLER_APP_UPDATE_PREFERENCES, MODE_PRIVATE)
+                val settingsPending =
+                    preferences.getLong(CONTROLLER_KEY_SETTINGS_VERSION, -1L) == release.versionCode
+                if (settingsPending && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                    !packageManager.canRequestPackageInstalls()
+                ) return@launch
+                if (!settingsPending && isControllerAppUpdatePromptDeferred(
+                        preferences.getLong(CONTROLLER_KEY_PROMPT_VERSION, -1L),
+                        preferences.getLong(CONTROLLER_KEY_PROMPT_TIME, 0L),
+                        release.versionCode,
+                        System.currentTimeMillis(),
+                    )
+                ) return@launch
+
+                val updateDirectory = File(cacheDir, "updates").apply { mkdirs() }
+                val apk = File(updateDirectory, "controller-${release.versionCode}.apk")
+                val cached = withContext(Dispatchers.IO) {
+                    isCachedControllerAppUpdateValid(apk, release.sha256)
+                }
+                if (!cached) {
+                    withContext(Dispatchers.IO) { api.downloadAppUpdate(release, apk) }
+                }
+                withContext(Dispatchers.IO) {
+                    validateControllerAppUpdateApk(
+                        apk,
+                        BuildConfig.APPLICATION_ID,
+                        release.versionCode,
+                        release.versionName,
+                        packageManager,
+                    )
+                }
+                launchControllerAppUpdateInstall(this@MainActivity, apk, release.versionCode)
+            } catch (exception: Exception) {
+                if (exception is CancellationException) throw exception
+                Toast.makeText(this@MainActivity, "App 更新检查失败：${exception.message ?: "网络错误"}", Toast.LENGTH_LONG).show()
+            } finally {
+                appUpdateCheckInFlight = false
+            }
+        }
     }
 
     private fun refreshDevices() {
@@ -1095,6 +1161,7 @@ private fun ControllerScreen(
     onCancelBatchRun: (String) -> Unit,
     onStopBatchRun: (String) -> Unit,
     onLogout: () -> Unit,
+    onCheckAppUpdate: () -> Unit,
 ) {
     var showHelp by remember { mutableStateOf(false) }
     var selectedRunHistory by remember { mutableStateOf<ControllerRunHistory?>(null) }
@@ -1111,6 +1178,9 @@ private fun ControllerScreen(
     val selectedDestination = ControllerDestination.entries.firstOrNull {
         it.name == selectedDestinationName
     } ?: ControllerDestination.DEVICES
+    LaunchedEffect(state.session?.email, state.session?.apiUrl) {
+        if (state.session != null) onCheckAppUpdate()
+    }
     LaunchedEffect(selectedDestination, state.session?.apiUrl, state.session?.email) {
         val session = state.session ?: return@LaunchedEffect
         if (selectedDestination == ControllerDestination.RUNS) onRefreshRunHistory()

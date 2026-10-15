@@ -21,6 +21,7 @@ import {
 import {
   AuditOutlined,
   CodeOutlined,
+  CloudDownloadOutlined,
   DashboardOutlined,
   DesktopOutlined,
   LogoutOutlined,
@@ -41,9 +42,10 @@ import {
 } from "./api";
 import { Login } from "./Login";
 import { ResourcesPage } from "./ResourcesPage";
+const AppReleasesPage = lazy(() => import("./AppReleasesPage").then((module) => ({ default: module.AppReleasesPage })));
 const TasksPage = lazy(() => import("./TasksPage").then((module) => ({ default: module.TasksPage })));
 
-type Page = "overview" | "users" | "devices" | "tasks" | "runs" | "audit";
+type Page = "overview" | "users" | "devices" | "tasks" | "runs" | "audit" | "app-updates";
 
 const pageLabels: Record<Page, string> = {
   overview: "总览",
@@ -52,6 +54,7 @@ const pageLabels: Record<Page, string> = {
   tasks: "自动化任务",
   runs: "运行记录",
   audit: "操作审计",
+  "app-updates": "App 自动更新",
 };
 
 const adminMenuItems = [
@@ -61,6 +64,7 @@ const adminMenuItems = [
   { key: "tasks", icon: <CodeOutlined />, label: "脚本与任务" },
   { key: "runs", icon: <UnorderedListOutlined />, label: "运行记录" },
   { key: "audit", icon: <AuditOutlined />, label: "操作审计" },
+  { key: "app-updates", icon: <CloudDownloadOutlined />, label: "App 自动更新" },
 ];
 
 const userMenuItems = [
@@ -221,6 +225,11 @@ export function AdminApp() {
           {page === "devices" && <ResourcesPage session={session} section="devices" />}
           {page === "runs" && <ResourcesPage session={session} section="runs" />}
           {page === "audit" && isAdmin && <ResourcesPage session={session} section="audit" />}
+          {page === "app-updates" && isAdmin && (
+            <Suspense fallback={<Card bordered={false}><Skeleton active /></Card>}>
+              <AppReleasesPage session={session} />
+            </Suspense>
+          )}
         </Layout.Content>
       </Layout>
     </Layout>

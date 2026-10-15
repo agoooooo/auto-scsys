@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.chaquo.python.Python
@@ -22,6 +23,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class PythonRuntimeInstrumentedTest {
@@ -33,6 +35,32 @@ class PythonRuntimeInstrumentedTest {
         assertEquals("FlowPilot 受控端", application.loadLabel(context.packageManager).toString())
         assertNotEquals(0, application.icon)
         assertNotNull(context.packageManager.getApplicationIcon(application))
+    }
+
+    @Test
+    fun appUpdateValidatesTheInstalledApkAndSharesStagedUpdatesWithTheInstaller() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        validateAppUpdateApk(
+            File(context.applicationInfo.sourceDir),
+            BuildConfig.APPLICATION_ID,
+            BuildConfig.VERSION_CODE.toLong(),
+            BuildConfig.VERSION_NAME,
+            context.packageManager,
+        )
+
+        val updateDirectory = File(context.cacheDir, "updates").apply { mkdirs() }
+        val stagedApk = File.createTempFile("update-", ".apk", updateDirectory)
+        try {
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                stagedApk,
+            )
+            assertEquals("content", uri.scheme)
+            assertEquals("${context.packageName}.fileprovider", uri.authority)
+        } finally {
+            stagedApk.delete()
+        }
     }
 
     @Test

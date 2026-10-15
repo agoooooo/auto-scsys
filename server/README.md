@@ -2,7 +2,9 @@
 
 这是 FlowPilot 的 FastAPI 服务端。默认开发模式在本机使用 SQLite，并预置本地测试账号、设备和任务；生产部署使用 PostgreSQL 和 S3 兼容对象存储，Web 管理后台由 React/TypeScript/Vite 构建并以 Nginx 静态托管。遗留的有限预授权数据和 API 为旧客户端保留，不参与当前 Android 客户端的远程运行判断。脚本上传后只做 `.py` 格式、大小和 SHA-256 校验，不会执行脚本。
 
-**当前实现尚不代表已具备全部生产运营保障。**登录及密码重置失败限制目前依赖数据库窗口计数，不替代边缘/API 网关限流；管理员 MFA、加密异地备份与恢复演练、监控告警和安全评审仍待落实。邮箱密码找回接口已实现，但只有完整配置 SMTP 后才开放；未配置时会明确返回 `503`。验证码仅保存服务端 HMAC 摘要、10 分钟有效、最多尝试 5 次，成功后撤销所有现有会话。登录创建 30 天绝对有效的服务端会话，访问令牌每小时过期并可在会话有效期间续期；用户退出会撤销当前会话，管理员可撤销普通用户所有会话，停用账号也会撤销其会话。生产 Web 上传及 Android 下载使用短时预签名 URL；API 在上传完成时核验内容大小及 SHA-256。SQLite 开发及兼容接口仍通过 API 上传/下载，单脚本限制为 2 MiB。Android Release 客户端必须使用 HTTPS API 地址。
+**当前实现尚不代表已具备全部生产运营保障。**登录及密码重置失败限制目前依赖数据库窗口计数，不替代边缘/API 网关限流；管理员 MFA、加密异地备份与恢复演练、监控告警和安全评审仍待落实。邮箱密码找回接口已实现，但只有完整配置 SMTP 后才开放；未配置时会明确返回 `503`。验证码仅保存服务端 HMAC 摘要、10 分钟有效、最多尝试 5 次，成功后撤销所有现有会话。登录创建 30 天绝对有效的服务端会话，访问令牌每小时过期并可在会话有效期间续期；用户退出会撤销当前会话，管理员可撤销普通用户所有会话，停用账号也会撤销其会话。生产 Web 脚本上传及 Android 脚本下载使用短时预签名 URL；API 在上传完成时核验内容大小及 SHA-256。SQLite 开发及兼容接口仍通过 API 上传/下载，单脚本限制为 2 MiB。Android Release 客户端必须使用 HTTPS API 地址。
+
+管理员可在控制台发布当前控制端和受控端 APK（每个 App 最大 100 MiB）；每次发布须递增 `versionCode`。SQLite 开发模式将 APK 存入数据库；配置 S3 兼容存储时 APK 也保存于对象存储。Android 客户端通过公开的版本检查/下载 API 获取发布包，并独立验证 SHA-256、包名和 `versionCode`；APK 签名兼容性仍由 Android Package Installer 验证。此功能不会静默安装或绕过系统未知来源安装授权。
 
 ## Deployment phases
 
@@ -143,6 +145,8 @@ FLOWPILOT_SMTP_USE_SSL=false
 - `GET/PATCH /me`：读取或更新当前用户个人资料；更改邮箱须提供当前密码。改密时校验当前密码并撤销该用户其他会话，当前会话保持有效。
 - `POST /auth/logout`（撤销当前服务端会话）
 - `GET/POST /users`、`PATCH /users/{id}`（管理员调整用户状态及设备数量上限）
+- `GET/POST /admin/app-releases`（管理员查看并发布两个 Android App 当前版本；上传 APK 最大 100 MiB，必须递增 `versionCode`，并记录审计事件）
+- `GET /app-updates/{controlled|controller}?current_version_code=...`、`GET /app-updates/{app_id}/{version_code}/download`（客户端公开检查与下载最新 APK；客户端核验 SHA-256，安装仍由 Android 系统确认）
 - `POST /users/{id}/sessions/revoke`（管理员撤销指定普通用户的全部登录会话并记录审计事件）
 - `GET/POST /devices`、`PATCH/DELETE /devices/{id}`、`POST /devices/{id}/sync`、`POST /devices/{id}/heartbeat`（只有设备所属用户可同步或发送心跳；心跳可附带更新后的 App 版本，旧客户端省略时保留原版本）
 - `POST /devices/{id}/runs`（设备用户确认后上报本地启动）

@@ -98,6 +98,18 @@ export type AuditEvent = {
   created_at: string;
 };
 
+export type AppRelease = {
+  app_id: "controlled" | "controller";
+  package_name: string;
+  app_name: string;
+  version_code?: number;
+  version_name?: string;
+  notes?: string;
+  content_size?: number;
+  sha256?: string;
+  published_at?: string;
+};
+
 const SESSION_KEY = "flowpilot-console-session";
 
 export function defaultApiBaseUrl(location: Pick<Location, "origin"> = window.location): string {
